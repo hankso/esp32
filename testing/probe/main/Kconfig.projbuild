@@ -1,0 +1,22 @@
+menu "Extra Configuration"
+
+config LED_GPIO
+    int "LED GPIO number"
+	range 0 34
+	default 2
+	help
+		GPIO number (IOxx) to blink on and off.
+
+		Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to blink.
+
+		GPIOs 35-39 are input-only so cannot be used as outputs.
+
+config PROBE_GPIO
+    int "PROBE GPIO number"
+    range 0 39
+    default 23
+    help
+        GPIO number (IOxx) to probe HIGH or LOW(by digitalRead).
+
+
+endmenu
