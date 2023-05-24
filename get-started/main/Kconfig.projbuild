@@ -25,7 +25,7 @@ menu "Example Configuration"
             ESP32-S3 RMT channel from 0 to 3
             ESP32-C3 RMT channel from 0 to 1
 
-    config BLINK_GPIO
+    config GPIO_LED
         int "Blink GPIO number"
         range 0 48
         default 8 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32H2
@@ -35,12 +35,5 @@ menu "Example Configuration"
         help
             GPIO number (IOxx) to blink on and off or the RMT signal for the addressable LED.
             Some GPIOs are used for other purposes (flash connections, etc.) and cannot be used to blink.
-
-    config BLINK_PERIOD
-        int "Blink period in ms"
-        range 10 3600000
-        default 1000
-        help
-            Define the blinking period in milliseconds.
 
 endmenu

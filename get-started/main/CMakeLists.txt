@@ -1,1 +1,2 @@
-idf_component_register(SRCS "main.c" INCLUDE_DIRS ".")
+file(GLOB SOURCES *.c *.cpp)
+idf_component_register(SRCS ${SOURCES} INCLUDE_DIRS ".")
