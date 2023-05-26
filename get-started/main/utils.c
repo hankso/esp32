@@ -27,7 +27,6 @@ char * cast_away_const_force(const char *str) {
 
 bool strbool(const char *str) {
     return str && (!strcmp(str, "1") || !strcmp(str, "y"));
-    // return str && str[0] == '1' || str[0] == 'y';
 }
 
 char hexdigits(uint8_t v) {
@@ -124,9 +123,7 @@ void version_info() {
            "Firmware Version: %s %s\n"
            "Compile time: %s %s\n",
            esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
-           // Config.info.NAME, Config.info_VER,
-           desc->project_name, desc->version,
-           __DATE__, __TIME__);
+           desc->project_name, desc->version, __DATE__, __TIME__);
 }
 
 static uint16_t memory_types[] = {
@@ -140,13 +137,13 @@ static const char * const memory_names[] = {
 void memory_info() {
     uint8_t num = sizeof(memory_types)/sizeof(memory_types[0]);
     multi_heap_info_t info;
-    printf(/*"Address"*/ "Type\tSize\tUsed\tAvail\tUsed%%\n");
+    printf(/*"Address"*/ "Type\t    Size    Used   Avail Used%%\n");
     while (num--) {
         heap_caps_get_info(&info, memory_types[num]);
         size_t size = info.total_free_bytes + info.total_allocated_bytes;
         printf("%-8.7s%8.7s", memory_names[num], format_size(size));
         printf("%8.7s", format_size(info.total_allocated_bytes));
-        printf("%8.7s%5.1f\n",
+        printf("%8.7s %5.1f\n",
                format_size(info.total_free_bytes),
                100.0 * info.total_allocated_bytes / size);
     }
@@ -160,10 +157,10 @@ void hardware_info() {
     esp_chip_info(&info);
     printf(
         "Chip UID: %s-%s\n"
-        " model: %s\n"
-        " cores: %d\n"
-        " revision number: %d\n"
-        " feature: %s%s%s/%s-Flash: %s\n",
+        "  model: %s\n"
+        "  cores: %d\n"
+        "  revision: %d\n"
+        "  feature: %s%s%s/%s-Flash: %s\n",
         Config.info.NAME, Config.info.UID,
         info.model == CHIP_ESP32 ? "ESP32" : "???",
         info.cores, info.revision,

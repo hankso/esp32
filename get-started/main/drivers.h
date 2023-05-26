@@ -30,34 +30,50 @@ extern "C" {
 #define PIN_LED     GPIO_NUMBER(CONFIG_GPIO_LED)
 #define PIN_SVOH    GPIO_NUMBER(CONFIG_GPIO_SERVOH)
 #define PIN_SVOV    GPIO_NUMBER(CONFIG_GPIO_SERVOV)
-#define PIN_SDA     GPIO_NUMBER(CONFIG_GPIO_I2C_SDA)
-#define PIN_SCL     GPIO_NUMBER(CONFIG_GPIO_I2C_SCL)
+#define PIN_SDA0    GPIO_NUMBER(CONFIG_GPIO_I2C_SDA)
+#define PIN_SCL0    GPIO_NUMBER(CONFIG_GPIO_I2C_SCL)
+#define PIN_SDA1    GPIO_NUMBER(CONFIG_GPIO_SCN_SDA)
+#define PIN_SCL1    GPIO_NUMBER(CONFIG_GPIO_SCN_SCL)
 
 #define PIN_HMISO   GPIO_NUMBER(CONFIG_GPIO_HSPI_MISO)
 #define PIN_HMOSI   GPIO_NUMBER(CONFIG_GPIO_HSPI_MOSI)
 #define PIN_HSCLK   GPIO_NUMBER(CONFIG_GPIO_HSPI_SCLK)
 #define PIN_HCS0    GPIO_NUMBER(CONFIG_GPIO_HSPI_CS0)
 #define PIN_HCS1    GPIO_NUMBER(CONFIG_GPIO_HSPI_CS1)
-#define PIN_HSDCD   GPIO_NUMBER(CONFIG_GPIO_HSPI_SDCD)
 
 void driver_initialize();
 
-esp_err_t led_blink(bool level);
-esp_err_t led_toggle();
+esp_err_t led_set_light(int index, float brightness);
+float led_get_light(int index);
+esp_err_t led_set_color(int index, uint32_t color);
+uint32_t led_get_color(int index);
+
+void gpio_table(bool i2c, bool spi);
+esp_err_t gpioext_set_level(int pin, bool level);
+esp_err_t gpioext_get_level(int pin, bool * level, bool sync);
 
 esp_err_t pwm_degree(int hdeg, int vdeg);
+
 esp_err_t twdt_feed();
+
 uint16_t vlx_probe();
+
+float als_brightness(int idx);
+
 void scn_progbar(uint8_t percent);
 
-void i2c_detect();
+void i2c_detect(int bus);
+esp_err_t smbus_probe(int bus, uint8_t addr);
+esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg_start, uint8_t reg_end);
+esp_err_t smbus_wreg(int bus, uint8_t addr, uint8_t reg, uint8_t val);
+esp_err_t smbus_rreg(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
 
-/*
 // We use PCF8574 for IO expansion: Endstops | Temprature | Valves
 
 typedef enum {
     PIN_I2C_MIN = 99,
 
+/*
     // endstops
     PIN_XMIN, PIN_XMAX, PIN_YMIN, PIN_YMAX,
     PIN_ZMIN, PIN_ZMAX, PIN_EVAL, PIN_PROB,
@@ -69,39 +85,32 @@ typedef enum {
     // valves
     PIN_VLV1, PIN_VLV2, PIN_VLV3, PIN_VLV4,
     PIN_VLV5, PIN_VLV6, PIN_VLV7, PIN_VLV8,
+*/
 
     PIN_I2C_MAX
 } i2c_pin_num_t;
 
-// Transfer data with PCF8574. idx indicates index of { endstops, temp, valves }
-esp_err_t i2c_set_val(uint8_t idx);
-esp_err_t i2c_get_val(uint8_t idx);
-
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin, bool level);
-uint8_t i2c_gpio_get_level(i2c_pin_num_t pin, bool sync = false);
-*/
+esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin, bool * level, bool sync);
 
-/*
 // IO expansion by 74HC595 (SPI connection): Steppers
 typedef enum {
     PIN_SPI_MIN = 199,
 
+/*
     // stepper direction & step (pulse)
     PIN_XDIR,  PIN_XSTEP,  PIN_YDIR,  PIN_YSTEP,  PIN_ZDIR,  PIN_ZSTEP,
     PIN_E1DIR, PIN_E1STEP, PIN_E2DIR, PIN_E2STEP, PIN_E3DIR, PIN_E3STEP,
 
     // enable | disable
     PIN_XYZEN, PIN_E1EN, PIN_E2EN,  PIN_E3EN,
+*/
 
     PIN_SPI_MAX
 } spi_pin_num_t;
 
-// Transfer data to 74HC595. Same like i2c_gpio_set_val
-esp_err_t spi_gpio_flush();
-
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin, bool level);
-uint8_t spi_gpio_get_level(spi_pin_num_t pin_num);
-*/
+esp_err_t spi_gpio_get_level(spi_pin_num_t pin, bool * level, bool sync);
 
 #ifdef __cplusplus
 }

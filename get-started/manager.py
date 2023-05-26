@@ -13,12 +13,15 @@ import sys
 import gzip
 import glob
 import json
+import socket
 import argparse
 import tempfile
+import posixpath
 
 # these are default values
 __basedir__ = os.path.dirname(os.path.abspath(__file__))
 __distdir__ = os.path.join(__basedir__, 'webdev', 'dist')
+__cmkfile__ = os.path.join(__basedir__, 'CMakeLists.txt')
 __nvsfile__ = os.path.join(__basedir__, 'nvs_flash.csv')
 __partcsv__ = os.path.join(__basedir__, 'partitions.csv')
 
@@ -29,6 +32,20 @@ def _random_id(len=8):
     #  return ''.join([choice(hexdigits) for i in range(len)])
     from uuid import uuid4
     return uuid4().hex[:len].upper()
+
+
+def _project_name():
+    try:
+        with open(__cmkfile__) as f:
+            content = f.read()
+        return re.findall(r'project\((\w+)\)', content)[0]
+    except Exception:
+        return 'testing'
+
+
+def _firmware_url(filename='app.bin', port=8080):
+    host = socket.gethostbyname(socket.gethostname())
+    return posixpath.join('http://%s:%d' % (host, port), filename)
 
 
 def _pack_nvs(args):
@@ -65,7 +82,10 @@ def _pack_nvs(args):
 def genid(args):
     if os.path.exists(args.tpl):
         with open(args.tpl, 'r') as f:
-            data = f.read().replace('{UID}', _random_id(args.len))
+            prefix = _project_name()
+            data = f.read().replace('{NAME}', prefix)
+            data = data.replace('{UID}', _random_id(args.len))
+            data = data.replace('{URL}', _firmware_url(prefix + '.bin'))
             data = data.replace('\n\n', '\n')   # strip null lines
             data = data.replace(' ', '')        # strip white spaces
     else:

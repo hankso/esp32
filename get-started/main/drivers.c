@@ -43,17 +43,31 @@ static void led_initialize() {
         led_strip->clear(led_strip, 50); // timeout = 50ms
 }
 
-esp_err_t led_blink(uint32_t level) {
+esp_err_t led_set_light(int index, float brightness) {
     if (!led_strip)
         return ESP_ERR_INVALID_STATE;
-    if (state) {
-        led_strip->set_pixel(led_strip, 0, 0x0F, 0x0F, 0x0F);
+    if (brightness) {
+        // TODO: record brightness
         return led_strip->refresh(led_strip, 100);
     }
     return led_strip->clear(led_strip, 50);
 }
 
-esp_err_t led_toggle() { return ESP_ERR_INVALID_ARG; }
+float led_get_light(int index) { return 0; }
+
+esp_err_t led_set_color(int index, uint32_t color) {
+    if (!led_strip)
+        return ESP_ERR_INVALID_STATE;
+    if (color > 0xFFFFFF)
+        return ESP_ERR_INVALID_ARG;
+    uint8_t r = (color >> 16) & 0xFF;
+    uint8_t g = (color >> 8) & 0xFF;
+    uint8_t b = color & 0xFF;
+    led_strip->set_pixel(led_strip, index, r, g, b);
+    return led_strip->refresh(led_strip, 100);
+}
+
+uint32_t led_get_color(int index) { return 0; }
 
 #elif CONFIG_BLINK_LED_GPIO
 
@@ -62,12 +76,20 @@ static void led_initialize() {
     gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT);
 }
 
-esp_err_t led_blink(bool level) {
-    return gpio_set_level(PIN_LED, level);
+esp_err_t led_set_light(int index, float brightness) {
+    return gpio_set_level(PIN_LED, !!brightness);
 }
 
-esp_err_t led_toggle() {
-    return gpio_set_level(PIN_LED, !gpio_get_level(PIN_LED));
+float led_get_light(int index) {
+    return gpio_get_level(PIN_LED) ? 1 : 0;
+}
+
+esp_err_t led_set_color(int index, uint32_t color) {
+    return gpio_set_level(PIN_LED, !!color);
+}
+
+uint32_t led_get_color(int index) {
+    return gpio_get_level(PIN_LED) ? 0xFFFFFF : 0;
 }
 
 #endif // CONFIG_BLINK_LED
@@ -113,8 +135,8 @@ static esp_err_t pwm_duty(ledc_channel_t channel, int degree) {
 }
 
 esp_err_t pwm_degree(int hdeg, int vdeg) {
-    esp_err_t err = pwm_duty(LEDC_CHANNEL_0, hdeg);
-    if (!err) err = pwm_duty(LEDC_CHANNEL_1, vdeg);
+    esp_err_t err = pwm_duty(LEDC_CHANNEL_0, MAX(0, MIN(hdeg, 180)));
+    if (!err) err = pwm_duty(LEDC_CHANNEL_1, MAX(0, MIN(vdeg, 160)));
     return err;
 }
 
@@ -123,9 +145,9 @@ esp_err_t pwm_degree(int hdeg, int vdeg) {
 static void i2c_initialize() {
     i2c_config_t master_conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = PIN_SDA,
+        .sda_io_num = PIN_SDA0,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = PIN_SCL,
+        .scl_io_num = PIN_SCL0,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
     };
     master_conf.master.clk_speed = 50 * 1000; // 50KHz
@@ -133,38 +155,89 @@ static void i2c_initialize() {
     ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, master_conf.mode, 0, 0, 0) );
 }
 
-static esp_err_t i2c_master_transfer(uint8_t addr, uint8_t rw, uint8_t *data, size_t size) {
+esp_err_t smbus_probe(int bus, uint8_t addr) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (addr << 1) | rw, true);
-    if (rw == I2C_MASTER_WRITE) {
-        if (size > 1) {
-            i2c_master_write(cmd, data, size, true);
-        } else if (size && data != NULL) {
-            i2c_master_write_byte(cmd, *data, true);
-        }
-    } else if (rw == I2C_MASTER_READ) {
-        if (size > 1) {
-            i2c_master_read(cmd, data, size, I2C_MASTER_LAST_NACK);
-        } else if (size && data != NULL) {
-            i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
-        }
-    }
+    i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd);
-    esp_err_t err = i2c_master_cmd_begin(NUM_I2C, cmd, pdMS_TO_TICKS(50));
+    esp_err_t err = i2c_master_cmd_begin(bus, cmd, pdMS_TO_TICKS(50));
     i2c_cmd_link_delete(cmd);
     return err;
 }
 
-void i2c_detect() {
+esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t * val, size_t len) {
+    // SMBus Write protocol:
+    //      S | (ADDR | W) | ACK | REG | ACK | (DATA | ACK) * n | P
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_write(cmd, val, len, true);
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(bus, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+    return err;
+}
+
+esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len) {
+    // SMBus Read protocol:
+    //      S | (ADDR | W) | ACK | REG | ACK |
+    //      S | (ADDR | R) | ACK | (DATA | A) * n - 1 | (DATA | N) | P
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
+    i2c_master_write_byte(cmd, reg, true);
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_READ, true);
+    if (len > 1)
+        i2c_master_read(cmd, val, len - 1, I2C_MASTER_ACK);
+    i2c_master_read_byte(cmd, val + len - 1, I2C_MASTER_NACK);
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(bus, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+    return err;
+}
+
+esp_err_t smbus_wreg(int bus, uint8_t addr, uint8_t reg, uint8_t val) {
+    return smbus_wregs(bus, addr, reg, &val, 1);
+}
+
+esp_err_t smbus_rreg(int bus, uint8_t addr, uint8_t reg, uint8_t *val) {
+    return smbus_rregs(bus, addr, reg, val, 1);
+}
+
+esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
+    int length = 16;
+    size_t len = end - start;
+    uint8_t *buf = (uint8_t *)malloc(len);
+    if (!buf) return ESP_ERR_NO_MEM;
+    esp_err_t err = smbus_rregs(bus, addr, start, buf, len);
+    if (err) return err;
+    for (uint8_t reg = start; reg < end; reg++) {
+        if (reg == start) {
+            printf("I2C %d-%02X register table\n", bus, addr);
+            printf("ADDR:");
+            for (int i = 0; i < length; i++) {
+                printf(" %02X", i);
+            }
+            printf("\n%04X:%*s", reg - (reg % length), 3 * (reg % length), "");
+        } else if (reg % length == 0) {
+            printf("\n%04X:", reg);
+        }
+        printf(" %02X", buf[reg - start]);
+    }
+    putchar('\n');
+    return err;
+}
+
+void i2c_detect(int bus) {
     for (uint8_t i = 0; i < 0x10; i++) {
         if (!i) printf("  ");
-        printf("  %c", i < 10 ? (i + '0') : (i - 10 + 'A'));
+        printf(" %02X", i);
     }
     for (uint8_t addr = 0; addr < 0x80; addr++) {
         if (addr % 0x10 == 0) printf("\n%02X", addr);
-        esp_err_t ret = i2c_master_transfer(addr, I2C_MASTER_WRITE, NULL, 0);
-        switch (ret) {
+        switch (smbus_probe(bus, addr)) {
         case ESP_OK:
             printf(" %02X", addr); break;
         case ESP_ERR_TIMEOUT:
@@ -175,27 +248,52 @@ void i2c_detect() {
     }
 }
 
-// static uint8_t i2c_pin_data[3] = { 0, 0, 0 };
-// static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
-//
-// esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
-//     uint8_t
-//         pin = pin_num - PIN_I2C_MIN - 1,
-//         idx = pin >> 3, bit = pin & 0x7,
-//         addr = i2c_pin_addr[idx],
-//         *data = i2c_pin_data + idx;
-//     bitWrite(*data, bit, level);
-//     return i2c_master_transfer(addr, I2C_MASTER_WRITE, data, 1);
-// }
-//
-// uint8_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool sync) {
-//     uint8_t
-//         pin = pin_num - PIN_I2C_MIN - 1,
-//         idx = pin >> 3, bit = pin & 0x7,
-//         *data = i2c_pin_data + idx;
-//     if (sync) i2c_master_transfer(i2c_pin_addr[idx], I2C_MASTER_READ, data, 1);
-//     return bitRead(*data, bit);
-// }
+static esp_err_t i2c_trans(int bus, uint8_t addr, uint8_t rw, uint8_t *data, size_t size) {
+    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+    i2c_master_start(cmd);
+    i2c_master_write_byte(cmd, (addr << 1) | rw, true);
+    if (rw == I2C_MASTER_WRITE) {
+        if (size > 1) {
+            i2c_master_write(cmd, data, size, true);
+        } else {
+            i2c_master_write_byte(cmd, *data, true);
+        }
+    } else if (rw == I2C_MASTER_READ) {
+        if (size > 1) {
+            i2c_master_read(cmd, data, size - 1, I2C_MASTER_ACK);
+            i2c_master_read_byte(cmd, data + size - 1, I2C_MASTER_LAST_NACK);
+        } else {
+            i2c_master_read_byte(cmd, data, I2C_MASTER_NACK);
+        }
+    }
+    i2c_master_stop(cmd);
+    esp_err_t err = i2c_master_cmd_begin(bus, cmd, pdMS_TO_TICKS(50));
+    i2c_cmd_link_delete(cmd);
+    return err;
+}
+
+static uint8_t i2c_pin_data[3] = { 0, 0, 0 };
+static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
+
+esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
+    int pin = pin_num - PIN_I2C_MIN - 1;
+    if (0 > pin || pin > PIN_I2C_MAX) return ESP_ERR_INVALID_ARG;
+    uint8_t idx = pin >> 3, bit = pin & 0x7, *data = i2c_pin_data + idx;
+    bitWrite(*data, bit, level);
+    return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, data, 1);
+}
+
+esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    int pin = pin_num - PIN_I2C_MIN - 1;
+    if (0 > pin || pin > PIN_I2C_MAX) return err;
+    uint8_t idx = pin >> 3, bit = pin & 0x7, *data = i2c_pin_data + idx;
+    if (sync)
+        err = i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, data, 1);
+    if (!err)
+        *level = bitRead(*data, bit);
+    return err;
+}
 
 // I2C Distance Measurement
 
@@ -204,7 +302,9 @@ void i2c_detect() {
 static vl53l0x_t *vlx;
 
 static void vlx_initialize() {
-    vlx = vl53l0x_config(NUM_I2C, PIN_SCL, PIN_SDA, -1, 0x29, 0);
+    uint8_t addr = 0x29;
+    if (smbus_probe(NUM_I2C, addr)) return;
+    vlx = vl53l0x_config(NUM_I2C, PIN_SCL0, PIN_SDA0, -1, addr, 0);
     const char *err = vl53l0x_init(vlx);
     if (err) {
         ESP_LOGE(TAG, "Initialize VL53L0X failed: %s\n", err);
@@ -238,16 +338,16 @@ static u8g2_t scn;
 
 static void scn_initialize() {
     u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
-    u8g2_esp32_hal.sda = PIN_SDA;
-    u8g2_esp32_hal.scl = PIN_SCL;
+    u8g2_esp32_hal.sda = PIN_SDA1;
+    u8g2_esp32_hal.scl = PIN_SCL1;
     u8g2_esp32_hal_init(u8g2_esp32_hal);
     u8g2_Setup_ssd1306_i2c_128x64_noname_f(
         &scn, U8G2_R0,
         u8g2_esp32_i2c_byte_cb,
         u8g2_esp32_gpio_and_delay_cb);
     u8x8_SetI2CAddress(&scn.u8x8, 0x78);
-    u8g2_InitDisplay(&scn);
     u8g2_SetFont(&scn, u8g2_font_ncenB08_tr);
+    u8g2_InitDisplay(&scn);
     u8g2_SetPowerSave(&scn, 0);
 }
 
@@ -261,10 +361,124 @@ void scn_progbar(uint8_t percent) {
     u8g2_SendBuffer(&scn);
 }
 
+// I2C Ambient Light Sensor
+// 7bit I2C address of the OPT3001 is configurable by ADDR PIN.
+// Basic address is 0b010001XX where `XX` are:
+//      ADDR -> GND: 0b00
+//      ADDR -> VDD: 0b01
+//      ADDR -> SDA: 0b10
+//      ADDR -> SCL: 0b11
+
+static uint8_t i2c_als_addr[4] = {
+    0b01000100, 0b01000101,         // east, west
+    0b01000110, 0b01000111          // south, north
+};
+
+static void als_initialize() {
+    esp_err_t err;
+    uint8_t addr, buf[4];
+    for (int i = 0; i < 4; i++) {
+        if (smbus_probe(NUM_I2C, addr = i2c_als_addr[i]))
+            continue;
+        if (
+            ( err = smbus_rregs(NUM_I2C, addr, 0x7E, buf, 2) ) ||
+            ( err = smbus_rregs(NUM_I2C, addr, 0x7F, buf + 2, 2) )
+        ) {
+            ESP_LOGE(TAG, "Read ALS %d failed: %s", i, esp_err_to_name(err));
+            continue;
+        }
+        ESP_LOGD(TAG, "Found ALS %c%c %04X at I2C %d-%02X",
+                buf[0], buf[1], buf[2] << 8 | buf[3], NUM_I2C, addr);
+        // TODO: configure Low-Limit and Hight-Limit and Interrupt GPIO
+    }
+}
+
+float als_brightness(int idx) {
+    if (idx < 0 || idx > 3)
+        return 0;
+    uint8_t buf[2];
+    esp_err_t err = smbus_rregs(NUM_I2C, i2c_als_addr[idx], 0x00, buf, 2);
+    if (err) {
+        ESP_LOGW(TAG, "Read ALS %d failed: %s", idx, esp_err_to_name(err));
+        return 0;
+    }
+    // Equation 3 at Page 20 of OPT3001 datasheet:
+    //   lux = 0.01 * 2^E[3:0] * R[11:0]
+    return 0.01 * (1 << (buf[0] >> 4)) * ((buf[0] << 4) | buf[1]);
+}
+
+// SPI GPIO Expander
+// If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
+// Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
+static spi_device_handle_t spi_pin_hdlr;
+static spi_transaction_t spi_pin_trans;
+static uint8_t spi_pin_data[2] = { 0, 0 };
+
+static void spi_initialize() {
+    spi_bus_config_t hspi_busconf = {
+        .mosi_io_num = PIN_HMOSI,
+        .miso_io_num = PIN_HMISO,
+        .sclk_io_num = PIN_HSCLK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 0,
+        .flags = SPICOMMON_BUSFLAG_MASTER,
+        .intr_flags = 0
+    };
+    spi_device_interface_config_t devconf = {
+        .command_bits = 0,
+        .address_bits = 0,
+        .dummy_bits = 0,
+        .mode = 0b10,                       // CPOL = 1, CPHA = 0
+        .duty_cycle_pos = 128,              // 128/255 = 50% (Tlow = Thigh)
+        .cs_ena_pretrans = 0,
+        .cs_ena_posttrans = 0,
+        .clock_speed_hz = 5 * 1000 * 1000,  // 5MHz
+        .input_delay_ns = 0,
+        .spics_io_num = PIN_HCS0,
+        .flags = 0,
+        .queue_size = 1,                    // only one transaction allowed
+        .pre_cb = NULL,
+        .post_cb = NULL
+    };
+    esp_err_t err = spi_bus_initialize(HSPI_HOST, &hspi_busconf, 1);
+    assert((!err || err == ESP_ERR_INVALID_STATE) && "SPI init failed");
+    ESP_ERROR_CHECK( spi_bus_add_device(HSPI_HOST, &devconf, &spi_pin_hdlr) );
+    uint8_t spi_pin_data_len = sizeof(spi_pin_data) / sizeof(spi_pin_data[0]);
+    spi_pin_trans.length = spi_pin_data_len * 8; // in bits;
+    // if (spi_pin_data_len <= 4) {
+    //     spi_pin_data = spi_pin_trans.tx_data;
+    //     for (uint16_t i = 0; i < spi_pin_data_len; i++) spi_pin_data[i] = 0;
+    //     spi_pin_trans.flags = SPI_TRANS_USE_TXDATA;
+    // } else {
+        spi_pin_trans.tx_buffer = spi_pin_data;
+    // }
+}
+
+esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
+    int pin = pin_num - PIN_SPI_MIN - 1;
+    if (0 > pin || pin > PIN_SPI_MAX) return ESP_ERR_INVALID_ARG;
+    uint8_t idx = pin >> 3, bit = pin & 0x7;
+    bitWrite(spi_pin_data[idx], bit, level);
+    return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
+}
+
+esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    int pin = pin_num - PIN_SPI_MIN - 1;
+    if (0 > pin || pin > PIN_SPI_MAX) return err;
+    uint8_t idx = pin >> 3, bit = pin & 0x7;
+    if (sync)
+        err = spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
+    if (!err)
+        *level = bitRead(spi_pin_data[idx], bit);
+    return err;
+}
+
 // GPIO Interrupt
 
 // static void IRAM_ATTR gpio_isr_endstop(void *arg) {
-//     i2c_master_transfer(i2c_pin_addr[0], I2C_MASTER_READ, i2c_pin_data + 0, 1);
+//     i2c_trans(NUM_I2C, i2c_pin_addr[0], I2C_MASTER_READ, i2c_pin_data + 0, 1);
 //     static char buf[9]; itoa(i2c_pin_data[0], buf, 2);
 //     printf("Endstops value: 0b%s", buf);
 // }
@@ -282,73 +496,54 @@ void scn_progbar(uint8_t percent) {
 //     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
 // }
 
-// If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
-// Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
-// static spi_device_handle_t spi_pin_hdlr;
-// static spi_transaction_t spi_pin_trans;
-// static uint8_t spi_pin_data[2] = { 0, 0 };
-//
-// static void spi_initialize() {
-//     spi_bus_config_t hspi_busconf = {
-//         .mosi_io_num = PIN_HMOSI,
-//         .miso_io_num = PIN_HMISO,
-//         .sclk_io_num = PIN_HSCLK,
-//         .quadwp_io_num = -1,
-//         .quadhd_io_num = -1,
-//         .max_transfer_sz = 0,
-//         .flags = SPICOMMON_BUSFLAG_MASTER,
-//         .intr_flags = 0
-//     };
-//     spi_device_interface_config_t devconf = {
-//         .command_bits = 0,
-//         .address_bits = 0,
-//         .dummy_bits = 0,
-//         .mode = 0b10, // CPOL = 1, CPHA = 0
-//         .duty_cycle_pos = 128, // 128/255 = 50% (Tlow equals to Thigh)
-//         .cs_ena_pretrans = 0,
-//         .cs_ena_posttrans = 0,
-//         .clock_speed_hz = 5 * 1000 * 1000, // 5MHz
-//         .input_delay_ns = 0,
-//         .spics_io_num = PIN_HCS1,
-//         .flags = 0,
-//         .queue_size = 1, // only one transaction exists in the queue
-//         .pre_cb = NULL,
-//         .post_cb = NULL
-//     };
-//     esp_err_t err = spi_bus_initialize(HSPI_HOST, &hspi_busconf, 1);
-//     assert((!err || err == ESP_ERR_INVALID_STATE) && "SPI init failed");
-//     ESP_ERROR_CHECK( spi_bus_add_device(HSPI_HOST, &devconf, &spi_pin_hdlr) );
-//     uint8_t spi_pin_data_len = sizeof(spi_pin_data) / sizeof(spi_pin_data[0]);
-//     spi_pin_trans.length = spi_pin_data_len * 8; // in bits;
-//     // if (spi_pin_data_len <= 4) {
-//     //     spi_pin_data = spi_pin_trans.tx_data;
-//     //     for (uint16_t i = 0; i < spi_pin_data_len; i++) spi_pin_data[i] = 0;
-//     //     spi_pin_trans.flags = SPI_TRANS_USE_TXDATA;
-//     // } else {
-//         spi_pin_trans.tx_buffer = spi_pin_data;
-//     // }
-// }
-//
-// esp_err_t spi_gpio_flush() {
-//     return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
-// }
-//
-// esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
-//     uint8_t pin = pin_num - PIN_SPI_MIN - 1, idx = pin >> 3, bit = pin & 0x7;
-//     bitWrite(spi_pin_data[idx], bit, level);
-//     return spi_gpio_flush();
-// }
-//
-// uint8_t spi_gpio_get_level(spi_pin_num_t pin_num) {
-//     uint8_t pin = pin_num - PIN_SPI_MIN - 1, idx = pin >> 3, bit = pin & 0x7;
-//     return bitRead(spi_pin_data[idx], bit);
-// }
+esp_err_t gpioext_set_level(int pin, bool level) {
+    if (pin < 40)
+        return gpio_set_level(pin, level);
+    if (PIN_I2C_MIN < pin && pin < PIN_I2C_MAX)
+        return i2c_gpio_set_level(pin, level);
+    if (PIN_SPI_MIN < pin && pin < PIN_SPI_MAX)
+        return spi_gpio_set_level(pin, level);
+    return ESP_ERR_INVALID_ARG;
+}
+
+esp_err_t gpioext_get_level(int pin, bool * level, bool sync) {
+    if (pin < 40) {
+        *level = gpio_get_level(pin);
+        return ESP_OK;
+    }
+    if (PIN_I2C_MIN < pin && pin < PIN_I2C_MAX)
+        return i2c_gpio_get_level(pin, level, sync);
+    if (PIN_SPI_MIN < pin && pin < PIN_SPI_MAX)
+        return spi_gpio_get_level(pin, level, sync);
+    return ESP_ERR_INVALID_ARG;
+}
+
+void gpio_table(bool i2c, bool spi) {
+    for (gpio_num_t pin = 0; pin < 40; pin++) {
+        printf("GPIO %d: %s\n", pin, gpio_get_level(pin) ? "HIGH" : "LOW");
+    }
+    bool level;
+    esp_err_t err;
+    for (i2c_pin_num_t pin = PIN_I2C_MIN + 1; i2c && pin < PIN_I2C_MAX; pin++) {
+        if (( err = i2c_gpio_get_level(pin, &level, false) ))
+            printf("GPIO %d: %s\n", pin, esp_err_to_name(err));
+        else
+            printf("GPIO %d: %s\n", pin, level ? "HIGH" : "LOW");
+    }
+    for (spi_pin_num_t pin = PIN_SPI_MIN + 1; spi && pin < PIN_SPI_MAX; pin++) {
+        if (( err = spi_gpio_get_level(pin, &level, false) ))
+            printf("GPIO %d: %s\n", pin, esp_err_to_name(err));
+        else
+            printf("GPIO %d: %s\n", pin, level ? "HIGH" : "LOW");
+    }
+}
 
 // Others
 
 static void uart_initialize() {
     fflush(stdout); fflush(stderr);
     vTaskDelay(pdMS_TO_TICKS(10));
+
     // UART driver configuration
     uart_config_t uart_conf = {
         .baud_rate = 115200,
@@ -361,6 +556,7 @@ static void uart_initialize() {
     };
     ESP_ERROR_CHECK( uart_param_config(NUM_UART, &uart_conf) );
     ESP_ERROR_CHECK( uart_driver_install(NUM_UART, 256, 0, 0, NULL, 0) );
+
     // Register UART to VFS and configure
     /* esp_vfs_dev_uart_register(); */
     esp_vfs_dev_uart_use_driver(NUM_UART);
@@ -397,10 +593,16 @@ esp_err_t twdt_feed() {
 }
 
 void driver_initialize() {
-    led_initialize();
     pwm_initialize();
+    led_initialize();
+
     i2c_initialize();
+    vlx_initialize();
+    als_initialize();
+    scn_initialize();
+
     // spi_initialize();
-    uart_initialize();
     // gpio_initialize();
+    uart_initialize();
+    twdt_initialize();
 }

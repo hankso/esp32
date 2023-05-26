@@ -2,6 +2,7 @@ key,            type,       encoding,   value
 
 info,           namespace,
 counter,        data,       u32,        0
+name,           data,       string,     {NAME}
 uid,            data,       string,     {UID}
 
 config,         namespace,
@@ -10,4 +11,4 @@ web.http.pass,  data,       string,     16011106
 app.dns.run,    data,       string,     1
 app.dns.host,   data,       string,     hankso@esp32.local
 app.ota.run,    data,       string,     1
-app.ota.url,    data,       string,
+app.ota.url,    data,       string,     {URL}

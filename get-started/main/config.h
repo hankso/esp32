@@ -78,8 +78,6 @@ typedef struct {
 extern config_entry_t cfglist[];
 
 bool config_initialize();
-bool config_load();                     // load from nvs flash to Config
-bool config_dump();                     // save Config to nvs flash
 bool config_loads(const char *);        // load Config from json
 char * config_dumps();                  // dump Config into json
 
@@ -100,6 +98,8 @@ esp_err_t config_nvs_commit();          // must be called after config_nvs_open
 esp_err_t config_nvs_close();           // close with auto commit
 bool config_nvs_remove(const char *);   // remove one entry
 bool config_nvs_clear();                // remove all entries
+bool config_nvs_load();                 // load from nvs flash to Config
+bool config_nvs_dump();                 // save Config to nvs flash
 void config_nvs_list();                 // list all entries
 void config_nvs_stats();                // get nvs flash detail
 

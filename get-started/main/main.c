@@ -45,15 +45,11 @@ void loop() {
     } else if (tick_curr < tick_next) {
         vTaskDelay(tick_next - tick_curr);
     }
-    tick_next += 500 * portTICK_PERIOD_MS;
+    tick_next += 300 * portTICK_PERIOD_MS;
 
     twdt_feed();
-    led_toggle();
-
-    count += 5;
-    float ratio = (count < 0x7F ? count : (0xFF - count)) / 128.0; // -1 ~ 1
-    pwm_degree(ratio * 180, ratio * 95); // drive servo by PWM
-    scn_progbar(count / 255.0 * 100); // draw on screen
+    led_set_light(0, led_get_light(0) ? 0 : 1);
+    scn_progbar((count += 2) / 255.0 * 100); // draw on screen
 }
 
 #if !CONFIG_AUTOSTART_ARDUINO

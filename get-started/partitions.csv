@@ -1,17 +1,17 @@
 # Name,     Type,   SubType,    Offset,     Size,   Flags
 
 # Basic OTA (960KB golden + dual 1MB silver + 1MB storage)
-#ota_info,   data,   ota,        0x009000,   0x002000,
+#otadata,    data,   ota,        0x009000,   0x002000,
 #nvs_key,    data,   nvs_keys,   0x00B000,   0x001000,
 #nvs,        data,   nvs,        0x00C000,   0x004000,
 #golden,     app,    factory,    0x010000,   0x0F0000,
-#silver_0,   app,    ota_0,      0x100000,   0x100000,
-#silver_1,   app,    ota_1,      0x200000,   0x100000,
+#silver0,    app,    ota_0,      0x100000,   0x100000,
+#silver1,    app,    ota_1,      0x200000,   0x100000,
 #storage,    data,   spiffs,     0x300000,   0x100000,
 
 # Extrame OTA (dual 896KB silver + 2.1875MB storage)
-ota_info,   data,   ota,        0x009000,   0x002000,
+otadata,    data,   ota,        0x009000,   0x002000,
 nvs,        data,   nvs,        0x00B000,   0x005000,
-silver_0,   app,    ota_0,      0x010000,   0x0E0000,
-silver_1,   app,    ota_1,      ,           0x0E0000,
+silver0,    app,    ota_0,      0x010000,   0x0E0000,
+silver1,    app,    ota_1,      ,           0x0E0000,
 storage,    data,   spiffs,     ,           0x230000,

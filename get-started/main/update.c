@@ -1,5 +1,5 @@
 /* 
- * File: update.cpp
+ * File: update.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-23 11:42:48
  */
@@ -157,6 +157,7 @@ const char * ota_updation_error() {
 
 esp_err_t ota_updation_fetch_url(const char *url) {
     if (!ota_updation_st.target) return ota_updation_st.error;
+#ifdef CONFIG_OTA_FETCH
     esp_http_client_config_t config;
     config.url = url;
     // {
@@ -210,6 +211,9 @@ http_clean:
     esp_http_client_cleanup(client);
     if (ota_buf) free(ota_buf);
     return err;
+#else
+    return ESP_ERR_INVALID_STATE;
+#endif // CONFIG_OTA_FETCH
 }
 
 bool ota_updation_url(const char *url) {
@@ -220,6 +224,7 @@ bool ota_updation_url(const char *url) {
         return false;
     }
     if (!strbool(Config.app.OTA_RUN)) {
+        ota_updation_st.error = ESP_ERR_INVALID_STATE;
         printf("OTA Updation not enabled: `%s`\n", Config.app.OTA_RUN);
         return false;
     }
@@ -227,11 +232,11 @@ bool ota_updation_url(const char *url) {
 }
 
 static const char * ota_get_img_state(const esp_partition_t *part) {
-    static const esp_partition_t
-        *boot = esp_ota_get_boot_partition(),
-        *next = ota_updation_st.target,
-        *error = esp_ota_get_last_invalid_partition(),
-        *running = ota_updation_st.running;
+    static const esp_partition_t *boot, *next, *error, *running;
+    if (!boot) boot = esp_ota_get_boot_partition();
+    if (!next) next = ota_updation_st.target;
+    if (!error) error = esp_ota_get_last_invalid_partition();
+    if (!running) running = ota_updation_st.running;
     if (!boot) boot = running;
     if (part->address == boot->address)
         return boot->address == running->address ? "Boot *" : "Boot";

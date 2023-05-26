@@ -6,13 +6,13 @@
 
 #include "console.h"
 #include "globals.h"
+#include "drivers.h"
 #include "config.h"
 
 #include "cJSON.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_console.h"
-#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -123,12 +123,9 @@ void console_initialize() {
 
 char * console_handle_command(const char *cmd, bool history) {
     // Semaphore is better than task notification here
-    // if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 1) {
-    if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(200)) == pdFALSE) {
+    // if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 1)
+    if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(200)) == pdFALSE)
         return cast_away_const("Console task is executing command");
-    } else if (!cmd || !strlen(cmd)) {
-        return cast_away_const("Invalid command to execute");
-    }
     if (history) linenoiseHistoryAdd(cmd);
 
     FILE *bak = stdout; char *buf; size_t size = 0;
@@ -162,9 +159,12 @@ char * console_handle_command(const char *cmd, bool history) {
 
 void console_handle_one() {
     char *ret, *cmd = linenoise(prompt);
-    if (cmd != NULL && (ret = console_handle_command(cmd, true))) {
-        printf("%s\n\n", ret);
-        free(ret);
+    if (cmd != NULL) {
+        putchar('\n');
+        if (strlen(cmd) && ( ret = console_handle_command(cmd, true) )) {
+            printf("%s\n\n", ret);
+            free(ret);
+        }
     }
     linenoiseFree(cmd);
 }
@@ -172,9 +172,7 @@ void console_handle_one() {
 void console_handle_loop(void *argv) {
     for (;;) {
         console_handle_one();
-#ifdef CONFIG_TASK_WDT
-        esp_task_wdt_reset();
-#endif
+        twdt_feed();
     }
 }
 
