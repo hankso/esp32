@@ -31,7 +31,7 @@
 #endif
 #include "led_strip.h"
 
-static const char *TAG = "Drivers";
+static const char *TAG = "Driver";
 
 #ifdef CONFIG_BLINK_LED_RMT
 
@@ -142,17 +142,21 @@ esp_err_t pwm_degree(int hdeg, int vdeg) {
 
 // I2C GPIO Expander
 
-static void i2c_initialize() {
+static esp_err_t i2c_master_config(int bus, int sda, int scl, int speed) {
     i2c_config_t master_conf = {
         .mode = I2C_MODE_MASTER,
-        .sda_io_num = PIN_SDA0,
+        .sda_io_num = sda,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
-        .scl_io_num = PIN_SCL0,
+        .scl_io_num = scl,
         .scl_pullup_en = GPIO_PULLUP_ENABLE,
     };
-    master_conf.master.clk_speed = 50 * 1000; // 50KHz
-    ESP_ERROR_CHECK( i2c_param_config(NUM_I2C, &master_conf) );
-    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, master_conf.mode, 0, 0, 0) );
+    master_conf.master.clk_speed = speed;
+    return i2c_param_config(bus, &master_conf);
+}
+
+static void i2c_initialize() {
+    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, I2C_MODE_MASTER, 0, 0, 0) );
+    ESP_ERROR_CHECK( i2c_master_config(NUM_I2C, PIN_SDA0, PIN_SCL0, 50000) );
 }
 
 esp_err_t smbus_probe(int bus, uint8_t addr) {
@@ -198,12 +202,24 @@ esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t l
     return err;
 }
 
-esp_err_t smbus_wreg(int bus, uint8_t addr, uint8_t reg, uint8_t val) {
+esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val) {
     return smbus_wregs(bus, addr, reg, &val, 1);
 }
 
-esp_err_t smbus_rreg(int bus, uint8_t addr, uint8_t reg, uint8_t *val) {
+esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val) {
     return smbus_rregs(bus, addr, reg, val, 1);
+}
+
+esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val) {
+    uint8_t buf[2] = { val >> 8, val & 0xFF };
+    return smbus_wregs(bus, addr, reg, buf, 2);
+}
+
+esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val) {
+    uint8_t buf[2] = { 0, 0 };
+    esp_err_t err = smbus_rregs(bus, addr, reg, buf, 2);
+    if (!err) *val = buf[0] << 8 | buf[1];
+    return err; // FIXME: check_endian and skip this tedious conversion
 }
 
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
@@ -213,7 +229,7 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
     if (!buf) return ESP_ERR_NO_MEM;
     esp_err_t err = smbus_rregs(bus, addr, start, buf, len);
     if (err) return err;
-    for (uint8_t reg = start; reg < end; reg++) {
+    for (uint8_t reg = start; reg <= end; reg++) {
         if (reg == start) {
             printf("I2C %d-%02X register table\n", bus, addr);
             printf("ADDR:");
@@ -235,8 +251,12 @@ void i2c_detect(int bus) {
         if (!i) printf("  ");
         printf(" %02X", i);
     }
-    for (uint8_t addr = 0; addr < 0x80; addr++) {
+    for (uint8_t addr = 0; addr < 0x7F; addr++) {
         if (addr % 0x10 == 0) printf("\n%02X", addr);
+        if (!addr) {
+            printf("   ");
+            continue;
+        }
         switch (smbus_probe(bus, addr)) {
         case ESP_OK:
             printf(" %02X", addr); break;
@@ -307,7 +327,7 @@ static void vlx_initialize() {
     vlx = vl53l0x_config(NUM_I2C, PIN_SCL0, PIN_SDA0, -1, addr, 0);
     const char *err = vl53l0x_init(vlx);
     if (err) {
-        ESP_LOGE(TAG, "Initialize VL53L0X failed: %s\n", err);
+        ESP_LOGE(TAG, "Initialize VL53L0X failed: %s", err);
         vl53l0x_end(vlx);
         vlx = NULL;
     }
@@ -318,9 +338,9 @@ uint16_t vlx_probe() {
     uint16_t result_mm = vl53l0x_readRangeSingleMillimeters(vlx);
     int took_ms = ((int)xTaskGetTickCount() - tick_start) * portTICK_PERIOD_MS;
     if (result_mm != (uint16_t)-1) {
-        ESP_LOGD(TAG, "Range %u mm took %d ms\n", result_mm, took_ms);
+        ESP_LOGD(TAG, "Range %u mm took %d ms", result_mm, took_ms);
     } else {
-        ESP_LOGW(TAG, "Failed to measure range\n");
+        ESP_LOGW(TAG, "Failed to measure range");
     }
     return result_mm;
 }
@@ -335,8 +355,17 @@ uint16_t vlx_probe() { return 0; }
 // I2C OLED Screen
 
 static u8g2_t scn;
+static bool scn_init = false;
 
 static void scn_initialize() {
+    // MACROs defined in u8g2_esp32_hal.h
+    int bus = I2C_MASTER_NUM, speed = I2C_MASTER_FREQ_HZ, addr = 0x3C;
+    if (i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0)) return;
+    scn_init = i2c_master_config(bus, PIN_SDA1, PIN_SCL1, speed) == ESP_OK;
+    scn_init = scn_init && smbus_probe(bus, addr) == ESP_OK;
+    if (!scn_init) return;
+    i2c_driver_delete(bus);
+
     u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
     u8g2_esp32_hal.sda = PIN_SDA1;
     u8g2_esp32_hal.scl = PIN_SCL1;
@@ -345,13 +374,14 @@ static void scn_initialize() {
         &scn, U8G2_R0,
         u8g2_esp32_i2c_byte_cb,
         u8g2_esp32_gpio_and_delay_cb);
-    u8x8_SetI2CAddress(&scn.u8x8, 0x78);
+    u8x8_SetI2CAddress(&scn.u8x8, addr << 1);
     u8g2_SetFont(&scn, u8g2_font_ncenB08_tr);
     u8g2_InitDisplay(&scn);
     u8g2_SetPowerSave(&scn, 0);
 }
 
 void scn_progbar(uint8_t percent) {
+    if (!scn_init) return;
     static char buf[16];
     snprintf(buf, sizeof(buf), "%d %%", percent);
     u8g2_ClearBuffer(&scn);
@@ -376,35 +406,39 @@ static uint8_t i2c_als_addr[4] = {
 
 static void als_initialize() {
     esp_err_t err;
-    uint8_t addr, buf[4];
+    uint8_t addr;
+    uint16_t buf[2];
     for (int i = 0; i < 4; i++) {
         if (smbus_probe(NUM_I2C, addr = i2c_als_addr[i]))
             continue;
         if (
-            ( err = smbus_rregs(NUM_I2C, addr, 0x7E, buf, 2) ) ||
-            ( err = smbus_rregs(NUM_I2C, addr, 0x7F, buf + 2, 2) )
+            ( err = smbus_read_word(NUM_I2C, addr, 0x7E, buf + 0) ) ||
+            ( err = smbus_read_word(NUM_I2C, addr, 0x7F, buf + 1) )
         ) {
             ESP_LOGE(TAG, "Read ALS %d failed: %s", i, esp_err_to_name(err));
             continue;
         }
-        ESP_LOGD(TAG, "Found ALS %c%c %04X at I2C %d-%02X",
-                buf[0], buf[1], buf[2] << 8 | buf[3], NUM_I2C, addr);
+        ESP_LOGI(TAG, "Found ALS %c%c %04X at I2C %d-%02X",
+                buf[0] >> 4, buf[0] & 0x0F, buf[1], NUM_I2C, addr);
+        smbus_write_word(NUM_I2C, addr, 0x01, 0xC610); // continuous mode
         // TODO: configure Low-Limit and Hight-Limit and Interrupt GPIO
     }
 }
 
 float als_brightness(int idx) {
-    if (idx < 0 || idx > 3)
+    if (idx < 0 || idx > 3) {
+        ESP_LOGE(TAG, "Invalid ALS chip index %d", idx);
         return 0;
-    uint8_t buf[2];
-    esp_err_t err = smbus_rregs(NUM_I2C, i2c_als_addr[idx], 0x00, buf, 2);
-    if (err) {
+    }
+    uint16_t val;
+    esp_err_t err;
+    if (( err = smbus_read_word(NUM_I2C, i2c_als_addr[idx], 0x00, &val) )) {
         ESP_LOGW(TAG, "Read ALS %d failed: %s", idx, esp_err_to_name(err));
         return 0;
     }
     // Equation 3 at Page 20 of OPT3001 datasheet:
     //   lux = 0.01 * 2^E[3:0] * R[11:0]
-    return 0.01 * (1 << (buf[0] >> 4)) * ((buf[0] << 4) | buf[1]);
+    return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
 }
 
 // SPI GPIO Expander

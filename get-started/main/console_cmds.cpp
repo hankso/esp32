@@ -403,13 +403,15 @@ static struct {
     struct arg_int *addr;
     struct arg_int *reg;
     struct arg_int *val;
+    struct arg_lit *hex;
     struct arg_end *end;
 } driver_i2c_args = {
     .bus = arg_int1(NULL, NULL, "<0|1>", "I2C bus number"),
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
     .reg = arg_int0(NULL, NULL, "regaddr", "Register 8-bit address"),
-    .val = arg_int0(NULL, NULL, "regval", "Register 8-bit value"),
-    .end = arg_end(4)
+    .val = arg_int0(NULL, NULL, "regval", "Register value"),
+    .hex = arg_lit0("w", "word", "R / W in word (16-bit) mode"),
+    .end = arg_end(5)
 };
 
 static int driver_i2c(int argc, char **argv) {
@@ -432,13 +434,26 @@ static int driver_i2c(int argc, char **argv) {
     if (!driver_i2c_args.reg->count) {
         return smbus_dump(bus, addr, 0x00, 0xFF);
     }
-    uint8_t reg = driver_i2c_args.reg->ival[0], val;
+    uint8_t reg = driver_i2c_args.reg->ival[0];
     if (driver_i2c_args.val->count) {
-        return smbus_wreg(bus, addr, reg, driver_i2c_args.val->ival[0]);
+        if (driver_i2c_args.hex->count) {
+            uint16_t val = driver_i2c_args.val->ival[0];
+            return smbus_write_word(bus, addr, reg, val);
+        } else {
+            uint8_t val = driver_i2c_args.val->ival[0];
+            return smbus_write_byte(bus, addr, reg, val);
+        }
     }
-    esp_err_t err = smbus_rreg(bus, addr, reg, &val);
-    if (!err)
-        printf("I2C %d-%02X register 0x%02X = %02X\n", bus, addr, reg, val);
+    esp_err_t err;
+    if (driver_i2c_args.hex->count) {
+        uint16_t val;
+        if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
+        printf("I2C %d-%02X REG 0x%02X = %04X\n", bus, addr, reg, val);
+    } else {
+        uint8_t val;
+        if (( err = smbus_read_byte(bus, addr, reg, &val) )) return err;
+        printf("I2C %d-%02X REG 0x%02X = %02X\n", bus, addr, reg, val);
+    }
     return err;
 }
 

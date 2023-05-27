@@ -65,8 +65,10 @@ void scn_progbar(uint8_t percent);
 void i2c_detect(int bus);
 esp_err_t smbus_probe(int bus, uint8_t addr);
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg_start, uint8_t reg_end);
-esp_err_t smbus_wreg(int bus, uint8_t addr, uint8_t reg, uint8_t val);
-esp_err_t smbus_rreg(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
+esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val);
+esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
+esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val);
+esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val);
 
 // We use PCF8574 for IO expansion: Endstops | Temprature | Valves
 

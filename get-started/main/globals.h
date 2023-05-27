@@ -82,7 +82,7 @@ extern "C" {
 */
 
 #ifndef CONFIG_GPIO_LED
-#define CONFIG_GPIO_LED         5
+#define CONFIG_GPIO_LED         2
 #endif
 
 #ifndef CONFIG_GPIO_HSPI_MISO

@@ -167,7 +167,7 @@ void _set_config_callback(const char *key, cJSON *item) {
     if (!val) {
         ESP_LOGE(TAG, "No memory for new config value");
     } else if (!config_set(key, val)) {
-        ESP_LOGW(TAG, "JSON Config set `%s` to `%s` failed", key, val);
+        ESP_LOGD(TAG, "JSON Config set `%s` to `%s` failed", key, val);
     }
 }
 
@@ -447,7 +447,6 @@ void config_nvs_stats() {
 bool config_initialize() {
     esp_err_t err;
     config_nvs_init();
-    esp_log_level_set(TAG, ESP_LOG_WARN);
 
     // load readonly values
     if (config_nvs_open(NAMESPACE_INFO, true) == ESP_OK) {
