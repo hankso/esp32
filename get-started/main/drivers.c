@@ -135,8 +135,16 @@ static esp_err_t pwm_duty(ledc_channel_t channel, int degree) {
 }
 
 esp_err_t pwm_degree(int hdeg, int vdeg) {
-    esp_err_t err = pwm_duty(LEDC_CHANNEL_0, MAX(0, MIN(hdeg, 180)));
-    if (!err) err = pwm_duty(LEDC_CHANNEL_1, MAX(0, MIN(vdeg, 160)));
+    esp_err_t err = ESP_OK;
+    if (hdeg >= 0) {
+        hdeg = 166 * hdeg / 180 + 14; // map virtual 0-180 to real 14-180
+        if (( err = pwm_duty(LEDC_CHANNEL_0, MAX(14, MIN(hdeg, 180))) ))
+            return err;
+    }
+    if (vdeg >= 0) {
+        if (( err = pwm_duty(LEDC_CHANNEL_1, MAX(0, MIN(vdeg, 160))) ))
+            return err;
+    }
     return err;
 }
 
@@ -439,6 +447,62 @@ float als_brightness(int idx) {
     // Equation 3 at Page 20 of OPT3001 datasheet:
     //   lux = 0.01 * 2^E[3:0] * R[11:0]
     return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
+}
+
+esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
+#define ABSDIFF(a, b) ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
+    esp_err_t err;
+    float bmax = 0, bmin = 1e10, btmp[4];
+    switch (idx) {
+    case ALS_TRACK_0: case ALS_TRACK_1:     // maximize brightness
+    case ALS_TRACK_2: case ALS_TRACK_3:
+        for (int i = 0, v = 0; v < 90; i++, v += 6) {
+            for (int h = 0; h < 180; h += 5) {
+                int htmp = i % 2 ? (180 - h) : h; // S line scanning
+                if (( err = pwm_degree(htmp, v) )) return err;
+                vTaskDelay(50 / portTICK_PERIOD_MS);
+                btmp[0] = als_brightness(idx);
+                ESP_LOGD(TAG, "H %3d V %3d %8.2f lux\n", htmp, v, btmp[0]);
+                if (btmp[0] > bmax) {
+                    bmax = btmp[0];
+                    *hdeg = htmp;
+                    *vdeg = v;
+                }
+            }
+        }
+        break;
+    case ALS_TRACK_H:           // minimize difference of east and west
+        for (int h = 0; h < 180; h += 15) {
+            if (( err = pwm_degree(h, -1) )) return err;
+            vTaskDelay(800 / portTICK_PERIOD_MS);
+            if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
+            if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
+            if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
+                bmin = btmp[2];
+                *hdeg = h;
+            }
+        }
+        break;
+    case ALS_TRACK_V:           // minimize difference of north and south
+        for (int v = 0; v < 90; v += 9) {
+            if (( err = pwm_degree(-1, v) )) return err;
+            vTaskDelay(800 / portTICK_PERIOD_MS);
+            if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
+            if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
+            if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
+                bmin = btmp[2];
+                *vdeg = v;
+            }
+        }
+        break;
+    case ALS_TRACK_A:
+        puts("TODO: PID Light Tracking"); break;
+    default: return ESP_ERR_INVALID_ARG;
+    }
+    if (bmax != 0 || bmin != 1e10) {
+        return pwm_degree(*hdeg, *vdeg);
+    }
+    return ESP_ERR_NOT_FOUND;
 }
 
 // SPI GPIO Expander

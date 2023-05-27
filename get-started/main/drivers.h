@@ -58,6 +58,18 @@ esp_err_t twdt_feed();
 
 uint16_t vlx_probe();
 
+typedef enum {
+    ALS_TRACK_0,    // single input
+    ALS_TRACK_1,
+    ALS_TRACK_2,
+    ALS_TRACK_3,
+    ALS_TRACK_H,    // dual input
+    ALS_TRACK_V,
+    ALS_TRACK_A,    // quad input
+} als_track_t;
+
+esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg);
+
 float als_brightness(int idx);
 
 void scn_progbar(uint8_t percent);

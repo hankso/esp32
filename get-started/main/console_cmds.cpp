@@ -459,11 +459,11 @@ static int driver_i2c(int argc, char **argv) {
 
 static struct {
     struct arg_int *idx;
-    struct arg_lit *pid;
+    struct arg_str *rlt;
     struct arg_end *end;
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-3>", "index of ALS chip"),
-    .pid = arg_lit0(NULL, "pid", "run light tracking"),
+    .rlt = arg_str0("t", "track", "<0123HVEOA>", "run light tracking"),
     .end = arg_end(2)
 };
 
@@ -471,8 +471,19 @@ static int driver_als(int argc, char **argv) {
     static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
     if (!arg_noerror(argc, argv, (void **) &driver_als_args))
         return ESP_ERR_INVALID_ARG;
-    if (driver_als_args.pid->count) {
-        return ESP_ERR_NOT_FOUND; // TODO
+    if (driver_als_args.rlt->count) {
+        static const char *methods = "0123HVEOA";
+        char *c = strchr(methods, driver_als_args.rlt->sval[0][0]);
+        if (!c) {
+            printf("Invalid tracking method: %s, select from <%s>\n",
+                   driver_als_args.rlt->sval[0], methods);
+            return ESP_ERR_INVALID_ARG;
+        }
+        int hdeg = -1, vdeg = -1;
+        esp_err_t err = als_tracking((als_track_t)(c - methods), &hdeg, &vdeg);
+        if (!err)
+            printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
+        return err;
     }
     if (driver_als_args.idx->count) {
         int idx = driver_als_args.idx->ival[0];
