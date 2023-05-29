@@ -20,6 +20,7 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "rom/uart.h"
+#include "driver/i2c.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
 #include "linenoise/linenoise.h"
@@ -404,6 +405,7 @@ static struct {
     struct arg_int *reg;
     struct arg_int *val;
     struct arg_lit *hex;
+    struct arg_int *len;
     struct arg_end *end;
 } driver_i2c_args = {
     .bus = arg_int1(NULL, NULL, "<0|1>", "I2C bus number"),
@@ -411,7 +413,8 @@ static struct {
     .reg = arg_int0(NULL, NULL, "regaddr", "Register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "Register value"),
     .hex = arg_lit0("w", "word", "R / W in word (16-bit) mode"),
-    .end = arg_end(5)
+    .len = arg_int0("l", "len", "<num>", "Read specified length of registers"),
+    .end = arg_end(6)
 };
 
 static int driver_i2c(int argc, char **argv) {
@@ -431,10 +434,8 @@ static int driver_i2c(int argc, char **argv) {
         printf("Invalid I2C address: 0x%02X\n", addr);
         return ESP_ERR_INVALID_ARG;
     }
-    if (!driver_i2c_args.reg->count) {
-        return smbus_dump(bus, addr, 0x00, 0xFF);
-    }
-    uint8_t reg = driver_i2c_args.reg->ival[0];
+    uint8_t reg = driver_i2c_args.reg->count ? \
+                  driver_i2c_args.reg->ival[0] : 0;
     if (driver_i2c_args.val->count) {
         if (driver_i2c_args.hex->count) {
             uint16_t val = driver_i2c_args.val->ival[0];
@@ -449,10 +450,12 @@ static int driver_i2c(int argc, char **argv) {
         uint16_t val;
         if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
         printf("I2C %d-%02X REG 0x%02X = %04X\n", bus, addr, reg, val);
-    } else {
+    } else if (!driver_i2c_args.len->count) {
         uint8_t val;
         if (( err = smbus_read_byte(bus, addr, reg, &val) )) return err;
         printf("I2C %d-%02X REG 0x%02X = %02X\n", bus, addr, reg, val);
+    } else {
+        err = smbus_dump(bus, addr, reg, driver_i2c_args.len->ival[0]);
     }
     return err;
 }
@@ -462,7 +465,7 @@ static struct {
     struct arg_str *rlt;
     struct arg_end *end;
 } driver_als_args = {
-    .idx = arg_int0(NULL, NULL, "<0-3>", "index of ALS chip"),
+    .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
     .rlt = arg_str0("t", "track", "<0123HVEOA>", "run light tracking"),
     .end = arg_end(2)
 };
@@ -471,6 +474,7 @@ static int driver_als(int argc, char **argv) {
     static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
     if (!arg_noerror(argc, argv, (void **) &driver_als_args))
         return ESP_ERR_INVALID_ARG;
+    esp_err_t err = ESP_OK;
     if (driver_als_args.rlt->count) {
         static const char *methods = "0123HVEOA";
         char *c = strchr(methods, driver_als_args.rlt->sval[0][0]);
@@ -480,20 +484,26 @@ static int driver_als(int argc, char **argv) {
             return ESP_ERR_INVALID_ARG;
         }
         int hdeg = -1, vdeg = -1;
-        esp_err_t err = als_tracking((als_track_t)(c - methods), &hdeg, &vdeg);
-        if (!err)
+        als_track_t method = (als_track_t)(c - methods);
+        if (!( err = als_tracking(method, &hdeg, &vdeg) ))
             printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
         return err;
     }
-    if (driver_als_args.idx->count) {
-        int idx = driver_als_args.idx->ival[0];
-        printf(tpl, idx, als_brightness(idx));
-    } else {
+    if (!driver_als_args.idx->count) {
         for (int idx = 0; idx < 4; idx++) {
             printf(tpl, idx, als_brightness(idx));
         }
+    } else if (driver_als_args.idx->ival[0] < 3) {
+        int idx = driver_als_args.idx->ival[0];
+        printf(tpl, idx, als_brightness(idx));
+    } else {
+        gy39_data_t dat;
+        if (!( err = gy39_measure(NUM_I2C, &dat) ))
+            printf("GY39 %.2f lux, %.2f degC, %.2f Pa, %.2f %%, %.2f m\n",
+                    dat.brightness, dat.temperature,
+                    dat.atmosphere, dat.humidity, dat.altitude);
     }
-    return ESP_OK;
+    return err;
 }
 
 static struct {

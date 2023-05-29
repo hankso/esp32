@@ -399,6 +399,21 @@ void scn_progbar(uint8_t percent) {
     u8g2_SendBuffer(&scn);
 }
 
+// I2C Ambient Light and Temperature Sensor
+// 7bit I2C address of the GY39 is 0x5B.
+
+esp_err_t gy39_measure(int bus, gy39_data_t *d) {
+    esp_err_t err;
+    uint8_t a[0x0D];
+    if (( err = smbus_rregs(bus, 0x5B, 0x00, a, sizeof(a)) )) return err;
+    d->brightness = 1e-2 * ((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]);
+    d->temperature = 1e-2 * ((a[4] << 8) | a[5]);
+    d->atmosphere = 1e-2 * ((a[6] << 24) | (a[7] << 16) | (a[8] << 8) | a[9]);
+    d->humidity = 1e-2 * ((a[10] << 8) | a[11]);
+    d->altitude = (a[12] << 8) | a[13];
+    return err;
+}
+
 // I2C Ambient Light Sensor
 // 7bit I2C address of the OPT3001 is configurable by ADDR PIN.
 // Basic address is 0b010001XX where `XX` are:
@@ -474,7 +489,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     case ALS_TRACK_H:           // minimize difference of east and west
         for (int h = 0; h < 180; h += 15) {
             if (( err = pwm_degree(h, -1) )) return err;
-            vTaskDelay(800 / portTICK_PERIOD_MS);
+            vTaskDelay(200 / portTICK_PERIOD_MS);
             if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
             if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
@@ -486,7 +501,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     case ALS_TRACK_V:           // minimize difference of north and south
         for (int v = 0; v < 90; v += 9) {
             if (( err = pwm_degree(-1, v) )) return err;
-            vTaskDelay(800 / portTICK_PERIOD_MS);
+            vTaskDelay(200 / portTICK_PERIOD_MS);
             if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
             if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {

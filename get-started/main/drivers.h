@@ -72,6 +72,16 @@ esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg);
 
 float als_brightness(int idx);
 
+typedef struct {
+    float brightness;   // lux
+    float temperature;  // Celsius degree
+    float atmosphere;   // Pa
+    float humidity;     // percentage
+    float altitude;     // meter
+} gy39_data_t;
+
+esp_err_t gy39_measure(int bus, gy39_data_t *dat);
+
 void scn_progbar(uint8_t percent);
 
 void i2c_detect(int bus);
