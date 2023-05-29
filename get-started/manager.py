@@ -48,29 +48,38 @@ def _firmware_url(filename='app.bin', port=8080):
     return posixpath.join('http://%s:%d' % (host, port), filename)
 
 
-def _pack_nvs(args):
+def _process_nvs(args):
     idf_path = os.environ.get('IDF_PATH')
     if not idf_path:
         return
     try:
-        size = '0x4000'
+        offset, size = '0xB000', '0x4000'
         with open(__partcsv__, 'r') as f:
             for line in f.readlines():
                 if line.startswith('#') or not line.strip():
                     continue
-                if 'data' in line and 'nvs' in line:
-                    size = line.split()[4].strip(',')
-                    break
+                if 'data' not in line or 'nvs' not in line:
+                    continue
+                chunks = [a.strip(',') for a in line.split()]
+                offset, size = chunks[3:5]
+                break
     except Exception:
         pass
     argv_backup = sys.argv[:]
     try:
-        folder = 'components/nvs_flash/nvs_partition_generator'
-        sys.path.append(os.path.join(idf_path, folder))
-        from nvs_partition_gen import main
+        for folder in (
+            'components/nvs_flash/nvs_partition_generator',
+            'components/esptool_py/esptool',
+        ):
+            sys.path.append(os.path.join(idf_path, folder))
+        from nvs_partition_gen import main as nvs_gen
+        from esptool import _main as nvs_flash
         dest = os.path.join(__basedir__, 'build', 'nvs.bin')
         sys.argv[1:] = ['generate', args.out, dest, size]
-        main()
+        nvs_gen()
+        if args.flash:
+            sys.argv[1:] = ['-p', args.flash, 'write_flash', offset, dest]
+            nvs_flash()
     except Exception as e:
         return print('Generate NVS partition binary failed: %s' % e)
     finally:
@@ -100,7 +109,7 @@ def genid(args):
         with open(args.out, 'w') as f:
             f.write(data)
     if args.pack:
-        _pack_nvs(args)
+        _process_nvs(args)
 
 
 def _relpath(p, ref='.', strip=True):
@@ -266,6 +275,8 @@ if __name__ == '__main__':
         'genid', help='Generate unique ID in NVS flash for each firmware')
     sparser.add_argument(
         '--pack', action='store_true', help='package into nvs binary file')
+    sparser.add_argument(
+        '--flash', metavar='COM', help='Flash NVS binary to specified port')
     sparser.add_argument(
         '-l', '--len', type=int, default=6, help='length of UID')
     sparser.add_argument(
