@@ -44,12 +44,13 @@ config_t Config = {
         .DIR_DATA  = "/data/",
     },
     .net = {
+        .STA_NAME  = "",
+        .STA_PASS  = "",
+        .AP_AUTO   = "1",
         .AP_NAME   = "Hankso@ESP32",
         .AP_PASS   = "16011106",
         .AP_HOST   = "10.0.2.1",
         .AP_HIDE   = "0",
-        .STA_NAME  = "",
-        .STA_PASS  = "",
     },
     .app = {
         .DNS_RUN   = "",
@@ -112,12 +113,13 @@ config_entry_t cfglist[] = {
     {"web.path.static", &Config.web.DIR_ROOT},
     {"web.path.data",   &Config.web.DIR_DATA},
 
+    {"net.sta.ssid",    &Config.net.STA_NAME},
+    {"net.sta.pass",    &Config.net.STA_PASS},
+    {"net.ap.auto",     &Config.net.AP_AUTO},
     {"net.ap.ssid",     &Config.net.AP_NAME},
     {"net.ap.pass",     &Config.net.AP_PASS},
     {"net.ap.host",     &Config.net.AP_HOST},
     {"net.ap.hide",     &Config.net.AP_HIDE},
-    {"net.sta.ssid",    &Config.net.STA_NAME},
-    {"net.sta.pass",    &Config.net.STA_PASS},
 
     {"app.dns.run",     &Config.app.DNS_RUN},
     {"app.dns.host",    &Config.app.DNS_HOST},

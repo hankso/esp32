@@ -601,7 +601,7 @@ static int utils_history(int argc, char **argv) {
     char * fn = (char *)malloc(plen + dlen + strlen(dst) + 1);
     if (!fn) return ESP_ERR_NO_MEM;
     strcpy(fn, FFS_MP); strcat(fn, Config.web.DIR_DATA); strcat(fn, dst);
-    if (!ffs_exists(fn + plen) && !save) {
+    if (!FFS.exists(fn + plen) && !save) {
         printf("History file `%s` does not exist\n", fn);
         return ESP_ERR_NOT_FOUND;
     }
@@ -628,9 +628,9 @@ static int utils_listdir(int argc, char **argv) {
     const char *dir = utils_listdir_args.dir->count ? \
                       utils_listdir_args.dir->sval[0] : "/";
     if (strstr(dev, "flash")) {
-        ffs_list(dir, stdout);
+        FFS.list(dir, stdout);
     } else if (strstr(dev, "sdmmc")) {
-        sdfs_list(dir, stdout);
+        SDFS.list(dir, stdout);
     } else {
         printf("Invalid device: `%s`\n", dev);
         return ESP_ERR_INVALID_ARG;

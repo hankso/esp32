@@ -4,6 +4,7 @@
 #include "globals.h"
 #include "drivers.h"
 #include "console.h"
+#include "filesys.h"
 #include "update.h"
 #include "config.h"
 
@@ -22,7 +23,7 @@ void init() {
     esp_log_level_set(TAG, ESP_LOG_DEBUG);
     ESP_LOGI(TAG, "Init Configuration");        config_initialize();
     ESP_LOGI(TAG, "Init OTA Updation");         ota_initialize();
-    /* ESP_LOGI(TAG, "Init File Systems");         fs_initialize(); */
+    ESP_LOGI(TAG, "Init File Systems");         fs_initialize();
     /* ESP_LOGI(TAG, "Init WiFi Connection");      wifi_initialize(); */
     ESP_LOGI(TAG, "Init Hardware Drivers");     driver_initialize();
     ESP_LOGI(TAG, "Init Command Line Console"); console_initialize();
@@ -30,8 +31,7 @@ void init() {
 }
 
 void setup() {
-    scn_progbar(0);
-    console_loop_begin(1);
+    console_loop_begin(1);  // Core 1 (i.e. App CPU)
 }
 
 void loop() {
@@ -59,7 +59,7 @@ void loopTask(void *pvParameters) {
     }
 }
 
-void app_main(void) {
+extern "C" void app_main(void) {
     init(); setup();
     //                      function   task name  stacksize param prio hdlr cpu
     xTaskCreatePinnedToCore(loopTask, "main-loop", 1024 * 4, NULL, 1, NULL, 1);

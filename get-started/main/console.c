@@ -160,7 +160,7 @@ char * console_handle_command(const char *cmd, bool history) {
 void console_handle_one() {
     char *ret, *cmd = linenoise(prompt);
     if (cmd != NULL) {
-        putchar('\n');
+        putchar('\n'); fflush(stdout);
         if (strlen(cmd) && ( ret = console_handle_command(cmd, true) )) {
             printf("%s\n\n", ret);
             free(ret);

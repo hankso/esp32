@@ -15,7 +15,8 @@
 #include "driver/sdmmc_host.h"
 #include "driver/sdspi_host.h"
 
-/*
+#include <Arduino.h>
+
 using namespace fs;
 
 bool _valid_path(const char *path) { return path && path[0] == '/'; }
@@ -23,7 +24,7 @@ bool _write_mode(const char *mode) { return mode && strchr(mode, 'w'); }
 
 // File System APIs
 
-FileImplPtr CFSImpl::open(const char *path, const char *mode) {
+FileImplPtr CFSImpl::open(const char *path, const char *mode, const bool create) {
     if (!_mountpoint || !_valid_path(path) ||
         (!_write_mode(mode) && !exists(path))) return FileImplPtr();
     return std::make_shared<CFSFileImpl>(this, path, mode);
@@ -78,14 +79,15 @@ void _jsonify_file(File file, void *arg) {
 }
 
 void _loginfo_file(File file, void *arg) {
-    fprintf((FILE *)arg, "%c %6s %12lu %s\n",
-            file.isDirectory() ? 'd' : 'f',
+    fprintf((FILE *)arg, "%-4s %6s %12lu %s\n",
+            file.isDirectory() ? "DIR" : "FILE",
             format_size(file.size()),
             file.getLastWrite(),
             file.name());
 }
 
 void CFS::list(const char *path, FILE *stream) {
+    fprintf(stream, "Type   Size  Last-Modify Filename\n");
     walk(path, &_loginfo_file, stream);
 }
 
@@ -105,6 +107,7 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     , _path(NULL), _fullpath(NULL)
     , _isdir(true)
     , _badfile(true), _baddir(true)
+    , _npath(NULL), _nisdir(false)
     , _written(true)
 {
     char *tmp = (char *)malloc(strlen(_fs->mountpoint()) + strlen(path) + 1);
@@ -163,6 +166,8 @@ bool CFSFileImpl::seek(uint32_t pos, SeekMode mode) {
     return _badfile ? false : fseek(_file, pos, mode) == 0;
 }
 
+size_t CFSFileImpl::tell() const { return _badfile ? 0 : ftell(_file); }
+
 void CFSFileImpl::flush() {
     if (_badfile) return;
     fflush(_file);
@@ -171,26 +176,69 @@ void CFSFileImpl::flush() {
 
 void CFSFileImpl::close() {
     if (_path)      { free(_path);      _path = NULL; }
+    if (_npath)     { free(_npath);     _npath = NULL; }
     if (_fullpath)  { free(_fullpath);  _fullpath = NULL; }
     if (_dir)       { closedir(_dir);   _dir = NULL; }
     if (_file)      { fclose(_file);    _file = NULL; }
     _badfile = _baddir = true;
 }
 
-size_t CFSFileImpl::tell() const { return _badfile ? 0 : ftell(_file); }
-
-FileImplPtr CFSFileImpl::openNextFile(const char *mode) {
-    if (_baddir) return FileImplPtr();
-    struct dirent *file = readdir(_dir);
-    if (file == NULL) return FileImplPtr();
-    if (file->d_type != DT_REG && file->d_type != DT_DIR)
-        return openNextFile(mode);
-    String fname = String(file->d_name), name = String(_path);
-    if (!fname.startsWith("/") && !name.endsWith("/")) name += "/";
-    return std::make_shared<CFSFileImpl>(_fs, (name + fname).c_str(), mode);
+boolean CFSFileImpl::seekDir(long pos) {
+    if (!_baddir)
+        seekdir(_dir, pos);
+    return !_baddir;
 }
 
-void CFSFileImpl::rewindDirectory(void) { if (!_baddir) rewinddir(_dir); }
+bool CFSFileImpl::setBufferSize(size_t size) {
+    return _badfile ? 0 : !setvbuf(_file, NULL, _IOFBF, size);
+}
+
+void CFSFileImpl::dir_next() {
+    // nisdir   npath    condition
+    // false  + NULL  => baddir or end
+    // false  + \x00  => skip this entry
+    // false  + char  => next is file
+    // true   + NULL  => ESP_ERR_NO_MEM
+    // true   + char  => next is dir
+    if (_baddir)
+        return;
+    if (_npath) {
+        free(_npath);
+        _npath = NULL;
+    }
+    struct dirent *file = readdir(_dir);
+    if (file == NULL) {
+        _nisdir = false;
+        return;
+    }
+    if (( _nisdir = file->d_type == DT_DIR ) || file->d_type == DT_REG) {
+        String fname = String(file->d_name), name = String(_path);
+        if (!fname.startsWith("/") && !name.endsWith("/")) name += "/";
+        _npath = strdup((name + fname).c_str());
+    } else {
+        _npath = strdup("");
+    }
+}
+
+String CFSFileImpl::getNextFileName() {
+    dir_next();
+    return _valid_path(_npath) ? _npath : "";
+}
+
+String CFSFileImpl::getNextFileName(bool *isDir) {
+    dir_next();
+    if (isDir)
+        *isDir = _nisdir;
+    return _valid_path(_npath) ? _npath : "";
+}
+
+FileImplPtr CFSFileImpl::openNextFile(const char *mode) {
+    dir_next();
+    if (_npath && !_npath[0]) return openNextFile(mode);
+    if (_valid_path(_npath))
+        return std::make_shared<CFSFileImpl>(_fs, _npath, mode);
+    return FileImplPtr();
+}
 
 // SDMMC - SPI interface (using native spi driver instead of Arduino SPI.h)
 
@@ -205,12 +253,25 @@ bool SDSPIFSFS::begin(bool format, const char *base, uint8_t max) {
 
     // SDSPI_SLOT_CONFIG_DEFAULT()
     sdspi_slot_config_t slot_conf = {
+        .gpio_cs   = PIN_HCS0,
+#ifdef CONFIG_GPIO_HSPI_SDCD
+        .gpio_cd   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDCD),
+#else
+        .gpio_cd   = SDSPI_SLOT_NO_CD,
+#endif
+#ifdef CONFIG_GPIO_HSPI_SDWP
+        .gpio_wp   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDWP),
+#else
+        .gpio_wp   = SDSPI_SLOT_NO_WP,
+#endif
+#ifdef CONFIG_GPIO_HSPI_SDINT
+        .gpio_int  = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDINT),
+#else
+        .gpio_int  = SDSPI_SLOT_NO_INT,
+#endif
         .gpio_miso = PIN_HMISO,
         .gpio_mosi = PIN_HMOSI,
         .gpio_sck  = PIN_HSCLK,
-        .gpio_cs   = PIN_HCS0,
-        .gpio_cd   = PIN_HSDCD,
-        .gpio_wp   = SDSPI_SLOT_NO_WP,
         .dma_channel = 1,
     };
 
@@ -316,8 +377,9 @@ void FLASHFSFS::end() {
     }
 }
 
-void FLASHFSFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
-    String base = path;
+void FLASHFSFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
+    static String lastDir = "";
+    String base = dir, path;
     if (!base.startsWith("/")) base = "/" + base;
     if (!base.endsWith("/")) base = base + "/";
 #ifdef CONFIG_USE_FFATFS
@@ -325,17 +387,16 @@ void FLASHFSFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
     while (file = root.openNextFile()) {
 #else
     File root = open("/"), file;
-    static String name, lastDir = "";
     while (file = root.openNextFile()) {
         // SPIFFS uses flatten file structure, so skip files under other dirs
-        name = file.name();
-        if (!name.startsWith(base)) continue;
+        path = file.path();
+        if (!path.startsWith(base)) continue;
         // resolve directory path from filename
-        int idx = name.indexOf('/', base.length());
+        int idx = path.indexOf('/', base.length());
         if (idx != -1) {
-            name = name.substring(0, idx + 1);
-            if (lastDir == name) continue;
-            else file = open(lastDir = name);
+            path = path.substring(0, idx + 1);
+            if (lastDir == path) continue;
+            else file = open(lastDir = path);
         }
 #endif
         (*cb)(file, arg);
@@ -346,9 +407,9 @@ void FLASHFSFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
 
 SDSPIFSFS SDFS;
 FLASHFSFS FFS;
-*/
 
-bool ffs_exists(const char * path) { return false; /* FFS.exists(path); */ }
-bool sdfs_exists(const char * path) { return false; /* SDFS.exists(path); */ }
-void ffs_list(const char * dir, FILE * stream) { ; }
-void sdfs_list(const char * dir, FILE * stream) { ; }
+void fs_initialize() {
+    if (FFS.begin(false, FFS_MP, 10)) FFS.printInfo();
+    if (SDFS.begin(false, SDFS_MP, 5)) SDFS.printInfo();
+    fflush(stdout);
+}

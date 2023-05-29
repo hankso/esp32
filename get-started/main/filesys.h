@@ -10,7 +10,7 @@
  * - SDSPIFSFS is implemented for SD Card FAT File System in SPI mode.
  *
  * - FLASHFSFS supports SPIFFS & FFATFS and is configurable by defining macro
- * `CONFIG_USE_FFATFS`. It default initializes SPIFFS on flash partition.
+ * `CONFIG_USE_FFATFS`. It default initializes SPIFFS on `storage` partition.
  *
  * This module relies on Arduino FS Abstract Layer but nothing.
  *
@@ -36,6 +36,8 @@
  *          printf("file/dir does exist\n");
  *          file_impl.close();
  *      }
+ *
+ * Note: File system adds about 108 KB to the final firmware.
  */
 
 #ifndef _FILESYS_H_
@@ -53,13 +55,14 @@
 #define FFS_MP  CONFIG_FFS_MP
 #define SDFS_MP CONFIG_SDFS_MP
 
-#ifdef __cplusplus
-extern "C" {
-#endif
+void fs_initialize();
 
-/*
+#ifdef __cplusplus
+
 #include <FS.h>
 #include <FSImpl.h>
+
+extern "C" {
 
 namespace fs {
 
@@ -69,7 +72,7 @@ class CFSImpl : public FSImpl {
 protected:
     friend class CFSFileImpl;
 public:
-    FileImplPtr open(const char *path, const char *mode) override;
+    FileImplPtr open(const char *path, const char *mode, const bool create) override;
     bool        exists(const char *path) override;
     bool        rename(const char *from, const char *to) override;
     bool        remove(const char *path) override;
@@ -87,9 +90,13 @@ protected:
     bool                _isdir;
     bool                _badfile;
     bool                _baddir;
+    char *              _npath;
+    bool                _nisdir;
     mutable struct stat _stat;
     mutable bool        _written;
     bool                _getstat() const;
+private:
+    void        dir_next();
 public:
     CFSFileImpl(CFSImpl *fs, const char *path, const char *mode);
     ~CFSFileImpl() override { close(); }
@@ -101,14 +108,19 @@ public:
     void        close() override;
 
     operator    bool()                  { return !_badfile || !_baddir; }
-    const char* name() const override   { return (const char *)_path; }
+    const char* path() const override   { return (const char *)_path; }
+    const char* name() const override   { return pathToFileName(_path); }
     size_t      size() const override   { _getstat(); return _stat.st_size; }
     time_t      getLastWrite() override { _getstat(); return _stat.st_mtime; }
     size_t      position() const override { return tell(); }
     boolean     isDirectory(void) override { return _isdir; }
+    void        rewindDirectory(void) override { if (!_baddir) rewinddir(_dir); }
 
+    bool        setBufferSize(size_t size);
+    boolean     seekDir(long pos) override;
+    String      getNextFileName(void) override;
+    String      getNextFileName(bool *isDir) override;
     FileImplPtr openNextFile(const char *mode) override;
-    void        rewindDirectory(void) override;
 };
 
 class CFS : public FS {
@@ -169,15 +181,8 @@ public:
 
 extern fs::FLASHFSFS FFS;
 extern fs::SDSPIFSFS SDFS;
-*/
 
-bool ffs_exists(const char *);
-bool sdfs_exists(const char *);
-void ffs_list(const char *, FILE *);
-void sdfs_list(const char *, FILE *);
-
-#ifdef __cplusplus
 }
-#endif
+#endif // __cplusplus
 
 #endif // _FILESYS_H_

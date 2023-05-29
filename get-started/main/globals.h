@@ -24,6 +24,8 @@ extern "C" {
 #define CONFIG_FFS_MP           "/flashfs"  // mount point for flash file system
 #define CONFIG_SDFS_MP          "/sdcard"   // mount point for external SDCard
 #define CONFIG_DEBUG
+#define CONFIG_SCREEN
+// #define CONFIG_VLX_SENSOR                   // vlx_probe: 5KB
 // #define CONFIG_OTA_FETCH                    // ota_updation_url: 263KB
 
 /*
@@ -107,14 +109,6 @@ extern "C" {
 #define CONFIG_GPIO_SERVOH      33
 #define CONFIG_GPIO_SERVOV      32
 #endif
-
-// make it compatiable with Arduino
-#ifndef bitRead
-#define bitRead(v, b)       ((v) & BIT(b))
-#define bitSet(v, b)        ((v) |= BIT(b))
-#define bitClear(v, b)      ((v) &= ~BIT(b))
-#define bitWrite(v, b, l)   (l ? bitSet(v, b) : bitClear(v, b))
-#endif // bitRead
 
 
 // Utilities (implemented in utils.c)

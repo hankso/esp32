@@ -23,9 +23,12 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "u8g2.h"
-#include "u8g2_esp32_hal.h"
-#if __has_include("vl53l0x.h")
+#if defined(CONFIG_SCREEN) && __has_include("u8g2_esp32_hal.h")
+#   include "u8g2.h"
+#   include "u8g2_esp32_hal.h"
+#   define WITH_U8G2
+#endif
+#if defined(CONFIG_VLX_SENSOR) && __has_include("vl53l0x.h")
 #    include "vl53l0x.h"
 #    define WITH_VLX
 #endif
@@ -306,20 +309,20 @@ static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
     int pin = pin_num - PIN_I2C_MIN - 1;
     if (0 > pin || pin > PIN_I2C_MAX) return ESP_ERR_INVALID_ARG;
-    uint8_t idx = pin >> 3, bit = pin & 0x7, *data = i2c_pin_data + idx;
-    bitWrite(*data, bit, level);
-    return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, data, 1);
+    uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
+    *datp = level ? (*datp | mask) : (*datp & ~mask);
+    return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, datp, 1);
 }
 
 esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_I2C_MIN - 1;
     if (0 > pin || pin > PIN_I2C_MAX) return err;
-    uint8_t idx = pin >> 3, bit = pin & 0x7, *data = i2c_pin_data + idx;
+    uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
     if (sync)
-        err = i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, data, 1);
+        err = i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, datp, 1);
     if (!err)
-        *level = bitRead(*data, bit);
+        *level = *datp & mask;
     return err;
 }
 
@@ -355,12 +358,14 @@ uint16_t vlx_probe() {
 
 #else // WITH_VLX
 
-void vlx_initialize() { ESP_LOGE(TAG, "VLX sensor not supported"); }
+static void vlx_initialize() { ESP_LOGE(TAG, "VLX sensor is not supported"); }
 uint16_t vlx_probe() { return 0; }
 
 #endif // WITH_VLX
 
 // I2C OLED Screen
+
+#ifdef WITH_U8G2
 
 static u8g2_t scn;
 static bool scn_init = false;
@@ -398,6 +403,14 @@ void scn_progbar(uint8_t percent) {
     u8g2_DrawStr(&scn, (128 - u8g2_GetStrWidth(&scn, buf)) / 2, 28 + 8, buf);
     u8g2_SendBuffer(&scn);
 }
+
+#else
+
+static void scn_initialize() { ESP_LOGE(TAG, "Screen is not supported"); }
+void scn_progbar(uint8_t percent) { ; }
+
+#endif // WITH_U8G2
+
 
 // I2C Ambient Light and Temperature Sensor
 // 7bit I2C address of the GY39 is 0x5B.
@@ -571,8 +584,8 @@ static void spi_initialize() {
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
     int pin = pin_num - PIN_SPI_MIN - 1;
     if (0 > pin || pin > PIN_SPI_MAX) return ESP_ERR_INVALID_ARG;
-    uint8_t idx = pin >> 3, bit = pin & 0x7;
-    bitWrite(spi_pin_data[idx], bit, level);
+    uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = spi_pin_data + idx;
+    *datp = level ? (*datp | mask) : (*datp & ~mask);
     return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
 }
 
@@ -580,11 +593,11 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_SPI_MIN - 1;
     if (0 > pin || pin > PIN_SPI_MAX) return err;
-    uint8_t idx = pin >> 3, bit = pin & 0x7;
+    uint8_t idx = pin >> 3, mask = BIT(pin & 0x7);
     if (sync)
         err = spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
     if (!err)
-        *level = bitRead(spi_pin_data[idx], bit);
+        *level = spi_pin_data[idx] & mask;
     return err;
 }
 
