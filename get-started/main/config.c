@@ -44,10 +44,10 @@ config_t Config = {
         .DIR_DATA  = "/data/",
     },
     .net = {
-        .STA_NAME  = "",
+        .STA_SSID  = "",
         .STA_PASS  = "",
         .AP_AUTO   = "1",
-        .AP_NAME   = "Hankso@ESP32",
+        .AP_SSID   = "Hankso@ESP32",
         .AP_PASS   = "16011106",
         .AP_HOST   = "10.0.2.1",
         .AP_HIDE   = "0",
@@ -89,9 +89,9 @@ static const char * staticlist[] = {
     Config.web.DIR_ASSET, Config.web.DIR_STA,   Config.web.DIR_AP,
     Config.web.DIR_ROOT,  Config.web.DIR_DATA,
 
-    Config.net.AP_NAME,   Config.net.AP_PASS,
+    Config.net.AP_SSID,   Config.net.AP_PASS,
     Config.net.AP_HOST,   Config.net.AP_HIDE,
-    Config.net.STA_NAME,  Config.net.STA_PASS,
+    Config.net.STA_SSID,  Config.net.STA_PASS,
 
     Config.app.DNS_RUN,   Config.app.DNS_HOST,
     Config.app.OTA_RUN,   Config.app.OTA_URL,
@@ -113,10 +113,10 @@ config_entry_t cfglist[] = {
     {"web.path.static", &Config.web.DIR_ROOT},
     {"web.path.data",   &Config.web.DIR_DATA},
 
-    {"net.sta.ssid",    &Config.net.STA_NAME},
+    {"net.sta.ssid",    &Config.net.STA_SSID},
     {"net.sta.pass",    &Config.net.STA_PASS},
     {"net.ap.auto",     &Config.net.AP_AUTO},
-    {"net.ap.ssid",     &Config.net.AP_NAME},
+    {"net.ap.ssid",     &Config.net.AP_SSID},
     {"net.ap.pass",     &Config.net.AP_PASS},
     {"net.ap.host",     &Config.net.AP_HOST},
     {"net.ap.hide",     &Config.net.AP_HIDE},

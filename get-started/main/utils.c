@@ -127,29 +127,30 @@ void version_info() {
 }
 
 static uint16_t memory_types[] = {
-    MALLOC_CAP_EXEC, MALLOC_CAP_DMA, MALLOC_CAP_INTERNAL, MALLOC_CAP_DEFAULT
+    0, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA,
+    MALLOC_CAP_INTERNAL, MALLOC_CAP_DEFAULT
 };
 
 static const char * const memory_names[] = {
-    "Execute", "DMA", "Intern", "Default"
+    "TOTAL", "SPI RAM", "EXEC", "DMA", "INTERN", "DEFAULT"
 };
 
 void memory_info() {
-    uint8_t num = sizeof(memory_types)/sizeof(memory_types[0]);
+    uint16_t mem_type = 0;
+    size_t total_size;
     multi_heap_info_t info;
-    printf(/*"Address"*/ "Type\t    Size    Used   Avail Used%%\n");
-    while (num--) {
-        heap_caps_get_info(&info, memory_types[num]);
-        size_t size = info.total_free_bytes + info.total_allocated_bytes;
-        printf("%-8.7s%8.7s", memory_names[num], format_size(size));
+    printf("Type\t    Size    Used   Avail Used%%\n");
+    for (uint8_t i = sizeof(memory_types)/sizeof(memory_types[0]); i; i--) {
+        heap_caps_get_info(&info, i ? memory_types[i] : mem_type);
+        total_size = info.total_free_bytes + info.total_allocated_bytes;
+        printf("%-8.7s%8.7s", memory_names[i], format_size(total_size));
         printf("%8.7s", format_size(info.total_allocated_bytes));
         printf("%8.7s %5.1f\n",
                format_size(info.total_free_bytes),
-               100.0 * info.total_allocated_bytes / size);
+               100.0 * info.total_allocated_bytes / total_size);
+        if (total_size)
+            mem_type |= memory_types[i];
     }
-    printf("Total: free %dK used %dK %u/%u blocks\n",
-           info.total_free_bytes, info.total_allocated_bytes,
-           info.free_blocks, info.total_blocks);
 }
 
 void hardware_info() {
@@ -160,31 +161,71 @@ void hardware_info() {
         "  model: %s\n"
         "  cores: %d\n"
         "  revision: %d\n"
-        "  feature: %s%s%s/%s-Flash: %s\n",
+        "  feature: %s %s flash%s%s%s\n",
         Config.info.NAME, Config.info.UID,
         info.model == CHIP_ESP32 ? "ESP32" : "???",
-        info.cores, info.revision,
-        info.features & CHIP_FEATURE_WIFI_BGN ? "/802.11bgn" : "",
-        info.features & CHIP_FEATURE_BLE ? "/BLE" : "",
-        info.features & CHIP_FEATURE_BT ? "/BT" : "",
+        info.cores, info.revision, format_size(spi_flash_get_chip_size()),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
-        format_size(spi_flash_get_chip_size())
+        info.features & CHIP_FEATURE_WIFI_BGN ? " | 802.11bgn" : "",
+        info.features & CHIP_FEATURE_BLE ? " | BLE" : "",
+        info.features & CHIP_FEATURE_BT ? " | BT" : ""
     );
 
-    uint8_t mac[2][6];
-    esp_read_mac(mac[0], ESP_MAC_WIFI_STA);
-    esp_read_mac(mac[1], ESP_MAC_WIFI_SOFTAP);
-    printf("STA MAC address: %s\n", format_mac(mac[0], 17));
-    printf("AP  MAC address: %s\n", format_mac(mac[1], 17));
+    uint8_t sta[6], ap[6];
+    esp_read_mac(sta, ESP_MAC_WIFI_STA);
+    esp_read_mac(ap, ESP_MAC_WIFI_SOFTAP);
+    printf("STA MAC address: " MACSTR "\n", MAC2STR(sta));
+    printf("AP  MAC address: " MACSTR "\n", MAC2STR(ap));
 }
 
 static esp_partition_type_t partition_types[] = {
     ESP_PARTITION_TYPE_DATA, ESP_PARTITION_TYPE_APP
 };
 
+static void partition_type_str(
+    esp_partition_type_t type, esp_partition_subtype_t subtype,
+    const char **type_str, const char **subtype_str
+) {
+    static char type_buf[16], subtype_buf[16];
+    snprintf(type_buf, sizeof(type_buf), "0x%02X", type);
+    snprintf(subtype_buf, sizeof(subtype_buf), "0x%02X", subtype);
+    *type_str = type_buf; *subtype_str = subtype_buf;
+    if (type == ESP_PARTITION_TYPE_DATA) {
+        *type_str = "data";
+        switch (subtype) {
+        case ESP_PARTITION_SUBTYPE_DATA_OTA: *subtype_str = "ota"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_PHY: *subtype_str = "phy"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_NVS: *subtype_str = "nvs"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_COREDUMP: *subtype_str = "coredump"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS: *subtype_str = "nvs_keys"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM: *subtype_str = "efuse_em"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD: *subtype_str = "esphttpd"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_FAT: *subtype_str = "fat"; break;
+        case ESP_PARTITION_SUBTYPE_DATA_SPIFFS: *subtype_str = "spiffs"; break;
+        default: break;
+        }
+    } else if (type == ESP_PARTITION_TYPE_APP) {
+        *type_str = "app";
+        switch (subtype) {
+        case ESP_PARTITION_SUBTYPE_APP_FACTORY: *subtype_str = "factory"; break;
+        case ESP_PARTITION_SUBTYPE_APP_TEST:    *subtype_str = "test"; break;
+        default:
+            if (
+                subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
+                subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX
+            ) {
+                snprintf(subtype_buf, sizeof(subtype_buf), "ota_%d",
+                        subtype - ESP_PARTITION_SUBTYPE_APP_OTA_MIN);
+            }
+            break;
+        }
+    }
+}
+
 void partition_info() {
     static uint8_t max = sizeof(partition_types)/sizeof(partition_types[0]);
     uint8_t idx, num = 0;
+    const char *tstr, *ststr;
     const esp_partition_t * parts[16], *part, *tmp;
     esp_partition_iterator_t iter;
     for (uint8_t i = 0; i < max; i++) {
@@ -210,9 +251,9 @@ void partition_info() {
     printf("LabelName\tType\tSubType\t" "Offset\t Size\t  " "Secure\n");
     while (num--) {
         part = parts[num];
-        printf("%-16.15s" "%s\t0x%02X\t" "0x%06X 0x%06X " "%s\n",
-               part->label, part->type ? "data" : "app", part->subtype,
-               part->address, part->size,
+        partition_type_str(part->type, part->subtype, &tstr, &ststr);
+        printf("%-16.15s" "%s\t%s\t" "0x%06X 0x%06X " "%s\n",
+               part->label, tstr, ststr, part->address, part->size,
                part->encrypted ? "true" : "false");
     }
 }

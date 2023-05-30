@@ -31,10 +31,10 @@ typedef struct config_webserver_t {
 } config_web_t;
 
 typedef struct config_network_t {
-    const char * STA_NAME;  // BSSID of access point to connect after startup
+    const char * STA_SSID;  // BSSID of access point to connect after startup
     const char * STA_PASS;  // Password to connect to access point
     const char * AP_AUTO;   // Switch to AP mode if STA connection failed
-    const char * AP_NAME;   // Hotspot SSID
+    const char * AP_SSID;   // Hotspot name / SSID
     const char * AP_PASS;   // Hotspot password
     const char * AP_HOST;   // Hotspot IP address
     const char * AP_HIDE;   // Whether to hide AP SSID

@@ -326,15 +326,18 @@ esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
     return err;
 }
 
+
 // I2C Distance Measurement
 
-#ifdef WITH_VLX
 
+#ifdef WITH_VLX
 static vl53l0x_t *vlx;
+#endif
 
 static void vlx_initialize() {
     uint8_t addr = 0x29;
     if (smbus_probe(NUM_I2C, addr)) return;
+#ifdef WITH_VLX
     vlx = vl53l0x_config(NUM_I2C, PIN_SCL0, PIN_SDA0, -1, addr, 0);
     const char *err = vl53l0x_init(vlx);
     if (err) {
@@ -342,9 +345,13 @@ static void vlx_initialize() {
         vl53l0x_end(vlx);
         vlx = NULL;
     }
+#else
+    ESP_LOGE(TAG, "VLX sensor is not supported");
+#endif // WITH_VLX
 }
 
 uint16_t vlx_probe() {
+#ifdef WITH_VLX
     TickType_t tick_start = xTaskGetTickCount();
     uint16_t result_mm = vl53l0x_readRangeSingleMillimeters(vlx);
     int took_ms = ((int)xTaskGetTickCount() - tick_start) * portTICK_PERIOD_MS;
@@ -354,16 +361,14 @@ uint16_t vlx_probe() {
         ESP_LOGW(TAG, "Failed to measure range");
     }
     return result_mm;
+#else
+    return 0;
+#endif // WITH_VLX
 }
 
-#else // WITH_VLX
-
-static void vlx_initialize() { ESP_LOGE(TAG, "VLX sensor is not supported"); }
-uint16_t vlx_probe() { return 0; }
-
-#endif // WITH_VLX
 
 // I2C OLED Screen
+
 
 #ifdef WITH_U8G2
 
@@ -455,7 +460,7 @@ static void als_initialize() {
             continue;
         }
         ESP_LOGI(TAG, "Found ALS %c%c %04X at I2C %d-%02X",
-                buf[0] >> 4, buf[0] & 0x0F, buf[1], NUM_I2C, addr);
+                buf[0] >> 8, buf[0] & 0xFF, buf[1], NUM_I2C, addr);
         smbus_write_word(NUM_I2C, addr, 0x01, 0xC610); // continuous mode
         // TODO: configure Low-Limit and Hight-Limit and Interrupt GPIO
     }

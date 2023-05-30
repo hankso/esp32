@@ -13,7 +13,7 @@
 #include "globals.h"
 #include "drivers.h"
 #include "filesys.h"
-// #include "wifi.h"
+#include "wifi.h"
 
 #include "esp_log.h"
 #include "esp_sleep.h"
@@ -60,6 +60,7 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
 
 static int system_restart(int c, char **v) { esp_restart(); return ESP_OK; }
 
+#ifdef CONSOLE_SYSTEM_SLEEP
 const char* const wakeup_reason_list[] = {
     "Undefined", "Undefined", "EXT0", "EXT1",
     "Timer", "Touchpad", "ULP", "GPIO", "UART",
@@ -79,7 +80,7 @@ static struct {
     .end = arg_end(4)
 };
 
-int enable_gpio_light_wakeup() {
+static int enable_gpio_light_wakeup() {
     int gpio_count = system_sleep_args.pin->count;
     int level_count = system_sleep_args.lvl->count;
     if (level_count && (gpio_count != level_count)) {
@@ -102,7 +103,7 @@ int enable_gpio_light_wakeup() {
     return ESP_OK;
 }
 
-int enable_gpio_deep_wakeup() {
+static int enable_gpio_deep_wakeup() {
     int gpio = system_sleep_args.pin->ival[0], level = 0;
     if (system_sleep_args.lvl->count) {
         level = system_sleep_args.lvl->ival[0];
@@ -164,9 +165,11 @@ static int system_sleep(int argc, char **argv) {
     esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
     return ESP_OK;
 }
+#endif // CONSOLE_SYSTEM_SLEEP
 
 static int system_otainfo(int c, char **v) { ota_partition_info(); return ESP_OK; }
 
+#ifdef CONSOLE_SYSTEM_UPDATE
 static struct {
     struct arg_str *cmd;
     struct arg_str *part;
@@ -216,37 +219,46 @@ static int system_update(int argc, char **argv) {
     ota_partition_info();
     return ESP_OK;
 }
+#endif // CONSOLE_SYSTEM_UPDATE
 
 static void register_system() {
     const esp_console_cmd_t cmds[] = {
-        {                                               // 308 Bytes
+#ifdef CONSOLE_SYSTEM_RESTART
+        {
             .command = "restart",
             .help = "Software reset of ESP32",
             .hint = NULL,
             .func = &system_restart,
             .argtable = NULL
         },
-        {                                               // 11844 Bytes
+#endif
+#ifdef CONSOLE_SYSTEM_SLEEP
+        {
             .command = "sleep",
             .help = "Turn ESP32 into light/deep sleep mode",
             .hint = NULL,
             .func = &system_sleep,
             .argtable = &system_sleep_args
         },
-        {                                               // 2851 Bytes
+#endif
+#ifdef CONSOLE_SYSTEM_LSOTA
+        {
             .command = "lsota",
             .help = "List OTA Updation partition information",
             .hint = NULL,
             .func = &system_otainfo,
             .argtable = NULL,
         },
-        {                                               // 1028 Bytes
+#endif
+#ifdef CONSOLE_SYSTEM_UPDATE
+        {
             .command = "update",
             .help = "OTA Updation helper command: boot, reset, fetch",
             .hint = NULL,
             .func = &system_update,
             .argtable = &system_update_args
         },
+#endif
     };
     register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
 }
@@ -255,6 +267,7 @@ static void register_system() {
  * Configuration commands
  */
 
+#ifdef CONSOLE_CONFIG_IO
 static struct {
     struct arg_str *key;
     struct arg_str *val;
@@ -299,16 +312,19 @@ static int config_io(int argc, char **argv) {
     }
     return ret ? ESP_OK : ESP_FAIL;
 }
+#endif // CONSOLE_CONFIG_IO
 
 static void register_config() {
     const esp_console_cmd_t cmds[] = {
-        {                                               // 1740 Bytes
+#ifdef CONSOLE_CONFIG_IO
+        {
             .command = "config",
             .help = "Set / get / load / save / list configurations",
             .hint = NULL,
             .func = &config_io,
             .argtable = &config_io_args
         },
+#endif
     };
     register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
 }
@@ -317,6 +333,7 @@ static void register_config() {
  * Driver commands
  */
 
+#ifdef CONSOLE_DRIVER_LED
 static struct {
     struct arg_int *idx;
     struct arg_str *cmd;
@@ -359,7 +376,9 @@ static int driver_led(int argc, char **argv) {
             idx, led_get_color(idx), led_get_light(idx));
     return ESP_OK;
 }
+#endif // CONSOLE_DRIVER_LED
 
+#ifdef CONSOLE_DRIVER_GPIO
 static struct {
     struct arg_int *pin;
     struct arg_int *lvl;
@@ -398,7 +417,9 @@ static int driver_gpio(int argc, char **argv) {
     }
     return ESP_OK;
 }
+#endif // CONSOLE_DRIVER_GPIO
 
+#ifdef CONSOLE_DRIVER_I2C
 static struct {
     struct arg_int *bus;
     struct arg_int *addr;
@@ -459,7 +480,9 @@ static int driver_i2c(int argc, char **argv) {
     }
     return err;
 }
+#endif // CONSOLE_DRIVER_I2C
 
+#ifdef CONSOLE_DRIVER_ALS
 static struct {
     struct arg_int *idx;
     struct arg_str *rlt;
@@ -505,7 +528,9 @@ static int driver_als(int argc, char **argv) {
     }
     return err;
 }
+#endif // CONSOLE_DRIVER_ALS
 
+#ifdef CONSOLE_DRIVER_PWM
 static struct {
     struct arg_int *hdeg;
     struct arg_int *vdeg;
@@ -521,44 +546,55 @@ static int driver_pwm(int argc, char **argv) {
         return ESP_ERR_INVALID_ARG;
     return pwm_degree(driver_pwm_args.hdeg->ival[0], driver_pwm_args.vdeg->ival[0]);
 }
+#endif // CONSOLE_DRIVER_PWM
 
 static void register_driver() {
     const esp_console_cmd_t cmds[] = {
-        {                                               // 4068 Bytes
-            .command = "i2c",
-            .help = "Detect alive I2C slaves on the BUS line",
-            .hint = NULL,
-            .func = &driver_i2c,
-            .argtable = &driver_i2c_args
-        },
-        {                                               // 6308 Bytes
-            .command = "als",
-            .help = "Get ALS sensor values and do light tracking",
-            .hint = NULL,
-            .func = &driver_als,
-            .argtable = &driver_als_args
-        },
-        {                                               // 530 Bytes
-            .command = "pwm",
-            .help = "Control rotation of servo by PWM",
-            .hint = NULL,
-            .func = &driver_pwm,
-            .argtable = &driver_pwm_args
-        },
-        {                                               // 516 Bytes
+#ifdef CONSOLE_DRIVER_LED
+        {
             .command = "led",
             .help = "Set / get LED color / brightness",
             .hint = NULL,
             .func= &driver_led,
             .argtable = &driver_led_args
         },
-        {                                               // 708 Bytes
+#endif
+#ifdef CONSOLE_DRIVER_GPIO
+        {
             .command = "gpio",
             .help = "Set / get GPIO pin level",
             .hint = NULL,
             .func = &driver_gpio,
             .argtable = &driver_gpio_args
         },
+#endif
+#ifdef CONSOLE_DRIVER_I2C
+        {
+            .command = "i2c",
+            .help = "Detect alive I2C slaves on the BUS line",
+            .hint = NULL,
+            .func = &driver_i2c,
+            .argtable = &driver_i2c_args
+        },
+#endif
+#ifdef CONSOLE_DRIVER_ALS
+        {
+            .command = "als",
+            .help = "Get ALS sensor values and do light tracking",
+            .hint = NULL,
+            .func = &driver_als,
+            .argtable = &driver_als_args
+        },
+#endif
+#ifdef CONSOLE_DRIVER_PWM
+        {
+            .command = "pwm",
+            .help = "Control rotation of servo by PWM",
+            .hint = NULL,
+            .func = &driver_pwm,
+            .argtable = &driver_pwm_args
+        },
+#endif
     };
     register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
 }
@@ -575,6 +611,67 @@ static int utils_taskinfo(int c, char **v) { task_info(); return ESP_OK; }
 
 static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
 
+#ifdef CONSOLE_UTILS_LSMEM
+static struct {
+    struct arg_lit *verbose;
+    struct arg_end *end;
+} utils_memory_args = {
+    .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
+    .end = arg_end(1)
+};
+
+static int utils_memory(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &utils_memory_args))
+        return ESP_ERR_INVALID_ARG;
+    switch (utils_memory_args.verbose->count) {
+    case 0:
+        memory_info(); break;
+    case 2:
+        // Too much infomation
+        // heap_caps_dump_all(); break;
+        heap_caps_print_heap_info(MALLOC_CAP_DMA);
+        heap_caps_print_heap_info(MALLOC_CAP_EXEC);
+        __attribute__((fallthrough)); // for GCC -Wimplicit-fallthrough
+    case 1:
+        heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
+        heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
+        break;
+    }
+    return ESP_OK;
+}
+#endif // CONSOLE_UTILS_LSMEM
+
+#ifdef CONSOLE_UTILS_LSFS
+static struct {
+    struct arg_str *dir;
+    struct arg_str *dev;
+    struct arg_end *end;
+} utils_listdir_args = {
+    .dir = arg_str0(NULL, NULL, "abspath", NULL),
+    .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
+    .end = arg_end(2)
+};
+
+static int utils_listdir(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &utils_listdir_args))
+        return ESP_ERR_INVALID_ARG;
+    const char *dev = utils_listdir_args.dev->count ? \
+                      utils_listdir_args.dev->sval[0] : "flash";
+    const char *dir = utils_listdir_args.dir->count ? \
+                      utils_listdir_args.dir->sval[0] : "/";
+    if (strstr(dev, "flash")) {
+        FFS.list(dir, stdout);
+    } else if (strstr(dev, "sdmmc")) {
+        SDFS.list(dir, stdout);
+    } else {
+        printf("Invalid device: `%s`\n", dev);
+        return ESP_ERR_INVALID_ARG;
+    }
+    return ESP_OK;
+}
+#endif // CONSOLE_UTILS_LSFS
+
+#ifdef CONSOLE_UTILS_HIST
 static struct {
     struct arg_str *cmd;
     struct arg_str *dst;
@@ -609,114 +706,73 @@ static int utils_history(int argc, char **argv) {
     printf("History file `%s` %s %s\n", fn, subcmd, ret ? "fail" : "done");
     return ret;
 }
-
-static struct {
-    struct arg_str *dir;
-    struct arg_str *dev;
-    struct arg_end *end;
-} utils_listdir_args = {
-    .dir = arg_str0(NULL, NULL, "abspath", NULL),
-    .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
-    .end = arg_end(2)
-};
-
-static int utils_listdir(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &utils_listdir_args))
-        return ESP_ERR_INVALID_ARG;
-    const char *dev = utils_listdir_args.dev->count ? \
-                      utils_listdir_args.dev->sval[0] : "flash";
-    const char *dir = utils_listdir_args.dir->count ? \
-                      utils_listdir_args.dir->sval[0] : "/";
-    if (strstr(dev, "flash")) {
-        FFS.list(dir, stdout);
-    } else if (strstr(dev, "sdmmc")) {
-        SDFS.list(dir, stdout);
-    } else {
-        printf("Invalid device: `%s`\n", dev);
-        return ESP_ERR_INVALID_ARG;
-    }
-    return ESP_OK;
-}
-
-static struct {
-    struct arg_lit *verbose;
-    struct arg_end *end;
-} utils_memory_args = {
-    .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
-    .end = arg_end(1)
-};
-
-static int utils_memory(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &utils_memory_args))
-        return ESP_ERR_INVALID_ARG;
-    switch (utils_memory_args.verbose->count) {
-    case 0:
-        memory_info(); break;
-    case 2:
-        // Too much infomation
-        // heap_caps_dump_all(); break;
-        heap_caps_print_heap_info(MALLOC_CAP_DMA);
-        heap_caps_print_heap_info(MALLOC_CAP_EXEC);
-        __attribute__((fallthrough)); // for GCC -Wimplicit-fallthrough
-    case 1:
-        heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
-        heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
-        break;
-    }
-    return ESP_OK;
-}
+#endif // CONSOLE_UTILS_HIST
 
 static void register_utils() {
     const esp_console_cmd_t cmds[] = {
-        {                                               // 1988 Bytes
-            .command = "lshw",
-            .help = "Display hardware information",
-            .hint = NULL,
-            .func = &utils_hardware,
-            .argtable = NULL
-        },
-        {                                               // 808 Bytes
-            .command = "lspart",
-            .help = "Enumerate partitions in flash",
-            .hint = NULL,
-            .func = &utils_partinfo,
-            .argtable = NULL
-        },
-        {                                               // 300 Bytes
-            .command = "lstask",
-            .help = "Enumerate running RTOS tasks",
-            .hint = NULL,
-            .func = &utils_taskinfo,
-            .argtable = NULL
-        },
-        {                                               // 404 Bytes
+#ifdef CONSOLE_UTILS_VER
+        {
             .command = "version",
             .help = "Get version of firmware and SDK",
             .hint = NULL,
             .func = &utils_version,
             .argtable = NULL
         },
-        {                                               // 512 Bytes
-            .command = "lsfs",
-            .help = "List directory contents under specified device",
+#endif
+#ifdef CONSOLE_UTILS_LSHW
+        {
+            .command = "lshw",
+            .help = "Display hardware information",
             .hint = NULL,
-            .func = &utils_listdir,
-            .argtable = &utils_listdir_args
+            .func = &utils_hardware,
+            .argtable = NULL
         },
-        {                                               // 806 Bytes
-            .command = "hist",
-            .help = "Load from or save console history to a local disk",
+#endif
+#ifdef CONSOLE_UTILS_LSPART
+        {
+            .command = "lspart",
+            .help = "Enumerate partitions in flash",
             .hint = NULL,
-            .func = utils_history,
-            .argtable = &utils_history_args
+            .func = &utils_partinfo,
+            .argtable = NULL
         },
-        {                                               // 1308 Bytes
+#endif
+#ifdef CONSOLE_UTILS_LSTASK
+        {
+            .command = "lstask",
+            .help = "Enumerate running RTOS tasks",
+            .hint = NULL,
+            .func = &utils_taskinfo,
+            .argtable = NULL
+        },
+#endif
+#ifdef CONSOLE_UTILS_LSMEM
+        {
             .command = "lsmem",
             .help = "List avaiable memory blocks with their status",
             .hint = NULL,
             .func = utils_memory,
             .argtable = &utils_memory_args
         },
+#endif
+#ifdef CONSOLE_UTILS_LSFS
+        {
+            .command = "lsfs",
+            .help = "List directory contents under specified device",
+            .hint = NULL,
+            .func = &utils_listdir,
+            .argtable = &utils_listdir_args
+        },
+#endif
+#ifdef CONSOLE_UTILS_HIST
+        {
+            .command = "hist",
+            .help = "Load from or save console history to a local disk",
+            .hint = NULL,
+            .func = utils_history,
+            .argtable = &utils_history_args
+        },
+#endif
     };
     register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
 }
@@ -725,18 +781,16 @@ static void register_utils() {
  * WiFi commands
  */
 
-static struct {
+typedef struct {
     struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_str *pass;
     struct arg_end *end;
-} wifi_sta_args = {
+} wifi_args_t;
+
+#ifdef CONSOLE_WIFI_STA
+static wifi_args_t wifi_sta_args = {
     .cmd = arg_str1(NULL, NULL, "<status|scan|connect|disconnect>", ""),
-    .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
-    .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .end = arg_end(3)
-}, wifi_ap_args = {
-    .cmd = arg_str1(NULL, NULL, "<status|start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
     .end = arg_end(3)
@@ -758,6 +812,15 @@ static int wifi_sta(int argc, char **argv) { // TODO
     printf("Invalid command: `%s`\n", subcmd);
     return ESP_ERR_INVALID_ARG;
 }
+#endif // CONSOLE_WIFI_STA
+
+#ifdef CONSOLE_WIFI_AP
+static wifi_args_t wifi_ap_args = {
+    .cmd = arg_str1(NULL, NULL, "<status|start|stop>", ""),
+    .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
+    .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
+    .end = arg_end(3)
+};
 
 static int wifi_ap(int argc, char **argv) { // TODO
     if (!arg_noerror(argc, argv, (void **) &wifi_ap_args))
@@ -773,23 +836,28 @@ static int wifi_ap(int argc, char **argv) { // TODO
     printf("Invalid command: `%s`\n", subcmd);
     return ESP_ERR_INVALID_ARG;
 }
+#endif // CONSOLE_WIFI_AP
 
 static void register_wifi() {
     const esp_console_cmd_t cmds[] = {
-        {                                               // 428 Bytes
+#ifdef CONSOLE_WIFI_STA
+        {
             .command = "sta",
             .help = "Query / Scan / Connect / Disconnect Access Pointes",
             .hint = NULL,
             .func = &wifi_sta,
             .argtable = &wifi_sta_args
         },
-        {                                               // 3884 Bytes
+#endif
+#ifdef CONSOLE_WIFI_AP
+        {
             .command = "ap",
             .help = "Query / Start / Stop Soft Access Point",
             .hint = NULL,
             .func = &wifi_ap,
             .argtable = &wifi_ap_args
         },
+#endif
     };
     register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
 }

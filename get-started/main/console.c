@@ -37,9 +37,9 @@ void console_initialize() {
     prompt = Config.app.PROMPT;
     if (linenoiseProbe() != 0) {
         linenoiseSetDumbMode(1);
-        ESP_LOGW(TAG, "Your terminal does not support escape sequences.\n"
-                 "Line editing and history features are disabled, as well as "
-                 "console color. Try use PuTTY/Miniterm.py/idf_monitor.py\n");
+        ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
+        ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
+        ESP_LOGW(TAG, "Try use PuTTY/Miniterm.py/idf_monitor.py.");
     } else {
 #if CONFIG_LOG_COLORS
         int l = strlen(prompt) + strlen(LOG_COLOR_W) + strlen(LOG_RESET_COLOR);

@@ -9,9 +9,9 @@
 #silver1,    app,    ota_1,      0x200000,   0x100000,
 #storage,    data,   spiffs,     0x300000,   0x100000,
 
-# Extrame OTA (dual 896KB silver + 2.1875MB storage)
+# Extrame OTA (dual 1M silver + 1984KB storage)
 otadata,    data,   ota,        0x009000,   0x002000,
 nvs,        data,   nvs,        0x00B000,   0x005000,
-silver0,    app,    ota_0,      0x010000,   0x0E0000,
-silver1,    app,    ota_1,      ,           0x0E0000,
-storage,    data,   spiffs,     ,           0x230000,
+silver0,    app,    ota_0,      0x010000,   0x100000,
+silver1,    app,    ota_1,      ,           0x100000,
+storage,    data,   spiffs,     ,           0x1F0000,
