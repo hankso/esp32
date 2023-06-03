@@ -78,17 +78,26 @@ void _jsonify_file(File file, void *arg) {
     cJSON_AddItemToArray((cJSON *)arg, obj);
 }
 
+typedef struct {
+    FILE *stream;
+    bool header;
+} loginfo_file_t;
+
 void _loginfo_file(File file, void *arg) {
-    fprintf((FILE *)arg, "%-4s %6s %12lu %s\n",
-            file.isDirectory() ? "DIR" : "FILE",
-            format_size(file.size(), false),
-            file.getLastWrite(),
-            file.path());
+    loginfo_file_t *ptr = (loginfo_file_t *)arg;
+    if (!ptr->header) {
+        fprintf(ptr->stream, "Type   Size  Last-Modify Filename\n");
+        ptr->header = true;
+    }
+    fprintf(ptr->stream, "%-4s %6s %12lu %s\n",
+        file.isDirectory() ? "DIR" : "FILE",
+        format_size(file.size(), false),
+        file.getLastWrite(), file.path());
 }
 
 void CFS::list(const char *path, FILE *stream) {
-    fprintf(stream, "Type   Size  Last-Modify Filename\n");
-    walk(path, &_loginfo_file, stream);
+    loginfo_file_t tmp = { stream, false };
+    walk(path, &_loginfo_file, &tmp);
 }
 
 char * CFS::list(const char *path) {
@@ -398,6 +407,7 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
     File root = open(base), file;
     while (file = root.openNextFile()) {
 #else
+    String lastDir = dir;
     File root = open("/"), file;
     while (file = root.openNextFile()) {
         // SPIFFS uses flatten file structure, so skip files under other dirs
@@ -405,8 +415,11 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
         if (!path.startsWith(base)) continue;
         // resolve directory path from filename
         int idx = path.indexOf('/', base.length());
-        if (idx != -1)
-            file = open(path.substring(0, idx + 1));
+        if (idx != -1) {
+            path = path.substring(0, idx + 1);
+            if (lastDir == path) continue;
+            file = open(lastDir = path);
+        }
 #endif // CONFIG_USE_FFATFS
         (*cb)(file, arg);
         file.close();

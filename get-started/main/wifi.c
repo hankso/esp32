@@ -10,10 +10,15 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
-#include "lwip/inet.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
+
+// For ping command
+#include "lwip/inet.h"
+#include "lwip/netdb.h"
+#include "lwip/sockets.h"
+#include "ping/ping_sock.h"
 
 #ifndef CONFIG_WIFI_CHANNEL
 #define CONFIG_WIFI_CHANNEL 1  // select from [1-13]
@@ -487,4 +492,89 @@ esp_err_t wifi_ap_list_sta() {
             hw->is_mesh_child ? "true" : "false");
     }
     return err;
+}
+
+#define GET_PING_PROF(name, var) \
+    esp_ping_get_profile(hdl, ESP_PING_PROF_ ## name, &(var), sizeof(var))
+
+static void ping_command_success(esp_ping_handle_t hdl, void *args) {
+    uint8_t ttl;
+    uint16_t seqno;
+    uint32_t dtms, size;
+    ip_addr_t target;
+    GET_PING_PROF(TTL, ttl);
+    GET_PING_PROF(SIZE, size);
+    GET_PING_PROF(SEQNO, seqno);
+    GET_PING_PROF(TIMEGAP, dtms);
+    GET_PING_PROF(IPADDR, target);
+    printf("From %s: icmp_seq=%d bytes=%d time=%dms ttl=%d\n",
+           ipaddr_ntoa((ip_addr_t *)&target), seqno, size, dtms, ttl);
+}
+
+static void ping_command_timeout(esp_ping_handle_t hdl, void *args) {
+    uint16_t seqno;
+    ip_addr_t target;
+    GET_PING_PROF(SEQNO, seqno);
+    GET_PING_PROF(IPADDR, target);
+    const char *addr = ipaddr_ntoa((ip_addr_t *)&target);
+    printf("From %s: icmp_seq=%d timeout\n", addr, seqno);
+}
+
+static void ping_command_end(esp_ping_handle_t hdl, void *args) {
+    ip_addr_t target;
+    const char *addr;
+    uint32_t sent, recv, dtms;
+    GET_PING_PROF(REPLY, recv);
+    GET_PING_PROF(REQUEST, sent);
+    GET_PING_PROF(DURATION, dtms);
+    GET_PING_PROF(IPADDR, target);
+    if (IP_IS_V4(&target)) {
+        addr = inet_ntoa(*ip_2_ip4(&target));
+    } else {
+        addr = inet6_ntoa(*ip_2_ip6(&target));
+    }
+    printf("Ping %s result:\n  %d sent, %d recv, %d lost (%d%%) in %dms\n",
+           addr, sent, recv, sent - recv, 100 * (sent - recv) / sent, dtms);
+    esp_ping_delete_session(hdl);
+}
+
+esp_err_t ping_command(const char *host, uint16_t timeout_ms, uint16_t data_size, uint16_t count) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    struct sockaddr_in6 sock_addr6;
+    ip_addr_t target_addr = { 0 };
+
+    if (inet_pton(AF_INET6, host, &sock_addr6.sin6_addr) == 1) {
+        ipaddr_aton(host, &target_addr); // IPv6 string to address
+    } else {
+        struct addrinfo hint, *res = NULL;
+        if (getaddrinfo(host, NULL, &hint, &res)) {
+            printf("Invalid host to ping: %s\n", host);
+            return err;
+        }
+        if (res->ai_family == AF_INET) {
+            struct sockaddr_in *addr4 = (struct sockaddr_in *)res->ai_addr;
+            inet_addr_to_ip4addr(ip_2_ip4(&target_addr), &addr4->sin_addr);
+        } else {
+            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)res->ai_addr;
+            inet6_addr_to_ip6addr(ip_2_ip6(&target_addr), &addr6->sin6_addr);
+        }
+        freeaddrinfo(res);
+    }
+
+    esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
+    if (timeout_ms) config.timeout_ms = timeout_ms;
+    if (data_size)  config.data_size = data_size;
+    if (count)      config.count = count;
+    config.target_addr = target_addr;
+
+    static esp_ping_callbacks_t cbs = {
+        .on_ping_success = ping_command_success,
+        .on_ping_timeout = ping_command_timeout,
+        .on_ping_end = ping_command_end,
+        .cb_args = NULL
+    };
+    esp_ping_handle_t hdl;
+    if (( err = esp_ping_new_session(&config, &cbs, &hdl) ))
+        return err;
+    return esp_ping_start(hdl);
 }

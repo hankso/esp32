@@ -7,19 +7,19 @@
 #ifndef _CONSOLE_H_
 #define _CONSOLE_H_
 
-#define CONSOLE_SYSTEM_RESTART      // 308 Bytes
-#define CONSOLE_SYSTEM_SLEEP        // 11844 Bytes
-#define CONSOLE_SYSTEM_UPDATE       // 1028 Bytes
+#define CONSOLE_SYSTEM_RESTART      // 102 Bytes
+#define CONSOLE_SYSTEM_SLEEP        // 12292 Bytes
+#define CONSOLE_SYSTEM_UPDATE       // 3196 Bytes
 
-#define CONSOLE_CONFIG_IO           // 1740 Bytes
+#define CONSOLE_CONFIG_IO           // 2852 Bytes
 
-#define CONSOLE_DRIVER_LED          // 516 Bytes
-#define CONSOLE_DRIVER_GPIO         // 708 Bytes
-#define CONSOLE_DRIVER_I2C          // 4068 Bytes
-#define CONSOLE_DRIVER_ALS          // 6308 Bytes
-#define CONSOLE_DRIVER_PWM          // 530 Bytes
+#define CONSOLE_DRIVER_LED          // 700 Bytes
+#define CONSOLE_DRIVER_GPIO         // 700 Bytes
+#define CONSOLE_DRIVER_I2C          // 1436 Bytes
+#define CONSOLE_DRIVER_ALS          // 1920 Bytes
+#define CONSOLE_DRIVER_PWM          // 224 Bytes
 
-#define CONSOLE_UTILS_VER           // 404 Bytes
+#define CONSOLE_UTILS_VER           // 272 Bytes
 #define CONSOLE_UTILS_LSHW          // 1988 Bytes
 #define CONSOLE_UTILS_LSPART        // 808 Bytes
 #define CONSOLE_UTILS_LSTASK        // 300 Bytes

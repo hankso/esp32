@@ -58,7 +58,9 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
  * System commands
  */
 
+#ifdef CONSOLE_SYSTEM_RESTART
 static int system_restart(int c, char **v) { esp_restart(); return ESP_OK; }
+#endif
 
 #ifdef CONSOLE_SYSTEM_SLEEP
 const char* const wakeup_reason_list[] = {
@@ -77,7 +79,7 @@ static struct {
     .pin = arg_intn("p", "gpio", "<n>", 0, 8, "Wakeup using specified GPIO"),
     .lvl = arg_intn("l", "level", "<0|1>", 0, 8, "GPIO level to trigger wakeup"),
     .mode = arg_str0(NULL, "method", "<light|deep>", "sleep mode"),
-    .end = arg_end(4)
+    .end = arg_end(1)
 };
 
 static int enable_gpio_light_wakeup() {
@@ -181,7 +183,7 @@ static struct {
     .url = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
     .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
     .reset = arg_lit0(NULL, "reset", "clear OTA internal states"),
-    .end = arg_end(4)
+    .end = arg_end(1)
 };
 
 static int system_update(int argc, char **argv) {
@@ -271,7 +273,7 @@ static struct {
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
     .list = arg_lit0(NULL, "list", "list NVS entries"),
-    .end = arg_end(6)
+    .end = arg_end(1)
 };
 
 static int config_io(int argc, char **argv) {
@@ -331,7 +333,7 @@ static struct {
     .idx = arg_int0("i", "index", "<0-20>", "specify index, default 0"),
     .cmd = arg_str0(NULL, NULL, "<on|off>", "enable/disable LED"),
     .clr = arg_str0("c", "color", "<0xAABBCC>", "specify RGB color"),
-    .end = arg_end(3)
+    .end = arg_end(1)
 };
 
 static int driver_led(int argc, char **argv) {
@@ -378,7 +380,7 @@ static struct {
     .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
     .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
     .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
-    .end = arg_end(4)
+    .end = arg_end(1)
 };
 
 static int driver_gpio(int argc, char **argv) {
@@ -423,7 +425,7 @@ static struct {
     .val = arg_int0(NULL, NULL, "regval", "Register value"),
     .hex = arg_lit0("w", "word", "R / W in word (16-bit) mode"),
     .len = arg_int0("l", "len", "<num>", "Read specified length of registers"),
-    .end = arg_end(6)
+    .end = arg_end(1)
 };
 
 static int driver_i2c(int argc, char **argv) {
@@ -478,7 +480,7 @@ static struct {
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
     .rlt = arg_str0("t", "track", "<0123HVEOA>", "run light tracking"),
-    .end = arg_end(2)
+    .end = arg_end(1)
 };
 
 static int driver_als(int argc, char **argv) {
@@ -591,13 +593,21 @@ static void register_driver() {
  * Utilities commands
  */
 
+#ifdef CONSOLE_UTILS_LSHW
 static int utils_hardware(int c, char **v) { hardware_info(); return ESP_OK; }
+#endif
 
+#ifdef CONSOLE_UTILS_LSPART
 static int utils_partinfo(int c, char **v) { partition_info(); return ESP_OK; }
+#endif
 
+#ifdef CONSOLE_UTILS_LSTASK
 static int utils_taskinfo(int c, char **v) { task_info(); return ESP_OK; }
+#endif
 
+#ifdef CONSOLE_UTILS_VER
 static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
+#endif
 
 #ifdef CONSOLE_UTILS_LSMEM
 static struct {
@@ -637,7 +647,7 @@ static struct {
 } utils_listdir_args = {
     .dir = arg_str0(NULL, NULL, "abspath", NULL),
     .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
-    .end = arg_end(2)
+    .end = arg_end(1)
 };
 
 static int utils_listdir(int argc, char **argv) {
@@ -677,7 +687,7 @@ static struct {
     .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
     .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
     .dst = arg_str0("f", "file", "history.txt", "relative path to file"),
-    .end = arg_end(3)
+    .end = arg_end(1)
 };
 
 static int utils_history(int argc, char **argv) {
@@ -705,7 +715,7 @@ static int utils_history(int argc, char **argv) {
         exists = FFS.exists(fullpath + plen);
 #else
         ESP_LOGW(TAG, "Flash File System not enabled");
-#endif
+#endif // CONFIG_FFS_MP
     } else if (strstr(dev, "sdmmc")) {
 #ifdef CONFIG_SDFS_MP
         len += (plen = strlen(CONFIG_SDFS_MP));
@@ -714,7 +724,7 @@ static int utils_history(int argc, char **argv) {
         exists = SDFS.exists(fullpath + plen);
 #else
         ESP_LOGW(TAG, "SDMMC File System not enabled");
-#endif
+#endif // CONFIG_SDFS_MP
     } else {
         printf("Invalid device: `%s`\n", dev);
         return ESP_ERR_INVALID_ARG;
@@ -804,21 +814,19 @@ static void register_utils() {
  * WiFi commands
  */
 
-typedef struct {
+#ifdef CONSOLE_WIFI_STA
+static struct {
     struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_str *pass;
     struct arg_int *tout;
     struct arg_end *end;
-} wifi_args_t;
-
-#ifdef CONSOLE_WIFI_STA
-static wifi_args_t wifi_sta_args = {
+} wifi_sta_args = {
     .cmd = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
     .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
-    .end = arg_end(4)
+    .end = arg_end(1)
 };
 
 static int wifi_sta(int argc, char **argv) {
@@ -849,12 +857,16 @@ static int wifi_sta(int argc, char **argv) {
 #endif // CONSOLE_WIFI_STA
 
 #ifdef CONSOLE_WIFI_AP
-static wifi_args_t wifi_ap_args = {
+static struct {
+    struct arg_str *cmd;
+    struct arg_str *ssid;
+    struct arg_str *pass;
+    struct arg_end *end;
+} wifi_ap_args = {
     .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
-    .end = arg_end(4)
+    .end = arg_end(1)
 };
 
 static int wifi_ap(int argc, char **argv) {
@@ -875,6 +887,38 @@ static int wifi_ap(int argc, char **argv) {
 }
 #endif // CONSOLE_WIFI_AP
 
+#ifdef CONSOLE_WIFI_IPERF
+#endif
+
+#ifdef CONSOLE_WIFI_PING
+static struct {
+    struct arg_str *host;
+    struct arg_int *tout;
+    struct arg_int *size;
+    struct arg_int *npkt;
+    struct arg_end *end;
+} wifi_ping_args = {
+    .host = arg_str1(NULL, NULL, "<host>", "Target IP address"),
+    .tout = arg_int0("t", NULL, "<msec>", "Time to wait for a response"),
+    .size = arg_int0("s", NULL, "<byte>", "Number of data bytes to be sent"),
+    .npkt = arg_int0("c", NULL, "<num>", "Stop after sending num packets"),
+    .end = arg_end(1)
+};
+
+static int wifi_ping(int argv, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &wifi_ping_args))
+        return ESP_ERR_INVALID_ARG;
+    uint16_t tout = 0, size = 0, npkt = 0;
+    if (wifi_ping_args.tout->count)
+        tout = wifi_ping_args.tout->ival[0];
+    if (wifi_ping_args.size->count)
+        size = wifi_ping_args.size->ival[0];
+    if (wifi_ping_args.npkt->count)
+        npkt = wifi_ping_args.npkt->ival[0];
+    return ping_command(wifi_ping_args.host->sval[0], tout, size, npkt);
+}
+#endif
+
 static void register_wifi() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_WIFI_STA
@@ -893,6 +937,24 @@ static void register_wifi() {
             .hint = NULL,
             .func = &wifi_ap,
             .argtable = &wifi_ap_args
+        },
+#endif
+#ifdef CONSOLE_WIFI_IPERF
+        {
+            .command = "iperf",
+            .help = "Speed test",
+            .hint = NULL,
+            .func = &wifi_iperf,
+            .argtable = &wifi_iperf_args
+        },
+#endif
+#ifdef CONSOLE_WIFI_PING
+        {
+            .command = "ping",
+            .help = "Send ICMP ECHO_REQUEST to specified hosts",
+            .hint = NULL,
+            .func = &wifi_ping,
+            .argtable = &wifi_ping_args
         },
 #endif
     };

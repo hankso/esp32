@@ -34,6 +34,8 @@ esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel, uint16_t timeout_ms);
 esp_err_t wifi_sta_wait(uint16_t timeout_ms);
 esp_err_t wifi_sta_list_ap();
 
+esp_err_t ping_command(const char *host, uint16_t timeout_ms, uint16_t data_size, uint16_t count);
+
 #ifdef __cplusplus
 }
 #endif
