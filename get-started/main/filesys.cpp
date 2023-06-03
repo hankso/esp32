@@ -1,5 +1,5 @@
 /* 
- * File: SDSPIFS.cpp
+ * File: filesys.cpp
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-05-15 19:42:04
  */
@@ -81,7 +81,7 @@ void _jsonify_file(File file, void *arg) {
 void _loginfo_file(File file, void *arg) {
     fprintf((FILE *)arg, "%-4s %6s %12lu %s\n",
             file.isDirectory() ? "DIR" : "FILE",
-            format_size(file.size()),
+            format_size(file.size(), false),
             file.getLastWrite(),
             file.name());
 }
@@ -242,32 +242,34 @@ FileImplPtr CFSFileImpl::openNextFile(const char *mode) {
 
 // SDMMC - SPI interface (using native spi driver instead of Arduino SPI.h)
 
-bool SDSPIFSFS::begin(bool format, const char *base, uint8_t max) {
+#ifdef CONFIG_SDFS_MP
+
+bool SDMMCFS::begin(bool format, const char *base, uint8_t max) {
     esp_vfs_fat_sdmmc_mount_config_t mount_conf = {
         .format_if_mount_failed = format,
         .max_files = max,
         .allocation_unit_size = 16 * 1024,
     };
 
-    sdmmc_host_t host_conf = SDSPI_HOST_DEFAULT();
+    sdmmc_host_t host_conf = SDMMC_HOST_DEFAULT();
 
-    // SDSPI_SLOT_CONFIG_DEFAULT()
+    // SDMMC_SLOT_CONFIG_DEFAULT()
     sdspi_slot_config_t slot_conf = {
         .gpio_cs   = PIN_HCS0,
 #ifdef CONFIG_GPIO_HSPI_SDCD
         .gpio_cd   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDCD),
 #else
-        .gpio_cd   = SDSPI_SLOT_NO_CD,
+        .gpio_cd   = SDMMC_SLOT_NO_CD,
 #endif
 #ifdef CONFIG_GPIO_HSPI_SDWP
         .gpio_wp   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDWP),
 #else
-        .gpio_wp   = SDSPI_SLOT_NO_WP,
+        .gpio_wp   = SDMMC_SLOT_NO_WP,
 #endif
 #ifdef CONFIG_GPIO_HSPI_SDINT
         .gpio_int  = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDINT),
 #else
-        .gpio_int  = SDSPI_SLOT_NO_INT,
+        .gpio_int  = SDMMC_SLOT_NO_INT,
 #endif
         .gpio_miso = PIN_HMISO,
         .gpio_mosi = PIN_HMOSI,
@@ -291,7 +293,7 @@ bool SDSPIFSFS::begin(bool format, const char *base, uint8_t max) {
     }
 }
 
-void SDSPIFSFS::end() {
+void SDMMCFS::end() {
     esp_err_t err = esp_vfs_fat_sdmmc_unmount();
     if (!err) {
         _card = NULL;
@@ -299,7 +301,7 @@ void SDSPIFSFS::end() {
     }
 }
 
-void SDSPIFSFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
+void SDMMCFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
     String base = path;
     if (!base.startsWith("/")) base = "/" + base;
     if (!base.endsWith("/")) base += "/";
@@ -311,14 +313,20 @@ void SDSPIFSFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
     root.close();
 }
 
-void SDSPIFSFS::_getsize() {
+void SDMMCFS::_getsize() {
     _total = _card ? (size_t)_card->csd.capacity * _card->csd.sector_size : 0;
     _used = 0; // not implemented yet
 }
 
+SDMMCFS SDFS;
+
+#endif // CONFIG_SDFS_MP
+
 // Flash FAT / SPI Flash File System
 
-bool FLASHFSFS::begin(bool format, const char *base, uint8_t max) {
+#ifdef CONFIG_FFS_MP
+
+bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
 #ifdef CONFIG_USE_FFATFS
     if (_wlhdl != WL_INVALID_HANDLE) return true;
     esp_vfs_fat_mount_config_t conf = {
@@ -336,7 +344,7 @@ bool FLASHFSFS::begin(bool format, const char *base, uint8_t max) {
         .format_if_mount_failed = format
     };
     esp_err_t err = esp_vfs_spiffs_register(&conf);
-#endif
+#endif // CONFIG_USE_FFATFS
     if (err) {
         printf("Failed to mount FlashFS: %s\n", esp_err_to_name(err));
         return false;
@@ -348,7 +356,7 @@ bool FLASHFSFS::begin(bool format, const char *base, uint8_t max) {
     }
 }
 
-void FLASHFSFS::_getsize() {
+void FLASHFS::_getsize() {
 #ifdef CONFIG_USE_FFATFS
     FATFS *fsinfo;
     DWORD free_clust;
@@ -360,24 +368,24 @@ void FLASHFSFS::_getsize() {
     _used = (fs->n_fatent - 2 - free_clust) * ssize;
 #else
     esp_spiffs_info(_label, &_total, &_used);
-#endif
+#endif // CONFIG_USE_FFATFS
 }
 
-void FLASHFSFS::end() {
+void FLASHFS::end() {
     esp_err_t err =
 #ifdef CONFIG_USE_FFATFS
         esp_vfs_fat_spiflash_unmount(_impl->mountpoint(), _wlhdl);
 #else
         esp_spiffs_mounted(_label) ? \
             esp_vfs_spiffs_unregister(_label) : ESP_ERR_INVALID_STATE;
-#endif
+#endif // CONFIG_USE_FFATFS
     if (!err) {
         _impl->mountpoint(NULL);
         _wlhdl = WL_INVALID_HANDLE;
     }
 }
 
-void FLASHFSFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
+void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
     static String lastDir = "";
     String base = dir, path;
     if (!base.startsWith("/")) base = "/" + base;
@@ -398,18 +406,22 @@ void FLASHFSFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
             if (lastDir == path) continue;
             else file = open(lastDir = path);
         }
-#endif
+#endif // CONFIG_USE_FFATFS
         (*cb)(file, arg);
         file.close();
     }
     root.close();
 }
 
-SDSPIFSFS SDFS;
-FLASHFSFS FFS;
+FLASHFS FFS;
+#endif // CONFIG_FFS_MP
 
 void fs_initialize() {
-    if (FFS.begin(false, FFS_MP, 10)) FFS.printInfo();
-    if (SDFS.begin(false, SDFS_MP, 5)) SDFS.printInfo();
+#ifdef CONFIG_FFS_MP
+    if (FFS.begin(false, CONFIG_FFS_MP, 10)) FFS.printInfo();
+#endif
+#ifdef CONFIG_SDFS_MP
+    if (SDFS.begin(false, CONFIG_SDFS_MP, 5)) SDFS.printInfo();
+#endif
     fflush(stdout);
 }

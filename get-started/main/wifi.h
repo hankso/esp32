@@ -24,15 +24,15 @@ extern "C" {
 
 void wifi_initialize();
 
-void wifi_ap_list_sta();
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip);
 esp_err_t wifi_ap_stop();
+esp_err_t wifi_ap_list_sta();
 
-void wifi_sta_list_ap();
-void wifi_sta_scan();
-esp_err_t wifi_sta_wait(uint16_t timeout_ms);
 esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip);
 esp_err_t wifi_sta_stop();
+esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel, uint16_t timeout_ms);
+esp_err_t wifi_sta_wait(uint16_t timeout_ms);
+esp_err_t wifi_sta_list_ap();
 
 #ifdef __cplusplus
 }

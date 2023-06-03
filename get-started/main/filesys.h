@@ -7,9 +7,9 @@
 /* Framework EspAsyncWebServer depends on Arduino FS libraries, so we have to
  * implement our file system based on Arduino FS instead of native ESP32 VFS.
  *
- * - SDSPIFSFS is implemented for SD Card FAT File System in SPI mode.
+ * - SDMMCFS is implemented for SD Card FAT File System in SPI mode.
  *
- * - FLASHFSFS supports SPIFFS & FFATFS and is configurable by defining macro
+ * - FLASHFS supports SPIFFS & FFATFS and is configurable by defining macro
  * `CONFIG_USE_FFATFS`. It default initializes SPIFFS on `storage` partition.
  *
  * This module relies on Arduino FS Abstract Layer but nothing.
@@ -51,9 +51,6 @@
 #include "sys/unistd.h"
 #include "sys/stat.h"
 #include "dirent.h"
-
-#define FFS_MP  CONFIG_FFS_MP
-#define SDFS_MP CONFIG_SDFS_MP
 
 void fs_initialize();
 
@@ -144,29 +141,32 @@ public:
     }
 };
 
-class FLASHFSFS : public CFS {
+#ifdef CONFIG_FFS_MP
+class FLASHFS : public CFS {
 private:
     void _getsize();
     const char *_label;
     wl_handle_t _wlhdl = WL_INVALID_HANDLE;
 public:
     // can specify partition label name
-    FLASHFSFS(const char *label=NULL) : _label(label) {}
+    FLASHFS(const char *label=NULL) : _label(label) {}
 
-    bool begin(bool format=false, const char *base=FFS_MP, uint8_t max=10);
+    bool begin(bool format=false, const char *base=CONFIG_FFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
 };
+#endif
 
-class SDSPIFSFS : public CFS {
+#ifdef CONFIG_SDFS_MP
+class SDMMCFS : public CFS {
 private:
     void _getsize();
     sdmmc_card_t *_card = NULL;
 public:
-    SDSPIFSFS() {}
+    SDMMCFS() {}
 
-    bool begin(bool format=false, const char *base=SDFS_MP, uint8_t max=10);
+    bool begin(bool format=false, const char *base=CONFIG_SDFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
@@ -176,11 +176,16 @@ public:
         else fprintf(stdout, "SD Card not detected\n");
     }
 };
+#endif
 
 }
 
-extern fs::FLASHFSFS FFS;
-extern fs::SDSPIFSFS SDFS;
+#ifdef CONFIG_FFS_MP
+extern fs::FLASHFS FFS;
+#endif
+#ifdef CONFIG_SDFS_MP
+extern fs::SDMMCFS SDFS;
+#endif
 
 }
 #endif // __cplusplus
