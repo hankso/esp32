@@ -10,6 +10,7 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "lwip/inet.h"
 #include "esp_event.h"
 #include "esp_wifi.h"
 #include "esp_log.h"
@@ -132,13 +133,23 @@ static void wifi_print_ipaddr(esp_netif_t * if_ptr) {
 }
 
 static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
-    puts("\nSSID\t\t\t MAC address       RSSI Mode Auth   CC Channel");
+    size_t maxlen = 10;
     LOOPN(i, num) {
         if (!aps[i].country.cc[0]) {
             aps[i].country.cc[0] = aps[i].country.cc[1] = ' ';
         }
-        printf("%-24s " MACSTR " %4d %c%c%c%c %-6s %c%c %2d (%d-%d)\n",
-            (char *)aps[i].ssid, MAC2STR(aps[i].bssid), aps[i].rssi,
+#ifdef CONFIG_AUTO_ALIGN
+        size_t len = strlen((char *)aps[i].ssid);
+        if (len > maxlen) maxlen = len;
+#else
+        maxlen = 24;
+#endif
+    }
+    printf("SSID%*s", maxlen - 4, "");
+    puts(" MAC address       RSSI Mode Auth   CC Channel");
+    LOOPN(i, num) {
+        printf("%-*s " MACSTR " %4d %c%c%c%c %-6s %c%c %2d (%d-%d)\n",
+            maxlen, (char *)aps[i].ssid, MAC2STR(aps[i].bssid), aps[i].rssi,
             aps[i].phy_11b ? 'b' : ' ', aps[i].phy_11g ? 'g' : ' ',
             aps[i].phy_11n ? 'n' : ' ', aps[i].phy_lr ? 'l' : 'h',
             wifi_authmode_str(aps[i].authmode),
@@ -169,10 +180,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
     static int retry = 0;
     if (base == IP_EVENT) {
         if (id == IP_EVENT_STA_GOT_IP) {
-            ip_event_got_ip_t *evt = data;
-            ESP_LOGI(TAG, "Got IP: " IPSTR ", GW: " IPSTR ", Mask: " IPSTR,
-                    IP2STR(&evt->ip_info.ip), IP2STR(&evt->ip_info.gw),
-                    IP2STR(&evt->ip_info.netmask));
+            wifi_print_ipaddr(if_sta);
         } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
             ip_event_ap_staipassigned_t *evt = data;
             ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
@@ -234,6 +242,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
                     ESP_LOGE(TAG, "STA get AP failed: %s", esp_err_to_name(err));
                 } else {
                     ESP_LOGI(TAG, "STA found %d AP", nap);
+                    putchar('\n');
                     wifi_print_apinfo(aps, nap);
                 }
                 free(aps);
@@ -249,6 +258,7 @@ static void event_handler(void *arg, esp_event_base_t base, int32_t id, void *da
 void wifi_initialize() {
     esp_log_level_set("wifi", ESP_LOG_WARN);
     esp_log_level_set("wifi_init", ESP_LOG_WARN);
+    esp_log_level_set("esp_netif_lwip", ESP_LOG_WARN);
     esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
 
     ESP_ERROR_CHECK( esp_netif_init() );
@@ -289,7 +299,6 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
         pass = Config.net.STA_PASS;
     if (!ip && strlen(Config.net.STA_HOST))
         ip = Config.net.STA_HOST;
-    printf("!!!try connect to %s %s %s\n", ssid ? ssid : "", pass ? pass : "", ip ? ip : "");
 
     // WiFi mode validation
     esp_err_t err = wifi_mode_switch(true, UNCHANGED, NULL);
@@ -301,7 +310,6 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
             return err;                         // already connected to this AP
         if (err != ESP_ERR_WIFI_NOT_CONNECT)
             wifi_sta_stop();                    // disconnect from current AP
-        printf("!!!disconnected from %s\n", record.ssid);
     }
 
     // Configure static IP address
@@ -328,7 +336,6 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     } else {
         sta->password[0] = 0;
     }
-    printf("!!!esp_wifi_set_config\n");
     if (( err = esp_wifi_set_config(WIFI_IF_STA, &config_sta) ))
         return err;
     return esp_wifi_connect();
@@ -437,6 +444,7 @@ esp_err_t wifi_sta_list_ap() {
         wifi_ap_record_t info;
         if (( err = esp_wifi_sta_get_ap_info(&info) ))
             return err;
+        putchar('\n');
         wifi_print_apinfo(&info, 1);
     } else {
         puts("not initialized");
@@ -464,7 +472,7 @@ esp_err_t wifi_ap_list_sta() {
         printf("No connected stations\n");
         return err;
     }
-    printf("\nAID  IP address       MAC address      RSSI Mode Mesh\n");
+    printf("\nAID  IP address       MAC address       RSSI Mode Mesh\n");
     LOOPN(i, wifi_sta_list.num) {
         wifi_sta_info_t *hw = wifi_sta_list.sta + i;
         esp_netif_sta_info_t *sw = netif_sta_list.sta + i;
@@ -472,8 +480,8 @@ esp_err_t wifi_ap_list_sta() {
             ESP_LOGD(TAG, "Get STA AID failed: %s", esp_err_to_name(err));
             continue;
         }
-        printf("%04X " IPSTR " " MACSTR " %4d %c%c%c%c %s\n",
-            aid, IP2STR(&sw->ip), MAC2STR(sw->mac), hw->rssi,
+        printf("%04X %-16s " MACSTR " %4d %c%c%c%c %s\n",
+            aid, inet_ntoa(sw->ip), MAC2STR(sw->mac), hw->rssi,
             hw->phy_11b ? 'b' : ' ', hw->phy_11g ? 'g' : ' ',
             hw->phy_11n ? 'n' : ' ', hw->phy_lr ? 'l' : 'h',
             hw->is_mesh_child ? "true" : "false");

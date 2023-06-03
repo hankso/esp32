@@ -71,7 +71,7 @@ bool CFSImpl::rmdir(const char *path) { return remove(path); }
 
 void _jsonify_file(File file, void *arg) {
     cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "name", file.name());
+    cJSON_AddStringToObject(obj, "name", file.path());
     cJSON_AddNumberToObject(obj, "size", file.size());
     cJSON_AddNumberToObject(obj, "date", file.getLastWrite());
     cJSON_AddStringToObject(obj, "type", file.isDirectory() ? "folder":"file");
@@ -83,7 +83,7 @@ void _loginfo_file(File file, void *arg) {
             file.isDirectory() ? "DIR" : "FILE",
             format_size(file.size(), false),
             file.getLastWrite(),
-            file.name());
+            file.path());
 }
 
 void CFS::list(const char *path, FILE *stream) {
@@ -105,17 +105,17 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     : _fs(fs)
     , _file(NULL), _dir(NULL)
     , _path(NULL), _fullpath(NULL)
-    , _isdir(true)
+    , _isdir(false)
     , _badfile(true), _baddir(true)
     , _npath(NULL), _nisdir(false)
     , _written(true)
 {
-    char *tmp = (char *)malloc(strlen(_fs->mountpoint()) + strlen(path) + 1);
-    if (!tmp) return; else _fullpath = tmp;
+    if (!path || !strlen(path)) return;
+    size_t plen = strlen(_fs->mountpoint()), len = strlen(path);
+    if (!( _fullpath = (char *)malloc(plen + len + 1) )) return;
     strcpy(_fullpath, _fs->mountpoint()); strcat(_fullpath, path);
 
-    _path = strdup(path);
-    if (!_path || !strlen(_path)) {
+    if (!( _path = strdup(path) )) {
         free(_fullpath);
         _fullpath = NULL;
         return;
@@ -123,7 +123,6 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     if (_getstat()) {
         if (S_ISREG(_stat.st_mode)) {
             _file = fopen(_fullpath, mode);
-            _isdir = false;
         } else if (S_ISDIR(_stat.st_mode)) {
             _dir = opendir(_fullpath);
         } else {
@@ -132,15 +131,14 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     } else {
         if (_write_mode(mode)) {
             _file = fopen(_fullpath, mode);
-            _isdir = false;
-        } else if (_path[strlen(_path) - 1] == '/') {
+        } else if (_path[len - 1] == '/') {
             _dir = opendir(_fullpath);
-            _isdir = _dir != NULL;
         } else {
             // We're using different `FS.exists` logic so _dir can be NULL
             // do nothing
         }
     }
+    _isdir = _dir != NULL;
     _badfile = _isdir || !_file;
     _baddir = !_isdir || !_dir;
 }
@@ -148,7 +146,13 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
 bool CFSFileImpl::_getstat() const {
     if (!_fullpath) return false;
     if (!_written) return true;
-    return (!stat(_fullpath, &_stat)) ? !(_written = false) : false;
+    if (!stat(_fullpath, &_stat)) {
+        _written = false;
+        return true;
+    } else {
+        memset(&_stat, 0, sizeof(_stat));
+        return false;
+    }
 }
 
 size_t CFSFileImpl::write(const uint8_t *buf, size_t size) {
@@ -234,7 +238,8 @@ String CFSFileImpl::getNextFileName(bool *isDir) {
 
 FileImplPtr CFSFileImpl::openNextFile(const char *mode) {
     dir_next();
-    if (_npath && !_npath[0]) return openNextFile(mode);
+    if (_npath && !_npath[0])
+        return openNextFile(mode);
     if (_valid_path(_npath))
         return std::make_shared<CFSFileImpl>(_fs, _npath, mode);
     return FileImplPtr();
@@ -386,7 +391,6 @@ void FLASHFS::end() {
 }
 
 void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
-    static String lastDir = "";
     String base = dir, path;
     if (!base.startsWith("/")) base = "/" + base;
     if (!base.endsWith("/")) base = base + "/";
@@ -401,11 +405,8 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
         if (!path.startsWith(base)) continue;
         // resolve directory path from filename
         int idx = path.indexOf('/', base.length());
-        if (idx != -1) {
-            path = path.substring(0, idx + 1);
-            if (lastDir == path) continue;
-            else file = open(lastDir = path);
-        }
+        if (idx != -1)
+            file = open(path.substring(0, idx + 1));
 #endif // CONFIG_USE_FFATFS
         (*cb)(file, arg);
         file.close();

@@ -25,6 +25,7 @@ extern "C" {
 // #define CONFIG_SDFS_MP          "/sdcard"   // mount point for external SDCard
 #define CONFIG_DEBUG
 #define CONFIG_SCREEN
+#define CONFIG_AUTO_ALIGN
 // #define CONFIG_VLX_SENSOR                   // vlx_probe: 5KB
 // #define CONFIG_OTA_FETCH                    // ota_updation_url: 263KB
 

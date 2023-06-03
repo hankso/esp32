@@ -76,7 +76,7 @@ const char * format_size(size_t bytes, bool inbit) {
     static int Bdems[] = { 0, 1, 2, 3, 3, 4 };
     static int bdems[] = { 0, 2, 3, 3, 4, 7 };
     if (!bytes)
-        return inbit ? "0 bit" : "0 Byte";
+        return inbit ? "0 b" : "0 B";
     double tmp = bytes * (inbit ? 8 : 1), base = 1024;
     int exp = 0;                        // you can replace this with log10
     while (exp < 5 && tmp > base) {
