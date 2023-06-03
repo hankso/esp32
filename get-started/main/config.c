@@ -46,6 +46,7 @@ config_t Config = {
     .net = {
         .STA_SSID  = "",
         .STA_PASS  = "",
+        .STA_HOST  = "",
         .AP_AUTO   = "1",
         .AP_SSID   = "Hankso@ESP32",
         .AP_PASS   = "16011106",
@@ -89,9 +90,11 @@ static const char * staticlist[] = {
     Config.web.DIR_ASSET, Config.web.DIR_STA,   Config.web.DIR_AP,
     Config.web.DIR_ROOT,  Config.web.DIR_DATA,
 
-    Config.net.AP_SSID,   Config.net.AP_PASS,
-    Config.net.AP_HOST,   Config.net.AP_HIDE,
     Config.net.STA_SSID,  Config.net.STA_PASS,
+    Config.net.STA_HOST,
+    Config.net.AP_AUTO,   Config.net.AP_HIDE,
+    Config.net.AP_SSID,   Config.net.AP_PASS,
+    Config.net.AP_HOST,
 
     Config.app.DNS_RUN,   Config.app.DNS_HOST,
     Config.app.OTA_RUN,   Config.app.OTA_URL,
@@ -115,6 +118,7 @@ config_entry_t cfglist[] = {
 
     {"net.sta.ssid",    &Config.net.STA_SSID},
     {"net.sta.pass",    &Config.net.STA_PASS},
+    {"net.sta.host",    &Config.net.STA_HOST},
     {"net.ap.auto",     &Config.net.AP_AUTO},
     {"net.ap.ssid",     &Config.net.AP_SSID},
     {"net.ap.pass",     &Config.net.AP_PASS},
@@ -440,7 +444,7 @@ void config_nvs_stats() {
         "NVS Partition Size: %s\n"
         "  Namespaces: %d\n"
         "  Entries: %d/%d (%.2f %% free)\n",
-        format_size(nvs_st.part->size), nvs_stats.namespace_count,
+        format_size(nvs_st.part->size, false), nvs_stats.namespace_count,
         nvs_stats.used_entries, nvs_stats.total_entries,
         100.0 * nvs_stats.free_entries / nvs_stats.total_entries
     );

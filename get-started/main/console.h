@@ -9,7 +9,6 @@
 
 #define CONSOLE_SYSTEM_RESTART      // 308 Bytes
 #define CONSOLE_SYSTEM_SLEEP        // 11844 Bytes
-#define CONSOLE_SYSTEM_LSOTA        // 2851 Bytes
 #define CONSOLE_SYSTEM_UPDATE       // 1028 Bytes
 
 #define CONSOLE_CONFIG_IO           // 1740 Bytes

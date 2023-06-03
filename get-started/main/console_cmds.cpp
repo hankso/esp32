@@ -167,8 +167,6 @@ static int system_sleep(int argc, char **argv) {
 }
 #endif // CONSOLE_SYSTEM_SLEEP
 
-static int system_otainfo(int c, char **v) { ota_partition_info(); return ESP_OK; }
-
 #ifdef CONSOLE_SYSTEM_UPDATE
 static struct {
     struct arg_str *cmd;
@@ -178,7 +176,7 @@ static struct {
     struct arg_lit *reset;
     struct arg_end *end;
 } system_update_args = {
-    .cmd = arg_str1(NULL, NULL, "<boot|fetch|reset>", ""),
+    .cmd = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
     .part = arg_str0(NULL, "part", "<label>", "partition to boot from"),
     .url = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
     .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
@@ -189,7 +187,8 @@ static struct {
 static int system_update(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &system_update_args))
         return ESP_ERR_INVALID_ARG;
-    const char *subcmd = system_update_args.cmd->sval[0];
+    const char *subcmd = system_update_args.cmd->count ? \
+                         system_update_args.cmd->sval[0] : "";
     if (strstr(subcmd, "boot")) {
         if (system_update_args.part->count) {
             const char *label = system_update_args.part->sval[0];
@@ -213,10 +212,8 @@ static int system_update(int argc, char **argv) {
             printf("Updation success. Call `restart` to reboot ESP32");
         }
     } else {
-        printf("Invalid command: `%s`\n", subcmd);
-        return ESP_ERR_INVALID_ARG;
+        ota_partition_info();
     }
-    ota_partition_info();
     return ESP_OK;
 }
 #endif // CONSOLE_SYSTEM_UPDATE
@@ -239,15 +236,6 @@ static void register_system() {
             .hint = NULL,
             .func = &system_sleep,
             .argtable = &system_sleep_args
-        },
-#endif
-#ifdef CONSOLE_SYSTEM_LSOTA
-        {
-            .command = "lsota",
-            .help = "List OTA Updation partition information",
-            .hint = NULL,
-            .func = &system_otainfo,
-            .argtable = NULL,
         },
 #endif
 #ifdef CONSOLE_SYSTEM_UPDATE
@@ -660,9 +648,17 @@ static int utils_listdir(int argc, char **argv) {
     const char *dir = utils_listdir_args.dir->count ? \
                       utils_listdir_args.dir->sval[0] : "/";
     if (strstr(dev, "flash")) {
+#ifdef CONFIG_FFS_MP
         FFS.list(dir, stdout);
+#else
+        ESP_LOGW(TAG, "Flash File System not enabled");
+#endif
     } else if (strstr(dev, "sdmmc")) {
+#ifdef CONFIG_SDFS_MP
         SDFS.list(dir, stdout);
+#else
+        ESP_LOGW(TAG, "SDMMC File System not enabled");
+#endif
     } else {
         printf("Invalid device: `%s`\n", dev);
         return ESP_ERR_INVALID_ARG;
@@ -674,12 +670,14 @@ static int utils_listdir(int argc, char **argv) {
 #ifdef CONSOLE_UTILS_HIST
 static struct {
     struct arg_str *cmd;
+    struct arg_str *dev;
     struct arg_str *dst;
     struct arg_end *end;
 } utils_history_args = {
     .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
+    .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
     .dst = arg_str0("f", "file", "history.txt", "relative path to file"),
-    .end = arg_end(2)
+    .end = arg_end(3)
 };
 
 static int utils_history(int argc, char **argv) {
@@ -692,18 +690,43 @@ static int utils_history(int argc, char **argv) {
         printf("Invalid command: `%s`\n", subcmd);
         return ESP_ERR_INVALID_ARG;
     }
+    const char *dev = utils_history_args.dev->count ? \
+                      utils_history_args.dev->sval[0] : "flash";
     const char *dst = utils_history_args.dst->count ? \
                       utils_history_args.dst->sval[0] : "history.txt";
-    size_t plen = strlen(FFS_MP), dlen = strlen(Config.web.DIR_DATA);
-    char * fn = (char *)malloc(plen + dlen + strlen(dst) + 1);
-    if (!fn) return ESP_ERR_NO_MEM;
-    strcpy(fn, FFS_MP); strcat(fn, Config.web.DIR_DATA); strcat(fn, dst);
-    if (!FFS.exists(fn + plen) && !save) {
-        printf("History file `%s` does not exist\n", fn);
+    size_t plen, len = strlen(Config.web.DIR_DATA) + strlen(dst);
+    char *fullpath = NULL;
+    bool exists;
+    if (strstr(dev, "flash")) {
+#ifdef CONFIG_FFS_MP
+        len += (plen = strlen(CONFIG_FFS_MP));
+        if (!( fullpath = (char *)malloc(len + 1) )) return ESP_ERR_NO_MEM;
+        snprintf(fullpath, len, "%s%s%s", CONFIG_FFS_MP, Config.web.DIR_DATA, dst);
+        exists = FFS.exists(fullpath + plen);
+#else
+        ESP_LOGW(TAG, "Flash File System not enabled");
+#endif
+    } else if (strstr(dev, "sdmmc")) {
+#ifdef CONFIG_SDFS_MP
+        len += (plen = strlen(CONFIG_SDFS_MP));
+        if (!( fullpath = (char *)malloc(len + 1) )) return ESP_ERR_NO_MEM;
+        snprintf(fullpath, len, "%s%s%s", CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);
+        exists = SDFS.exists(fullpath + plen);
+#else
+        ESP_LOGW(TAG, "SDMMC File System not enabled");
+#endif
+    } else {
+        printf("Invalid device: `%s`\n", dev);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (!fullpath)
+        return ESP_OK;
+    if (!exists && !save) {
+        printf("History file `%s` does not exist\n", fullpath);
         return ESP_ERR_NOT_FOUND;
     }
-    int ret = save ? linenoiseHistorySave(fn) : linenoiseHistoryLoad(fn);
-    printf("History file `%s` %s %s\n", fn, subcmd, ret ? "fail" : "done");
+    int ret = save ? linenoiseHistorySave(fullpath) : linenoiseHistoryLoad(fullpath);
+    printf("History file `%s` %s %s\n", fullpath, subcmd, ret ? "fail" : "done");
     return ret;
 }
 #endif // CONSOLE_UTILS_HIST
@@ -785,56 +808,70 @@ typedef struct {
     struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_str *pass;
+    struct arg_int *tout;
     struct arg_end *end;
 } wifi_args_t;
 
 #ifdef CONSOLE_WIFI_STA
 static wifi_args_t wifi_sta_args = {
-    .cmd = arg_str1(NULL, NULL, "<status|scan|connect|disconnect>", ""),
+    .cmd = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .end = arg_end(3)
+    .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
+    .end = arg_end(4)
 };
 
-static int wifi_sta(int argc, char **argv) { // TODO
+static int wifi_sta(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &wifi_sta_args))
         return ESP_ERR_INVALID_ARG;
-    const char * subcmd = wifi_sta_args.cmd->sval[0];
-    if (strstr(subcmd, "status")) {
-        return ESP_ERR_NOT_FOUND; // wifi_sta_list_ap();
-    } else if (strstr(subcmd, "scan")) {
-        return ESP_ERR_NOT_FOUND; // wifi_sta_scan();
-    } else if (strstr(subcmd, "connect")) {
-        return ESP_ERR_NOT_FOUND; // wifi_sta_connect();
-    } else if (strstr(subcmd, "disconnect")) {
-        return ESP_ERR_NOT_FOUND; // wifi_sta_disconnect();
+    const char * subcmd = wifi_sta_args.cmd->count ? \
+                          wifi_sta_args.cmd->sval[0] : "";
+    if (strstr(subcmd, "scan")) {
+        const char *ssid = wifi_sta_args.ssid->count ? \
+                           wifi_sta_args.ssid->sval[0] : NULL;
+        uint16_t timeout_ms = wifi_sta_args.tout->count ? \
+                              wifi_sta_args.tout->ival[0] : 0;
+        return wifi_sta_scan(ssid, 0, timeout_ms);
+    } else if (strstr(subcmd, "join")) {
+        const char *ssid = wifi_sta_args.ssid->count ? \
+                           wifi_sta_args.ssid->sval[0] : NULL;
+        const char *pass = wifi_sta_args.pass->count ? \
+                           wifi_sta_args.pass->sval[0] : (ssid ? "" : NULL);
+        esp_err_t err = wifi_sta_start(ssid, pass, NULL);
+        if (!err && wifi_sta_args.tout->count)
+            err = wifi_sta_wait(wifi_sta_args.tout->ival[0]);
+        return err;
+    } else if (strstr(subcmd, "leave")) {
+        return wifi_sta_stop();
     }
-    printf("Invalid command: `%s`\n", subcmd);
-    return ESP_ERR_INVALID_ARG;
+    return wifi_sta_list_ap();
 }
 #endif // CONSOLE_WIFI_STA
 
 #ifdef CONSOLE_WIFI_AP
 static wifi_args_t wifi_ap_args = {
-    .cmd = arg_str1(NULL, NULL, "<status|start|stop>", ""),
+    .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .end = arg_end(3)
+    .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
+    .end = arg_end(4)
 };
 
-static int wifi_ap(int argc, char **argv) { // TODO
+static int wifi_ap(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &wifi_ap_args))
         return ESP_ERR_INVALID_ARG;
-    const char * subcmd = wifi_ap_args.cmd->sval[0];
-    if (strstr(subcmd, "status")) {
-        return ESP_ERR_NOT_FOUND; // wifi_ap_list_sta();
-    } else if (strstr(subcmd, "start")) {
-        return ESP_ERR_NOT_FOUND; // wifi_ap_start();
+    const char * subcmd = wifi_ap_args.cmd->count ? \
+                          wifi_ap_args.cmd->sval[0] : "";
+    if (strstr(subcmd, "start")) {
+        const char *ssid = wifi_ap_args.ssid->count ? \
+                           wifi_ap_args.ssid->sval[0] : NULL;
+        const char *pass = wifi_ap_args.pass->count ? \
+                           wifi_ap_args.pass->sval[0] : (ssid ? "" : NULL);
+        return wifi_ap_start(ssid, pass, NULL);
     } else if (strstr(subcmd, "stop")) {
-        return ESP_ERR_NOT_FOUND; // wifi_ap_stop();
+        return wifi_ap_stop();
     }
-    printf("Invalid command: `%s`\n", subcmd);
-    return ESP_ERR_INVALID_ARG;
+    return wifi_ap_list_sta();
 }
 #endif // CONSOLE_WIFI_AP
 

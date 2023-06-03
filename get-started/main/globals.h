@@ -22,7 +22,7 @@ extern "C" {
 #define CONFIG_I2C_NUM          0
 #define CONFIG_UART_NUM         0
 #define CONFIG_FFS_MP           "/flashfs"  // mount point for flash file system
-#define CONFIG_SDFS_MP          "/sdcard"   // mount point for external SDCard
+// #define CONFIG_SDFS_MP          "/sdcard"   // mount point for external SDCard
 #define CONFIG_DEBUG
 #define CONFIG_SCREEN
 // #define CONFIG_VLX_SENSOR                   // vlx_probe: 5KB
@@ -110,6 +110,20 @@ extern "C" {
 #define CONFIG_GPIO_SERVOV      32
 #endif
 
+#define _STR_IMPL_(x)           #x
+#define STR(x)                  _STR_IMPL_(x)
+#define CASESTR(x, n)           case x: return #x + n;
+#define UNUSED(x)               (void)(x)
+#define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
+#define LOOP(x, l, h)           for (int (x) = (l); (x) < (h); (x)++)
+#define LOOPD(x, h, l)          for (int (x) = (h); (x) > (l); (x)--)
+#define LOOPN(x, n)             LOOP(x, 0, (n))
+#define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
+#define LPCHR(c, n)             { LOOPN(x, (n)) putchar(c); putchar('\n'); }
+#define TRYFREE(p)              { if (p) free(p); (p) = NULL; }
+#define PACKED                  __attribute__((__packed__))
+#define FALLTH                  __attribute__((fallthrough))
+
 
 // Utilities (implemented in utils.c)
 bool strbool(const char *);
@@ -117,7 +131,7 @@ char * cast_away_const(const char*);
 char * cast_away_const_force(const char*);
 
 const char * format_sha256(const uint8_t*, size_t);
-const char * format_size(size_t);
+const char * format_size(size_t, bool);
 const char * format_mac(const uint8_t*, size_t);
 const char * format_ip(uint32_t, size_t);
 
