@@ -1,5 +1,5 @@
 /*
- * File: wifi.h
+ * File: network.h
  * Authors: Hank <hankso1106@gmail.com>
  * Time: 2020-03-21 13::33:32
  *
@@ -18,11 +18,13 @@
 
 #include "globals.h"
 
+#include "esp_err.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-void wifi_initialize();
+void network_initialize();
 
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip);
 esp_err_t wifi_ap_stop();
@@ -34,7 +36,13 @@ esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel, uint16_t timeout_ms);
 esp_err_t wifi_sta_wait(uint16_t timeout_ms);
 esp_err_t wifi_sta_list_ap();
 
-esp_err_t ping_command(const char *host, uint16_t timeout_ms, uint16_t data_size, uint16_t count);
+esp_err_t iperf_command(const char *host, uint16_t port, uint16_t length,
+                        uint32_t interval_sec, uint32_t timeout_sec,
+                        bool abort, bool udp);
+esp_err_t ping_command(const char *host, uint16_t timeout_ms,
+                       uint16_t data_size, uint16_t count);
+esp_err_t ftm_initiator(const char *ssid, uint16_t timeout_ms, uint8_t *count);
+esp_err_t ftm_responder(const char *ctrl, int16_t *offset_cm);
 
 #ifdef __cplusplus
 }

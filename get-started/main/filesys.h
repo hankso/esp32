@@ -48,9 +48,10 @@
 #include "sdmmc_cmd.h"
 #include "wear_levelling.h"
 #include "driver/sdmmc_types.h"
-#include "sys/unistd.h"
-#include "sys/stat.h"
+
 #include "dirent.h"
+#include "sys/stat.h"
+#include "sys/unistd.h"
 
 void fs_initialize();
 

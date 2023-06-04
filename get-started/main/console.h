@@ -9,12 +9,12 @@
 
 #define CONSOLE_SYSTEM_RESTART      // 102 Bytes
 #define CONSOLE_SYSTEM_SLEEP        // 12292 Bytes
-#define CONSOLE_SYSTEM_UPDATE       // 3196 Bytes
+// #define CONSOLE_SYSTEM_UPDATE       // 3196 Bytes
 
 #define CONSOLE_CONFIG_IO           // 2852 Bytes
 
-#define CONSOLE_DRIVER_LED          // 700 Bytes
-#define CONSOLE_DRIVER_GPIO         // 700 Bytes
+// #define CONSOLE_DRIVER_LED          // 700 Bytes
+// #define CONSOLE_DRIVER_GPIO         // 700 Bytes
 #define CONSOLE_DRIVER_I2C          // 1436 Bytes
 #define CONSOLE_DRIVER_ALS          // 1920 Bytes
 #define CONSOLE_DRIVER_PWM          // 224 Bytes
@@ -25,10 +25,13 @@
 #define CONSOLE_UTILS_LSTASK        // 300 Bytes
 #define CONSOLE_UTILS_LSMEM         // 1308 Bytes
 #define CONSOLE_UTILS_LSFS          // 512 Bytes
-#define CONSOLE_UTILS_HIST          // 806 Bytes
+// #define CONSOLE_UTILS_HIST          // 806 Bytes
 
-#define CONSOLE_WIFI_STA            // 428 Bytes
-#define CONSOLE_WIFI_AP             // 3884 Bytes
+#define CONSOLE_NET_STA             // 428 Bytes
+#define CONSOLE_NET_AP              // 3884 Bytes
+// #define CONSOLE_NET_IPERF           // 24004 Bytes
+// #define CONSOLE_NET_PING            // 21668 Bytes
+// #define CONSOLE_NET_FTM             // 1860 Bytes
 
 #ifdef __cplusplus
 extern "C" {

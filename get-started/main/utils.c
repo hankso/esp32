@@ -25,7 +25,8 @@ char * cast_away_const_force(const char *str) {
 }
 
 bool strbool(const char *str) {
-    return str && (!strcmp(str, "1") || !strcmp(str, "y"));
+    if (!str) return false;
+    return !strcmp(str, "1") || !strcmp(str, "y") || !strcmp(str, "on");
 }
 
 char hexdigits(uint8_t v) {

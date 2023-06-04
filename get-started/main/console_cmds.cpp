@@ -13,7 +13,7 @@
 #include "globals.h"
 #include "drivers.h"
 #include "filesys.h"
-#include "wifi.h"
+#include "network.h"
 
 #include "esp_log.h"
 #include "esp_sleep.h"
@@ -53,6 +53,9 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
         ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) );
     }
 }
+
+#define ARG_STR(p, s)   ((p)->count ? (p)->sval[0] : (s))
+#define ARG_INT(p, v)   ((p)->count ? (p)->ival[0] : (v))
 
 /******************************************************************************
  * System commands
@@ -189,8 +192,7 @@ static struct {
 static int system_update(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &system_update_args))
         return ESP_ERR_INVALID_ARG;
-    const char *subcmd = system_update_args.cmd->count ? \
-                         system_update_args.cmd->sval[0] : "";
+    const char *subcmd = ARG_STR(system_update_args.cmd, "");
     if (strstr(subcmd, "boot")) {
         if (system_update_args.part->count) {
             const char *label = system_update_args.part->sval[0];
@@ -205,8 +207,7 @@ static int system_update(int argc, char **argv) {
         ota_updation_reset();
         printf("OTA states reset done\n");
     } else if (strstr(subcmd, "fetch")) {
-        const char *url = system_update_args.url->count ? \
-                          system_update_args.url->sval[0] : NULL;
+        const char *url = ARG_STR(system_update_args.url, NULL);
         if (!ota_updation_url(url)) {
             printf("Failed to udpate: %s\n", ota_updation_error());
             return ESP_FAIL;
@@ -325,13 +326,13 @@ static void register_config() {
 
 #ifdef CONSOLE_DRIVER_LED
 static struct {
-    struct arg_int *idx;
     struct arg_str *cmd;
+    struct arg_int *idx;
     struct arg_str *clr;
     struct arg_end *end;
 } driver_led_args = {
-    .idx = arg_int0("i", "index", "<0-20>", "specify index, default 0"),
     .cmd = arg_str0(NULL, NULL, "<on|off>", "enable/disable LED"),
+    .idx = arg_int0("i", "index", "<0-20>", "specify index, default 0"),
     .clr = arg_str0("c", "color", "<0xAABBCC>", "specify RGB color"),
     .end = arg_end(1)
 };
@@ -339,8 +340,7 @@ static struct {
 static int driver_led(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &driver_led_args))
         return ESP_ERR_INVALID_ARG;
-    uint8_t idx = driver_led_args.idx->count ? \
-                  driver_led_args.idx->ival[0] : 0;
+    uint8_t idx = ARG_INT(driver_led_args.idx, 0);
     if (driver_led_args.clr->count) {
         const char *color = driver_led_args.clr->sval[0];
         uint32_t rgb = strtol(color, NULL, 0);
@@ -445,8 +445,7 @@ static int driver_i2c(int argc, char **argv) {
         printf("Invalid I2C address: 0x%02X\n", addr);
         return ESP_ERR_INVALID_ARG;
     }
-    uint8_t reg = driver_i2c_args.reg->count ? \
-                  driver_i2c_args.reg->ival[0] : 0;
+    uint8_t reg = ARG_INT(driver_i2c_args.reg, 0);
     if (driver_i2c_args.val->count) {
         if (driver_i2c_args.hex->count) {
             uint16_t val = driver_i2c_args.val->ival[0];
@@ -653,10 +652,8 @@ static struct {
 static int utils_listdir(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &utils_listdir_args))
         return ESP_ERR_INVALID_ARG;
-    const char *dev = utils_listdir_args.dev->count ? \
-                      utils_listdir_args.dev->sval[0] : "flash";
-    const char *dir = utils_listdir_args.dir->count ? \
-                      utils_listdir_args.dir->sval[0] : "/";
+    const char *dev = ARG_STR(utils_listdir_args.dev, "flash");
+    const char *dir = ARG_STR(utils_listdir_args.dir, "/");
     if (strstr(dev, "flash")) {
 #ifdef CONFIG_FFS_MP
         FFS.list(dir, stdout);
@@ -700,10 +697,8 @@ static int utils_history(int argc, char **argv) {
         printf("Invalid command: `%s`\n", subcmd);
         return ESP_ERR_INVALID_ARG;
     }
-    const char *dev = utils_history_args.dev->count ? \
-                      utils_history_args.dev->sval[0] : "flash";
-    const char *dst = utils_history_args.dst->count ? \
-                      utils_history_args.dst->sval[0] : "history.txt";
+    const char *dev = ARG_STR(utils_history_args.dev, "flash");
+    const char *dst = ARG_STR(utils_history_args.dst, "history.txt");
     size_t plen, len = strlen(Config.web.DIR_DATA) + strlen(dst);
     char *fullpath = NULL;
     bool exists;
@@ -814,14 +809,14 @@ static void register_utils() {
  * WiFi commands
  */
 
-#ifdef CONSOLE_WIFI_STA
+#ifdef CONSOLE_NET_STA
 static struct {
     struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_str *pass;
     struct arg_int *tout;
     struct arg_end *end;
-} wifi_sta_args = {
+} net_sta_args = {
     .cmd = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
@@ -829,75 +824,97 @@ static struct {
     .end = arg_end(1)
 };
 
-static int wifi_sta(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &wifi_sta_args))
+static int net_sta(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_sta_args))
         return ESP_ERR_INVALID_ARG;
-    const char * subcmd = wifi_sta_args.cmd->count ? \
-                          wifi_sta_args.cmd->sval[0] : "";
+    const char * subcmd = ARG_STR(net_sta_args.cmd, "");
     if (strstr(subcmd, "scan")) {
-        const char *ssid = wifi_sta_args.ssid->count ? \
-                           wifi_sta_args.ssid->sval[0] : NULL;
-        uint16_t timeout_ms = wifi_sta_args.tout->count ? \
-                              wifi_sta_args.tout->ival[0] : 0;
+        const char *ssid = ARG_STR(net_sta_args.ssid, NULL);
+        uint16_t timeout_ms = ARG_INT(net_sta_args.tout, 0);
         return wifi_sta_scan(ssid, 0, timeout_ms);
     } else if (strstr(subcmd, "join")) {
-        const char *ssid = wifi_sta_args.ssid->count ? \
-                           wifi_sta_args.ssid->sval[0] : NULL;
-        const char *pass = wifi_sta_args.pass->count ? \
-                           wifi_sta_args.pass->sval[0] : (ssid ? "" : NULL);
+        const char *ssid = ARG_STR(net_sta_args.ssid, NULL);
+        const char *pass = ARG_STR(net_sta_args.pass, (ssid ? "" : NULL));
         esp_err_t err = wifi_sta_start(ssid, pass, NULL);
-        if (!err && wifi_sta_args.tout->count)
-            err = wifi_sta_wait(wifi_sta_args.tout->ival[0]);
+        if (!err && net_sta_args.tout->count)
+            err = wifi_sta_wait(net_sta_args.tout->ival[0]);
         return err;
     } else if (strstr(subcmd, "leave")) {
         return wifi_sta_stop();
     }
     return wifi_sta_list_ap();
 }
-#endif // CONSOLE_WIFI_STA
+#endif // CONSOLE_NET_STA
 
-#ifdef CONSOLE_WIFI_AP
+#ifdef CONSOLE_NET_AP
 static struct {
     struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_str *pass;
     struct arg_end *end;
-} wifi_ap_args = {
+} net_ap_args = {
     .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
     .end = arg_end(1)
 };
 
-static int wifi_ap(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &wifi_ap_args))
+static int net_ap(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_ap_args))
         return ESP_ERR_INVALID_ARG;
-    const char * subcmd = wifi_ap_args.cmd->count ? \
-                          wifi_ap_args.cmd->sval[0] : "";
+    const char * subcmd = ARG_STR(net_ap_args.cmd, "");
     if (strstr(subcmd, "start")) {
-        const char *ssid = wifi_ap_args.ssid->count ? \
-                           wifi_ap_args.ssid->sval[0] : NULL;
-        const char *pass = wifi_ap_args.pass->count ? \
-                           wifi_ap_args.pass->sval[0] : (ssid ? "" : NULL);
+        const char *ssid = ARG_STR(net_ap_args.ssid, NULL);
+        const char *pass = ARG_STR(net_ap_args.pass, (ssid ? "" : NULL));
         return wifi_ap_start(ssid, pass, NULL);
     } else if (strstr(subcmd, "stop")) {
         return wifi_ap_stop();
     }
     return wifi_ap_list_sta();
 }
-#endif // CONSOLE_WIFI_AP
+#endif // CONSOLE_NET_AP
 
-#ifdef CONSOLE_WIFI_IPERF
+#ifdef CONSOLE_NET_IPERF
+static struct {
+    struct arg_str *host;
+    struct arg_int *port;
+    struct arg_int *size;
+    struct arg_int *intv;
+    struct arg_int *tout;
+    struct arg_lit *stop;
+    struct arg_lit *udp;
+    struct arg_end *end;
+} net_iperf_args = {
+    .host = arg_str0("c", NULL, "<host>", "Run in client mode"),
+    .port = arg_int0("p", NULL, "<port>", "Specify port number"),
+    .size = arg_int0("l", NULL, "<bytes>", "Read/Write buffer size"),
+    .intv = arg_int0("i", NULL, "<sec>", "Time between bandwidth reports"),
+    .tout = arg_int0("t", NULL, "<sec>", "Time to transmit for"),
+    .stop = arg_lit0(NULL, "stop", "Stop currently running iperf"),
+    .udp = arg_lit0("u", "udp", "Use UDP rather than TCP"),
+    .end = arg_end(1)
+};
+
+static int net_iperf(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_iperf_args))
+        return ESP_ERR_INVALID_ARG;
+    return iperf_command(
+        ARG_STR(net_iperf_args.host, NULL),
+        ARG_INT(net_iperf_args.port, 0), ARG_INT(net_iperf_args.size, 0),
+        ARG_INT(net_iperf_args.intv, 0), ARG_INT(net_iperf_args.tout, 0),
+        net_iperf_args.stop->count, net_iperf_args.udp->count
+    );
+}
 #endif
 
-#ifdef CONSOLE_WIFI_PING
+#ifdef CONSOLE_NET_PING
 static struct {
     struct arg_str *host;
     struct arg_int *tout;
     struct arg_int *size;
     struct arg_int *npkt;
     struct arg_end *end;
-} wifi_ping_args = {
+} net_ping_args = {
     .host = arg_str1(NULL, NULL, "<host>", "Target IP address"),
     .tout = arg_int0("t", NULL, "<msec>", "Time to wait for a response"),
     .size = arg_int0("s", NULL, "<byte>", "Number of data bytes to be sent"),
@@ -905,56 +922,102 @@ static struct {
     .end = arg_end(1)
 };
 
-static int wifi_ping(int argv, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &wifi_ping_args))
+static int net_ping(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_ping_args))
         return ESP_ERR_INVALID_ARG;
-    uint16_t tout = 0, size = 0, npkt = 0;
-    if (wifi_ping_args.tout->count)
-        tout = wifi_ping_args.tout->ival[0];
-    if (wifi_ping_args.size->count)
-        size = wifi_ping_args.size->ival[0];
-    if (wifi_ping_args.npkt->count)
-        npkt = wifi_ping_args.npkt->ival[0];
-    return ping_command(wifi_ping_args.host->sval[0], tout, size, npkt);
+    return ping_command(
+        net_ping_args.host->sval[0], ARG_INT(net_ping_args.tout, 0),
+        ARG_INT(net_ping_args.size, 0), ARG_INT(net_ping_args.npkt, 0)
+    );
 }
 #endif
 
-static void register_wifi() {
+#ifdef CONSOLE_NET_FTM
+static struct {
+    struct arg_str *cmd;
+    struct arg_str *ssid;
+    struct arg_int *npkt;
+    struct arg_int *tout;
+    struct arg_int *base;
+    struct arg_str *ctrl;
+    struct arg_end *end;
+} net_ftm_args = {
+    .cmd = arg_str1(NULL, NULL, "<REP|REQ>", "Run as responder | initiator"),
+    .ssid = arg_str0(NULL, NULL, "<SSID>", "For initiator: target AP"),
+    .npkt = arg_int0("c", NULL, "<0:8:32|64>", "For initiator: frame count"),
+    .tout = arg_int0("t", NULL, "<msec>", "For initiator: Timeout in ms"),
+    .base = arg_int0("o", NULL, "<cm>", "For responder: T1 offset in cm"),
+    .ctrl = arg_str0("a", NULL, "<on|off>", "For responder: enable / disable"),
+    .end = arg_end(1)
+};
+
+static int net_ftm(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_ftm_args))
+        return ESP_ERR_INVALID_ARG;
+    const char *subcmd = net_ftm_args.cmd->sval[0];
+    if (strstr(subcmd, "REP")) {
+        int16_t base = net_ftm_args.base->ival[0];
+        return ftm_responder(
+            ARG_STR(net_ftm_args.ctrl, NULL),
+            net_ftm_args.base->count ? &base : NULL);
+    } else if (strstr(subcmd, "REQ")) {
+        uint8_t npkt = net_ftm_args.npkt->ival[0];
+        return ftm_initiator(
+            ARG_STR(net_ftm_args.ssid, NULL),
+            ARG_INT(net_ftm_args.tout, 0),
+            net_ftm_args.npkt->count ? &npkt : NULL);
+    } else {
+        printf("Invalid command: `%s`\n", subcmd);
+        return ESP_ERR_INVALID_ARG;
+    }
+}
+#endif
+
+static void register_network() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_WIFI_STA
+#ifdef CONSOLE_NET_STA
         {
             .command = "sta",
             .help = "Query / Scan / Connect / Disconnect Access Pointes",
             .hint = NULL,
-            .func = &wifi_sta,
-            .argtable = &wifi_sta_args
+            .func = &net_sta,
+            .argtable = &net_sta_args
         },
 #endif
-#ifdef CONSOLE_WIFI_AP
+#ifdef CONSOLE_NET_AP
         {
             .command = "ap",
             .help = "Query / Start / Stop Soft Access Point",
             .hint = NULL,
-            .func = &wifi_ap,
-            .argtable = &wifi_ap_args
+            .func = &net_ap,
+            .argtable = &net_ap_args
         },
 #endif
-#ifdef CONSOLE_WIFI_IPERF
+#ifdef CONSOLE_NET_IPERF
         {
             .command = "iperf",
-            .help = "Speed test",
+            .help = "Bandwidth test on IP networks",
             .hint = NULL,
-            .func = &wifi_iperf,
-            .argtable = &wifi_iperf_args
+            .func = &net_iperf,
+            .argtable = &net_iperf_args
         },
 #endif
-#ifdef CONSOLE_WIFI_PING
+#ifdef CONSOLE_NET_PING
         {
             .command = "ping",
             .help = "Send ICMP ECHO_REQUEST to specified hosts",
             .hint = NULL,
-            .func = &wifi_ping,
-            .argtable = &wifi_ping_args
+            .func = &net_ping,
+            .argtable = &net_ping_args
+        },
+#endif
+#ifdef CONSOLE_NET_FTM
+        {
+            .command = "ftm",
+            .help = "Fine Timing Measurement between STA and AP using RTT",
+            .hint = NULL,
+            .func = &net_ftm,
+            .argtable = &net_ftm_args
         },
 #endif
     };
@@ -972,5 +1035,5 @@ extern "C" void console_register_commands() {
     register_config();
     register_driver();
     register_utils();
-    register_wifi();
+    register_network();
 }

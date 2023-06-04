@@ -5,9 +5,9 @@
 #include "drivers.h"
 #include "console.h"
 #include "filesys.h"
+#include "network.h"
 #include "update.h"
 #include "config.h"
-#include "wifi.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -25,7 +25,7 @@ void init() {
     ESP_LOGI(TAG, "Init Configuration");        config_initialize();
     ESP_LOGI(TAG, "Init OTA Updation");         ota_initialize();
     ESP_LOGI(TAG, "Init File Systems");         fs_initialize();
-    ESP_LOGI(TAG, "Init WiFi Connection");      wifi_initialize();
+    ESP_LOGI(TAG, "Init Network Connection");   network_initialize();
     ESP_LOGI(TAG, "Init Hardware Drivers");     driver_initialize();
     ESP_LOGI(TAG, "Init Command Line Console"); console_initialize();
     fflush(stdout);
