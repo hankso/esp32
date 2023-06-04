@@ -299,7 +299,7 @@ static int config_io(int argc, char **argv) {
             printf("Get `%s` value `%s`\n", key, config_get(key));
         }
     } else {
-        // TODO: list config entries
+        config_list();
     }
     return ret ? ESP_OK : ESP_FAIL;
 }

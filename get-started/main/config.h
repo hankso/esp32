@@ -84,10 +84,11 @@ extern config_entry_t cfglist[];
 bool config_initialize();
 bool config_loads(const char *);        // load Config from json
 char * config_dumps();                  // dump Config into json
+void config_list();                     // list all configurations
 
 /* Get one config value by key or set one by key & value. When you update an
  * entry, the result is applied on both Config and NVS flash. You don't need
- * to call config_load/config_dump to sync between.
+ * to call config_nvs_load/config_nvs_dump to sync between.
  */
 const char * config_get(const char *);
 bool config_set(const char *, const char *);
@@ -97,15 +98,15 @@ bool config_set(const char *, const char *);
  * But more lightweight and without dependency on Arduino.
  */
 esp_err_t config_nvs_init();
-esp_err_t config_nvs_open(const char *, bool ro); // open namespace
+esp_err_t config_nvs_open(const char *, bool ro); // open namespace in NVS
 esp_err_t config_nvs_commit();          // must be called after config_nvs_open
-esp_err_t config_nvs_close();           // close with auto commit
-bool config_nvs_remove(const char *);   // remove one entry
-bool config_nvs_clear();                // remove all entries
-bool config_nvs_load();                 // load from nvs flash to Config
-bool config_nvs_dump();                 // save Config to nvs flash
-void config_nvs_list();                 // list all entries
-void config_nvs_stats();                // get nvs flash detail
+esp_err_t config_nvs_close();           // close NVS with auto commit
+bool config_nvs_remove(const char *);   // remove one entry in NVS
+bool config_nvs_clear();                // remove all entries in NVS
+bool config_nvs_load();                 // load Config from NVS partition
+bool config_nvs_dump();                 // save Config to NVS partition
+void config_nvs_list();                 // list all entries in NVS
+void config_nvs_stats();                // get NVS partition detail
 
 #ifdef __cplusplus
 }

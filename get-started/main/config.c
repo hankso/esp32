@@ -162,6 +162,19 @@ bool config_set(const char *key, const char *value) {
     return true;
 }
 
+void config_list() {
+    printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
+    for (uint16_t i = 0; i < numcfg; i++) {
+        const char *key = cfglist[i].key, *value = *cfglist[i].value;
+        printf("  %-15.15s\t", key);
+        if (!strcmp(key + strlen(key) - 4, "pass")) {
+            printf("`%.*s`\n", strlen(value), "********");
+        } else {
+            printf("`%s`\n", value);
+        }
+    }
+}
+
 void _set_config_callback(const char *key, cJSON *item) {
     if (!cJSON_IsString(item)) {
         if (!cJSON_IsObject(item)) {
@@ -411,21 +424,7 @@ void config_nvs_list() {
     }
     nvs_release_iterator(iter);
 #else
-    if (config_nvs_open(NAMESPACE_CFG, true)) {
-        ESP_LOGE(TAG, "Cannot find entries under `" NAMESPACE_CFG "` in `%s`",
-                 nvs_st.part->label);
-        return;
-    } else config_nvs_close();
-    printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
-    for (uint16_t i = 0; i < numcfg; i++) {
-        const char *key = cfglist[i].key, *value = *cfglist[i].value;
-        printf("  %-15.15s\t", key);
-        if (!strcmp(key + strlen(key) - 4, "pass")) {
-            printf("`%.*s`\n", strlen(value), "********");
-        } else {
-            printf("`%s`\n", value);
-        }
-    }
+    ESP_LOGE(TAG, "NVS Entries iteration not supported");
 #endif
 }
 

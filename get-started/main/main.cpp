@@ -8,6 +8,7 @@
 #include "network.h"
 #include "update.h"
 #include "config.h"
+#include "server.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -32,6 +33,7 @@ void init() {
 }
 
 void setup() {
+    server_loop_begin();    // Core 0 (i.e. Pro CPU)
     console_loop_begin(1);  // Core 1 (i.e. App CPU)
 }
 
