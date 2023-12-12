@@ -71,9 +71,9 @@ void console_initialize() {
  * collected as a string. But don't forget to free the buffer after result
  * is handled.
  *
- * 1. <stdio.h> setvbuf - store string in buffer (temporarily)
+ * Method 1. <stdio.h> setvbuf - store string in buffer (temporarily)
  *  pos: easy to set & unset, safe printing with buflen
- *  neg: cannot stop flushing to stdout
+ *  neg: `\r` does not work because STDOUT is always flushed
  *  e.g.:
  *      char *buf = (char *)calloc(1024, sizeof(char));
  *      setvbuf(stdout, buf, _IOFBF, 1024);
@@ -81,7 +81,7 @@ void console_initialize() {
  *      setvbuf(stdout, NULL, _IONBF, 1024);
  *      printf("Get string from STDOUT %lu: `%s`", strlen(buf), buf);
  *
- * 2. <stdio.h> memstream - open memory as stream
+ * Method 2. <stdio.h> memstream - open memory as stream
  *  2.1 fmemopen(void *buf, size_t size, const char *mode)
  *  2.2 open_memstream(char * *ptr, size_t *sizeloc)
  *  pos: The open_memstream will dynamically allocate buffer and automatically
@@ -98,10 +98,9 @@ void console_initialize() {
  *      printf("In buffer: size %d, msg %s\n", size, buf);
  *      free(buf);
  *
- * 3. <unistd.h> pipe & dup: this is not what we want
+ * Method 3. <unistd.h> pipe & dup: this is not what we want
  *
- * 4. If pipe STDOUT to a disk file on flash or memory block using VFS, thing
- *    becomes much easier.
+ * Method 4. Pipe STDOUT to a disk file on flash or memory block using VFS
  *  e.g.:
  *      stdout = fopen("/spiffs/runtime.log", "w");
  *    But writing & reading from a file is slow and consume too much resources.
@@ -118,7 +117,7 @@ void console_initialize() {
  *      esp_vfs_register("/dev/ram", &vfs_buffer, NULL);
  *      stdout = fopen("/dev/ram/blk0", "w");
  *
- * Currently implemented is method 2. Try method 4 if necessary in the future.
+ * Currently method 2 is in use. Try method 4 if necessary in the future.
  */
 
 char * console_handle_command(const char *cmd, bool history) {
@@ -204,7 +203,10 @@ static char * rpc_error(double code, const char *msg) {
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(error, "code", code);
     cJSON_AddStringToObject(error, "message", msg);
-    return cJSON_PrintUnformatted(rep);
+    char *msg = cJSON_PrintUnformatted(rep);
+    cJSON_Delete(rep);
+    cJSON_Delete(error);
+    return msg;
 }
 
 static char * rpc_response(cJSON *id, const char *result) {
@@ -216,38 +218,49 @@ static char * rpc_response(cJSON *id, const char *result) {
     }
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddStringToObject(rep, "result", result);
-    return cJSON_PrintUnformatted(rep);
+    char *msg = cJSON_PrintUnformatted(rep);
+    cJSON_Delete(rep);
+    return msg;
 }
 
 char * console_handle_rpc(const char *json) {
+    char *msg = NULL, *cmd = NULL, *ret = NULL;
     cJSON *obj = cJSON_Parse(json);
-    if (!obj)
-        return rpc_error(-32700, "Parse Error");
-    if (!cJSON_HasObjectItem(obj, "method"))
-        return rpc_error(-32600, "Invalid JSON");
-    const char *method = cJSON_GetObjectItem(obj, "method")->valuestring;
-    char *cmd;
-    if (!cJSON_HasObjectItem(obj, "params")) {
-        cmd = strdup(method);
-    } else {
+    if (!obj) {
+        msg = rpc_error(-32700, "Parse Error");
+        goto exit;
+    }
+    if (!cJSON_HasObjectItem(obj, "method")) {
+        msg = rpc_error(-32600, "Invalid JSON");
+        goto exit;
+    }
+    if (!cJSON_HasObjectItem(obj, "params")) {  // command without arguments
+        cmd = strdup(cJSON_GetObjectItem(obj, "method")->valuestring);
+    } else {                                    // command with arguments
         cJSON *params = cJSON_GetObjectItem(obj, "params");
-        if (!cJSON_IsArray(params)) return rpc_error(-32600, "Invalid Request");
+        if (!cJSON_IsArray(params)) {
+            msg = rpc_error(-32600, "Invalid Request");
+            goto exit;
+        }
         size_t size = 0; FILE *buf = open_memstream(&cmd, &size);
-        fprintf(buf, "%s", method);
+        fprintf(buf, "%s", cJSON_GetObjectItem(obj, "method")->valuestring);
         for (uint8_t i = 0; i < cJSON_GetArraySize(params); i++) {
             fprintf(buf, " %s", cJSON_GetArrayItem(params, i)->valuestring);
         }
         fclose(buf);
     }
-    if (!cmd) return rpc_error(-32400, "System Error");
-    ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
-    char *response = NULL, *ret = console_handle_command(cmd, false);
-    if (cJSON_HasObjectItem(obj, "id")) { // not notification
-        response = rpc_response(cJSON_GetObjectItem(obj ,"id"), ret ? ret : "");
+    if (!cmd) {                                 // command not parsed from json
+        msg = rpc_error(-32400, "System Error");
+        goto exit;
     }
+    ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
+    ret = console_handle_command(cmd, false);
+    if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
+        msg = rpc_response(cJSON_GetObjectItem(obj ,"id"), ret ? ret : "");
+exit:
+    if (cmd) free(cmd);
     if (ret) free(ret);
-    free(cmd);
-    return response;
+    return msg;
 }
 
 // THE END

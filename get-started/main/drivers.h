@@ -48,6 +48,8 @@ float led_get_light(int index);
 esp_err_t led_set_color(int index, uint32_t color);
 uint32_t led_get_color(int index);
 
+uint32_t adc_read();
+
 void gpio_table(bool i2c, bool spi);
 esp_err_t gpioext_set_level(int pin, bool level);
 esp_err_t gpioext_get_level(int pin, bool * level, bool sync);

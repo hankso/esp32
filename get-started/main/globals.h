@@ -23,10 +23,16 @@ extern "C" {
 #define CONFIG_UART_NUM         0
 #define CONFIG_FFS_MP           "/flashfs"  // mount point for flash file system
 // #define CONFIG_SDFS_MP          "/sdcard"   // mount point for external SDCard
+
 #define CONFIG_DEBUG
-#define CONFIG_SCREEN
 #define CONFIG_AUTO_ALIGN
+#define CONFIG_ADC_INPUT                    // adc_read: 4.6KB
+#define CONFIG_I2C_SCREEN                   // scn_progbar: 4KB
+#define CONFIG_I2C_GPIOEXP                  // i2c_gpio_xxx: 3KB
+#define CONFIG_ALS_TRACK                    // als_tracking: 1KB
+#define CONFIG_PWM_SERVO                    // pwm_degree: 6.3KB
 // #define CONFIG_VLX_SENSOR                   // vlx_probe: 5KB
+// #define CONFIG_SPI_GPIOEXP                  // spi_gpio_xxx: 16KB
 // #define CONFIG_OTA_FETCH                    // ota_updation_url: 263KB
 
 /*
@@ -106,15 +112,17 @@ extern "C" {
 #define CONFIG_GPIO_I2C_SCL     26
 #endif
 
-#ifndef CONFIG_GPIO_SERVOH
-#define CONFIG_GPIO_SERVOH      33
+#ifndef CONFIG_GPIO_SERVOV
 #define CONFIG_GPIO_SERVOV      32
+#define CONFIG_GPIO_SERVOH      33
 #endif
+
 
 #define _STR_IMPL_(x)           #x
 #define STR(x)                  _STR_IMPL_(x)
 #define CASESTR(x, n)           case x: return #x + n;
 #define UNUSED(x)               (void)(x)
+#define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
 #define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
 #define LOOP(x, l, h)           for (int (x) = (l); (x) < (h); (x)++)
 #define LOOPD(x, h, l)          for (int (x) = (h); (x) > (l); (x)--)

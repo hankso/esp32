@@ -519,6 +519,13 @@ static int driver_als(int argc, char **argv) {
 }
 #endif // CONSOLE_DRIVER_ALS
 
+#ifdef CONSOLE_DRIVER_ADC
+static int driver_adc(int argc, char **argv) {
+    printf("ADC value: %umV\n", adc_read());
+    return ESP_OK;
+}
+#endif
+
 #ifdef CONSOLE_DRIVER_PWM
 static struct {
     struct arg_int *hdeg;
@@ -573,6 +580,15 @@ static void register_driver() {
             .hint = NULL,
             .func = &driver_als,
             .argtable = &driver_als_args
+        },
+#endif
+#ifdef CONSOLE_DRIVER_ADC
+        {
+            .command = "adc",
+            .help = "Read ADC and calculate value in mV",
+            .hint = NULL,
+            .func = &driver_adc,
+            .argtable = NULL,
         },
 #endif
 #ifdef CONSOLE_DRIVER_PWM

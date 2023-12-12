@@ -10,10 +10,12 @@
 #include "esp_log.h"
 #include "esp_attr.h"
 #include "esp_vfs_dev.h"
-#include "esp_intr_alloc.h"
+#include "esp_adc_cal.h"
 #include "esp_task_wdt.h"
+#include "esp_intr_alloc.h"
 #include "soc/soc.h"
 #include "sys/param.h"
+#include "driver/adc.h"
 #include "driver/i2c.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
@@ -23,7 +25,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if defined(CONFIG_SCREEN) && __has_include("u8g2_esp32_hal.h")
+#if defined(CONFIG_I2C_SCREEN) && __has_include("u8g2_esp32_hal.h")
 #   include "u8g2.h"
 #   include "u8g2_esp32_hal.h"
 #   define WITH_U8G2
@@ -97,9 +99,70 @@ uint32_t led_get_color(int index) {
 
 #endif // CONFIG_BLINK_LED
 
+// ADC analog in
+
+#ifdef CONFIG_ADC_INPUT
+static esp_adc_cal_characteristics_t adc_chars;
+static const adc_unit_t adc_unit = ADC_UNIT_1;              // ADC 1
+static const adc_atten_t adc_atten = ADC_ATTEN_DB_11;       // 0.15-2.45V
+static const adc_bits_width_t adc_width = ADC_WIDTH_BIT_12; // Dmax=4095
+static const adc1_channel_t adc_chan = ADC1_CHANNEL_6;
+#endif
+
+static void adc_initialize() {
+#ifdef CONFIG_ADC_INPUT
+#if CONFIG_IDF_TARGET_ESP32
+    if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF)) {
+        ESP_LOGI(TAG, "ADC: eFuse VRef not supported");
+    } else {
+        ESP_LOGD(TAG, "ADC: eFuse VRef supported");
+    }
+#endif // CONFIG_IDF_TARGET_ESP32
+#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2
+    if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP)) {
+        ESP_LOGI(TAG, "ADC: eFuse Two Point not supported");
+    } else {
+        ESP_LOGD(TAG, "ADC: eFuse Two Point supported");
+    }
+#else
+    ESP_LOGE(TAG, "ADC: Unknown ESP chip target");
+    return;
+#endif // CONFIG_IDF_TARGET_ESP32
+    adc1_config_width(adc_width);
+    adc1_config_channel_atten(adc_chan, adc_atten);
+    memset(&adc_chars, 0, sizeof(adc_chars));
+    esp_adc_cal_value_t vtype = esp_adc_cal_characterize(
+        adc_unit, adc_atten, adc_width, 1100, &adc_chars);
+    if (vtype == ESP_ADC_CAL_VAL_EFUSE_TP) {
+        ESP_LOGI(TAG, "ADC: characterized using Two Point Value");
+    } else if (vtype == ESP_ADC_CAL_VAL_EFUSE_VREF) {
+        ESP_LOGI(TAG, "ADC: characterized using eFuse VRef");
+    } else {
+        ESP_LOGI(TAG, "ADC: characterized using Default VRef");
+    }
+#endif // CONFIG_ADC_INPUT
+}
+
+uint32_t adc_read() {
+#ifndef CONFIG_ADC_INPUT
+    return 0;
+#elif defined(ADC_MULTISAMPLING)
+    uint32_t raw;
+    LOOPN(i, ADC_MULTISAMPLING) {
+        raw += adc1_get_raw(adc_chan);
+    }
+    raw /= ADC_MULTISAMPLING;
+    return esp_adc_cal_raw_to_voltage(raw, &adc_chars);
+#else
+    return esp_adc_cal_raw_to_voltage(adc1_get_raw(adc_chan), &adc_chars);
+#endif
+}
+
+
 // PWM for Servo
 
 // mapping 0-180 deg to 0.5-2.5 ms by 10bit resolution
+#ifdef CONFIG_PWM_SERVO
 static float duty_offset = 0.5 / 20 * ((1 << 10) - 1);
 static float duty_scale  = 2.0 / 20 * ((1 << 10) - 1) / 180;
 
@@ -150,6 +213,13 @@ esp_err_t pwm_degree(int hdeg, int vdeg) {
     }
     return err;
 }
+
+#else
+
+static void pwm_initialize() { ; }
+esp_err_t pwm_degree(int hdeg, int vdeg) { return ESP_ERR_NOT_FOUND; }
+
+#endif // CONFIG_PWM_SERVO
 
 // I2C GPIO Expander
 
@@ -303,18 +373,25 @@ static esp_err_t i2c_trans(int bus, uint8_t addr, uint8_t rw, uint8_t *data, siz
     return err;
 }
 
+#ifdef CONFIG_I2C_GPIOEXP
 static uint8_t i2c_pin_data[3] = { 0, 0, 0 };
 static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
+#endif
 
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
+#ifdef CONFIG_I2C_GPIOEXP
     int pin = pin_num - PIN_I2C_MIN - 1;
     if (0 > pin || pin > PIN_I2C_MAX) return ESP_ERR_INVALID_ARG;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, datp, 1);
+#else
+    return ESP_ERR_NOT_FOUND;
+#endif // CONFIG_I2C_GPIOEXP
 }
 
 esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
+#ifdef CONFIG_I2C_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_I2C_MIN - 1;
     if (0 > pin || pin > PIN_I2C_MAX) return err;
@@ -324,6 +401,9 @@ esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
     if (!err)
         *level = *datp & mask;
     return err;
+#else
+    return ESP_ERR_NOT_FOUND;
+#endif // CONFIG_I2C_GPIOEXP
 }
 
 
@@ -440,12 +520,15 @@ esp_err_t gy39_measure(int bus, gy39_data_t *d) {
 //      ADDR -> SDA: 0b10
 //      ADDR -> SCL: 0b11
 
+#ifdef CONFIG_ALS_TRACK
 static uint8_t i2c_als_addr[4] = {
     0b01000100, 0b01000101,         // east, west
     0b01000110, 0b01000111          // south, north
 };
+#endif
 
 static void als_initialize() {
+#ifdef CONFIG_ALS_TRACK
     esp_err_t err;
     uint8_t addr;
     uint16_t buf[2];
@@ -464,9 +547,11 @@ static void als_initialize() {
         smbus_write_word(NUM_I2C, addr, 0x01, 0xC610); // continuous mode
         // TODO: configure Low-Limit and Hight-Limit and Interrupt GPIO
     }
+#endif // CONFIG_ALS_TRACK
 }
 
 float als_brightness(int idx) {
+#ifdef CONFIG_ALS_TRACK
     if (idx < 0 || idx > 3) {
         ESP_LOGE(TAG, "Invalid ALS chip index %d", idx);
         return 0;
@@ -480,10 +565,13 @@ float als_brightness(int idx) {
     // Equation 3 at Page 20 of OPT3001 datasheet:
     //   lux = 0.01 * 2^E[3:0] * R[11:0]
     return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
+#else
+    return 0;
+#endif // CONFIG_ALS_TRACK
 }
 
 esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
-#define ABSDIFF(a, b) ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
+#ifdef CONFIG_ALS_TRACK
     esp_err_t err;
     float bmax = 0, bmin = 1e10, btmp[4];
     switch (idx) {
@@ -535,17 +623,21 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     if (bmax != 0 || bmin != 1e10) {
         return pwm_degree(*hdeg, *vdeg);
     }
+#endif // CONFIG_ALS_TRACK
     return ESP_ERR_NOT_FOUND;
 }
 
 // SPI GPIO Expander
 // If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
 // Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
+#ifdef CONFIG_SPI_GPIOEXP
 static spi_device_handle_t spi_pin_hdlr;
 static spi_transaction_t spi_pin_trans;
 static uint8_t spi_pin_data[2] = { 0, 0 };
+#endif
 
 static void spi_initialize() {
+#ifdef CONFIG_SPI_GPIOEXP
     spi_bus_config_t hspi_busconf = {
         .mosi_io_num = PIN_HMOSI,
         .miso_io_num = PIN_HMISO,
@@ -577,24 +669,24 @@ static void spi_initialize() {
     ESP_ERROR_CHECK( spi_bus_add_device(HSPI_HOST, &devconf, &spi_pin_hdlr) );
     uint8_t spi_pin_data_len = sizeof(spi_pin_data) / sizeof(spi_pin_data[0]);
     spi_pin_trans.length = spi_pin_data_len * 8; // in bits;
-    // if (spi_pin_data_len <= 4) {
-    //     spi_pin_data = spi_pin_trans.tx_data;
-    //     for (uint16_t i = 0; i < spi_pin_data_len; i++) spi_pin_data[i] = 0;
-    //     spi_pin_trans.flags = SPI_TRANS_USE_TXDATA;
-    // } else {
-        spi_pin_trans.tx_buffer = spi_pin_data;
-    // }
+    spi_pin_trans.tx_buffer = spi_pin_data;
+#endif // CONFIG_SPI_GPIOEXP
 }
 
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
+#ifdef CONFIG_SPI_GPIOEXP
     int pin = pin_num - PIN_SPI_MIN - 1;
     if (0 > pin || pin > PIN_SPI_MAX) return ESP_ERR_INVALID_ARG;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = spi_pin_data + idx;
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
+#else
+    return ESP_ERR_NOT_FOUND;
+#endif // CONFIG_SPI_GPIOEXP
 }
 
 esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
+#ifdef CONFIG_SPI_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_SPI_MIN - 1;
     if (0 > pin || pin > PIN_SPI_MAX) return err;
@@ -604,6 +696,9 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
     if (!err)
         *level = spi_pin_data[idx] & mask;
     return err;
+#else
+    return ESP_ERR_NOT_FOUND;
+#endif // CONFIG_SPI_GPIOEXP
 }
 
 // GPIO Interrupt
@@ -611,10 +706,10 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 // static void IRAM_ATTR gpio_isr_endstop(void *arg) {
 //     i2c_trans(NUM_I2C, i2c_pin_addr[0], I2C_MASTER_READ, i2c_pin_data + 0, 1);
 //     static char buf[9]; itoa(i2c_pin_data[0], buf, 2);
-//     printf("Endstops value: 0b%s", buf);
+//     printf("I2C GPIO Expander value: 0b%s", buf);
 // }
 //
-// static void gpio_initialize() {
+static void gpio_initialize() {
 //     gpio_config_t inp_conf = {
 //         .pin_bit_mask = BIT64(PIN_INT),
 //         .mode         = GPIO_MODE_INPUT,
@@ -625,7 +720,7 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 //     ESP_ERROR_CHECK( gpio_config(&inp_conf) );
 //     ESP_ERROR_CHECK( gpio_install_isr_service(0) );
 //     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
-// }
+}
 
 esp_err_t gpioext_set_level(int pin, bool level) {
     if (pin < 40)
@@ -725,6 +820,7 @@ esp_err_t twdt_feed() {
 
 void driver_initialize() {
     pwm_initialize();
+    adc_initialize();
     led_initialize();
 
     i2c_initialize();
@@ -732,8 +828,8 @@ void driver_initialize() {
     als_initialize();
     scn_initialize();
 
-    // spi_initialize();
-    // gpio_initialize();
+    spi_initialize();
+    gpio_initialize();
     uart_initialize();
     twdt_initialize();
 }

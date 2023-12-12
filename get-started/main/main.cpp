@@ -26,7 +26,7 @@ void init() {
     ESP_LOGI(TAG, "Init Configuration");        config_initialize();
     ESP_LOGI(TAG, "Init OTA Updation");         ota_initialize();
     ESP_LOGI(TAG, "Init File Systems");         fs_initialize();
-    ESP_LOGI(TAG, "Init Network Connection");   network_initialize();
+    ESP_LOGI(TAG, "Init Network Connection");   network_initialize();   // 89040 Bytes
     ESP_LOGI(TAG, "Init Hardware Drivers");     driver_initialize();
     ESP_LOGI(TAG, "Init Command Line Console"); console_initialize();
     fflush(stdout);

@@ -13,6 +13,14 @@
  *  /ws     POST    Websocket connection point: messages are parsed as JSON
  *  /cmd    POST    Manually send in command string just like using console
  *
+ * Static files:
+ *  Name    Method  Description
+ *  /       GET     Serve static files from /flashfs/root/ folder
+ *  /sta    GET     Serve static files from /flashfs/sta/ folder
+ *  /ap     GET     Serve static files from /flashfs/ap/ folder (auth needed)
+ *  /upload GET     Serve static files from /flashfs/data/ folder
+ *  /assets GET     Serve static files from /flashfs/src/ folder
+ *
  * softAP only:
  *  Name    Method  Description
  *  /config GET     Get JSON string of configuration entries
