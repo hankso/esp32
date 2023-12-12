@@ -130,7 +130,8 @@ extern "C" {
 #define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
 #define LPCHR(c, n)             { LOOPN(x, (n)) putchar(c); putchar('\n'); }
 #define TRYFREE(p)              { if (p) free(p); (p) = NULL; }
-#define PACKED                  __attribute__((__packed__))
+#define MAYBE_UNUSED            __attribute__((unused))
+#define PACKED                  __attribute__((packed))
 #define FALLTH                  __attribute__((fallthrough))
 
 

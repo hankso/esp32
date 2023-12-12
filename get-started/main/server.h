@@ -18,7 +18,7 @@
  *  /       GET     Serve static files from /flashfs/root/ folder
  *  /ap     GET     Serve static files from /flashfs/ap/ folder (auth needed)
  *  /sta    GET     Serve static files from /flashfs/sta/ folder
- *  /upload GET     Serve static files from /flashfs/data/ folder
+ *  /data   GET     Serve static files from /flashfs/data/ folder
  *  /assets GET     Serve static files from /flashfs/src/ folder
  *
  * SoftAP only:
