@@ -220,7 +220,7 @@ static void wifi_print_aplist() {
 static esp_err_t wifi_find_ap(const char *ssid, uint8_t *bssid, wifi_ap_record_t *record) {
     esp_err_t err;
     wifi_ap_record_t *aps;
-    wifi_scan_config_t scan_config = { .ssid = ssid };
+    wifi_scan_config_t scan_config = { .ssid = (uint8_t *)ssid };
     xEventGroupSetBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
     uint16_t nap = 0, found = 0;
     if (
@@ -425,7 +425,7 @@ esp_err_t wifi_sta_scan(const char * ssid, uint8_t channel, uint16_t timeout_ms)
     if (err || ( err = esp_wifi_scan_stop() )) return err;
     esp_wifi_clear_ap_list();
     wifi_scan_config_t scan_config = {
-        .ssid = ssid,
+        .ssid = (uint8_t *)ssid,
         .channel = channel,
         .show_hidden = true
     };

@@ -164,16 +164,16 @@ void hardware_info() {
     esp_chip_info(&info);
     printf(
         "Chip UID: %s-%s\n"
-        "  model: %s\n"
-        "  cores: %d\n"
-        "  revision: %d\n"
-        "  feature: %s %s flash%s%s%s\n",
+        "   Model: %s\n"
+        "   Cores: %d\n"
+        "Revision: %d\n"
+        "  Feature: %s %s flash%s%s%s\n",
         Config.info.NAME, Config.info.UID,
         info.model == CHIP_ESP32 ? "ESP32" : "???",
         info.cores, info.revision,
         format_size(spi_flash_get_chip_size(), false),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
-        info.features & CHIP_FEATURE_WIFI_BGN ? " | 802.11bgn" : "",
+        info.features & CHIP_FEATURE_WIFI_BGN ? " | WiFi 802.11bgn" : "",
         info.features & CHIP_FEATURE_BLE ? " | BLE" : "",
         info.features & CHIP_FEATURE_BT ? " | BT" : ""
     );

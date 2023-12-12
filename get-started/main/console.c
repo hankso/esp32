@@ -196,17 +196,17 @@ void console_loop_begin(int xCoreID) {
     }
 }
 
-static char * rpc_error(double code, const char *msg) {
+static char * rpc_error(double code, const char *errstr) {
     cJSON *rep = cJSON_CreateObject(), *error;
     cJSON_AddNullToObject(rep, "id");
     cJSON_AddItemToObject(rep, "error", error = cJSON_CreateObject());
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(error, "code", code);
-    cJSON_AddStringToObject(error, "message", msg);
-    char *msg = cJSON_PrintUnformatted(rep);
+    cJSON_AddStringToObject(error, "message", errstr);
+    char *ret = cJSON_PrintUnformatted(rep);
     cJSON_Delete(rep);
     cJSON_Delete(error);
-    return msg;
+    return ret;
 }
 
 static char * rpc_response(cJSON *id, const char *result) {
@@ -218,20 +218,20 @@ static char * rpc_response(cJSON *id, const char *result) {
     }
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddStringToObject(rep, "result", result);
-    char *msg = cJSON_PrintUnformatted(rep);
+    char *ret = cJSON_PrintUnformatted(rep);
     cJSON_Delete(rep);
-    return msg;
+    return ret;
 }
 
 char * console_handle_rpc(const char *json) {
-    char *msg = NULL, *cmd = NULL, *ret = NULL;
+    char *ret = NULL, *cmd = NULL, *tmp = NULL;
     cJSON *obj = cJSON_Parse(json);
     if (!obj) {
-        msg = rpc_error(-32700, "Parse Error");
+        ret = rpc_error(-32700, "Parse Error");
         goto exit;
     }
     if (!cJSON_HasObjectItem(obj, "method")) {
-        msg = rpc_error(-32600, "Invalid JSON");
+        ret = rpc_error(-32600, "Invalid JSON");
         goto exit;
     }
     if (!cJSON_HasObjectItem(obj, "params")) {  // command without arguments
@@ -239,7 +239,7 @@ char * console_handle_rpc(const char *json) {
     } else {                                    // command with arguments
         cJSON *params = cJSON_GetObjectItem(obj, "params");
         if (!cJSON_IsArray(params)) {
-            msg = rpc_error(-32600, "Invalid Request");
+            ret = rpc_error(-32600, "Invalid Request");
             goto exit;
         }
         size_t size = 0; FILE *buf = open_memstream(&cmd, &size);
@@ -250,17 +250,17 @@ char * console_handle_rpc(const char *json) {
         fclose(buf);
     }
     if (!cmd) {                                 // command not parsed from json
-        msg = rpc_error(-32400, "System Error");
+        ret = rpc_error(-32400, "System Error");
         goto exit;
     }
     ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
-    ret = console_handle_command(cmd, false);
+    tmp = console_handle_command(cmd, false);
     if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
-        msg = rpc_response(cJSON_GetObjectItem(obj ,"id"), ret ? ret : "");
+        ret = rpc_response(cJSON_GetObjectItem(obj ,"id"), tmp ? tmp : "");
 exit:
+    if (tmp) free(tmp);
     if (cmd) free(cmd);
-    if (ret) free(ret);
-    return msg;
+    return ret;
 }
 
 // THE END

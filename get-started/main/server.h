@@ -16,12 +16,12 @@
  * Static files:
  *  Name    Method  Description
  *  /       GET     Serve static files from /flashfs/root/ folder
- *  /sta    GET     Serve static files from /flashfs/sta/ folder
  *  /ap     GET     Serve static files from /flashfs/ap/ folder (auth needed)
+ *  /sta    GET     Serve static files from /flashfs/sta/ folder
  *  /upload GET     Serve static files from /flashfs/data/ folder
  *  /assets GET     Serve static files from /flashfs/src/ folder
  *
- * softAP only:
+ * SoftAP only:
  *  Name    Method  Description
  *  /config GET     Get JSON string of configuration entries
  *  /config POST    Overwrite configuration options
