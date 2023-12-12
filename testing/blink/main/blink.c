@@ -1,5 +1,5 @@
 /*************************************************************************
-File: ${ESP_PATH}/projects/get-started/esp-idf/main/blink.c
+File: ${ESP_PATH}/projects/testing/blink/main/blink.c
 Author: Hankso
 Page: http://github.com/hankso
 Time: Fri 25 Jan 2019 15:09:44 CST
