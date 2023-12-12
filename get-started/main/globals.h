@@ -136,6 +136,7 @@ extern "C" {
 
 
 // Utilities (implemented in utils.c)
+void msleep(uint32_t ms);
 bool strbool(const char *);
 char * cast_away_const(const char*);
 char * cast_away_const_force(const char*);

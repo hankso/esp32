@@ -125,7 +125,7 @@ void onUpdateHelper(AsyncWebServerRequest *req) {
         const char *error = ota_updation_error();
         if (error) return req->send(400, "text/plain", error);
         req->send(200, "text/plain", "OTA Updation success - reboot");
-        vTaskDelay(pdMS_TO_TICKS(500));
+        msleep(500);
         esp_restart();
     }
 }

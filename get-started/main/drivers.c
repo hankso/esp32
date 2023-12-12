@@ -581,7 +581,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
             for (int h = 0; h < 180; h += 5) {
                 int htmp = i % 2 ? (180 - h) : h; // S line scanning
                 if (( err = pwm_degree(htmp, v) )) return err;
-                vTaskDelay(50 / portTICK_PERIOD_MS);
+                msleep(50);
                 btmp[0] = als_brightness(idx);
                 ESP_LOGD(TAG, "H %3d V %3d %8.2f lux\n", htmp, v, btmp[0]);
                 if (btmp[0] > bmax) {
@@ -595,7 +595,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     case ALS_TRACK_H:           // minimize difference of east and west
         for (int h = 0; h < 180; h += 15) {
             if (( err = pwm_degree(h, -1) )) return err;
-            vTaskDelay(200 / portTICK_PERIOD_MS);
+            msleep(200);
             if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
             if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
@@ -607,7 +607,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     case ALS_TRACK_V:           // minimize difference of north and south
         for (int v = 0; v < 90; v += 9) {
             if (( err = pwm_degree(-1, v) )) return err;
-            vTaskDelay(200 / portTICK_PERIOD_MS);
+            msleep(200);
             if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
             if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
@@ -768,7 +768,7 @@ void gpio_table(bool i2c, bool spi) {
 
 static void uart_initialize() {
     fflush(stdout); fflush(stderr);
-    vTaskDelay(pdMS_TO_TICKS(10));
+    msleep(10);
 
     // UART driver configuration
     uart_config_t uart_conf = {

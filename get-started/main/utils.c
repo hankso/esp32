@@ -16,6 +16,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
+
 char * cast_away_const(const char *str) {
     return strdup(str);
 }

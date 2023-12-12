@@ -520,8 +520,28 @@ static int driver_als(int argc, char **argv) {
 #endif // CONSOLE_DRIVER_ALS
 
 #ifdef CONSOLE_DRIVER_ADC
+static struct {
+    struct arg_int *tdly;
+    struct arg_int *tout;
+    struct arg_end *end;
+} driver_adc_args = {
+    .tdly = arg_int0("d", NULL, "<10-1000>", "Delay in ms"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "Timeout in sec"),
+    .end = arg_end(2)
+};
+
 static int driver_adc(int argc, char **argv) {
-    printf("ADC value: %umV\n", adc_read());
+    if (!arg_noerror(argc, argv, (void **) &driver_adc_args))
+        return ESP_ERR_INVALID_ARG;
+    uint16_t delay_ms = ARG_INT(driver_adc_args.tdly, 500);
+    uint32_t timeout_ms = ARG_INT(driver_adc_args.tout, 0) * 1000;
+    do {
+        printf("ADC value: %umV\n", adc_read());
+        if (timeout_ms > delay_ms) {
+            msleep(delay_ms);
+            timeout_ms -= delay_ms;
+        }
+    } while (timeout_ms);
     return ESP_OK;
 }
 #endif
@@ -588,7 +608,7 @@ static void register_driver() {
             .help = "Read ADC and calculate value in mV",
             .hint = NULL,
             .func = &driver_adc,
-            .argtable = NULL,
+            .argtable = &driver_adc_args
         },
 #endif
 #ifdef CONSOLE_DRIVER_PWM
