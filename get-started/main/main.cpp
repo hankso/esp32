@@ -51,7 +51,7 @@ void loop() {
     tick_next += 300 * portTICK_PERIOD_MS;
 
     twdt_feed();
-    led_set_light(0, led_get_light(0) ? 0 : 1);
+    led_set_light(0, led_get_light(0) ? 0 : 100);
     scn_progbar((count += 2) / 255.0 * 100); // draw on screen
 }
 

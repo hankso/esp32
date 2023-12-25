@@ -10,6 +10,7 @@
 #include "globals.h"
 
 #include "esp_err.h"
+#include "driver/gpio.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -28,8 +29,11 @@ extern "C" {
 #define NUM_UART    UART_NUMBER(CONFIG_UART_NUM)
 
 #define PIN_LED     GPIO_NUMBER(CONFIG_GPIO_LED)
+#define PIN_BTN     GPIO_NUMBER(CONFIG_GPIO_BTN)
+
 #define PIN_SVOH    GPIO_NUMBER(CONFIG_GPIO_SERVOH)
 #define PIN_SVOV    GPIO_NUMBER(CONFIG_GPIO_SERVOV)
+
 #define PIN_SDA0    GPIO_NUMBER(CONFIG_GPIO_I2C_SDA)
 #define PIN_SCL0    GPIO_NUMBER(CONFIG_GPIO_I2C_SCL)
 #define PIN_SDA1    GPIO_NUMBER(CONFIG_GPIO_SCN_SDA)
@@ -43,8 +47,8 @@ extern "C" {
 
 void driver_initialize();
 
-esp_err_t led_set_light(int index, float brightness);
-float led_get_light(int index);
+esp_err_t led_set_light(int index, uint8_t percent);
+uint8_t led_get_light(int index);
 esp_err_t led_set_color(int index, uint32_t color);
 uint32_t led_get_color(int index);
 
@@ -97,7 +101,7 @@ esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val);
 // We use PCF8574 for IO expansion: Endstops | Temprature | Valves
 
 typedef enum {
-    PIN_I2C_MIN = 99,
+    PIN_I2C_BASE = GPIO_PIN_COUNT,
 
 /*
     // endstops
@@ -113,15 +117,17 @@ typedef enum {
     PIN_VLV5, PIN_VLV6, PIN_VLV7, PIN_VLV8,
 */
 
-    PIN_I2C_MAX
+    PIN_I2C_MAX, PIN_I2C_MIN = PIN_I2C_BASE + 1
 } i2c_pin_num_t;
+
+#define PIN_IS_I2CEXP(n) ( (n) >= PIN_I2C_MIN && (n) < PIN_I2C_MAX )
 
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin, bool level);
 esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin, bool * level, bool sync);
 
 // IO expansion by 74HC595 (SPI connection): Steppers
 typedef enum {
-    PIN_SPI_MIN = 199,
+    PIN_SPI_BASE = PIN_I2C_BASE + 40,
 
 /*
     // stepper direction & step (pulse)
@@ -132,8 +138,10 @@ typedef enum {
     PIN_XYZEN, PIN_E1EN, PIN_E2EN,  PIN_E3EN,
 */
 
-    PIN_SPI_MAX
+    PIN_SPI_MAX, PIN_SPI_MIN = PIN_SPI_BASE + 1
 } spi_pin_num_t;
+
+#define PIN_IS_SPIEXP(n) ( (n) >= PIN_SPI_MIN && (n) < PIN_SPI_MAX )
 
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin, bool level);
 esp_err_t spi_gpio_get_level(spi_pin_num_t pin, bool * level, bool sync);

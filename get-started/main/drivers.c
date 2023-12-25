@@ -40,39 +40,58 @@ static const char *TAG = "Driver";
 
 #ifdef CONFIG_BLINK_LED_RMT
 
+typedef struct {
+    uint8_t p, r, g, b;
+} led_color_t;
+
 static led_strip_t * led_strip;
+static led_color_t * led_color;
 
 static void led_initialize() {
-    led_strip = led_strip_init(CONFIG_BLINK_LED_RMT_CHANNEL, PIN_LED, 1);
+    led_color = calloc(CONFIG_LED_NUM, sizeof(led_color_t));
+    if (!led_color)
+        return;
+    led_strip = led_strip_init(CONFIG_BLINK_LED_RMT_CHANNEL, PIN_LED, CONFIG_LED_NUM);
     if (led_strip)
         led_strip->clear(led_strip, 50); // timeout = 50ms
 }
 
-esp_err_t led_set_light(int index, float brightness) {
-    if (!led_strip)
-        return ESP_ERR_INVALID_STATE;
-    if (brightness) {
-        // TODO: record brightness
-        return led_strip->refresh(led_strip, 100);
-    }
-    return led_strip->clear(led_strip, 50);
-}
-
-float led_get_light(int index) { return 0; }
-
-esp_err_t led_set_color(int index, uint32_t color) {
-    if (!led_strip)
-        return ESP_ERR_INVALID_STATE;
-    if (color > 0xFFFFFF)
-        return ESP_ERR_INVALID_ARG;
-    uint8_t r = (color >> 16) & 0xFF;
-    uint8_t g = (color >> 8) & 0xFF;
-    uint8_t b = color & 0xFF;
+static esp_err_t led_flush(int index) {
+    uint8_t
+        p = led_color[index].p,
+        r = led_color[index].r * p / 100,
+        g = led_color[index].g * p / 100,
+        b = led_color[index].b * p / 100;
     led_strip->set_pixel(led_strip, index, r, g, b);
     return led_strip->refresh(led_strip, 100);
 }
 
-uint32_t led_get_color(int index) { return 0; }
+esp_err_t led_set_light(int index, uint8_t percent) {
+    if (!led_strip) return ESP_ERR_INVALID_STATE;
+    if (index < 0 || index >= CONFIG_LED_NUM) return ESP_ERR_INVALID_ARG;
+    led_color[index].p = percent;
+    return led_flush(index);
+}
+
+uint8_t led_get_light(int index) {
+    if (!led_strip || index < 0 || index >= CONFIG_LED_NUM) return 0;
+    return led_color[index].p;
+}
+
+esp_err_t led_set_color(int index, uint32_t color) {
+    if (!led_strip) return ESP_ERR_INVALID_STATE;
+    if (index < 0 || index >= CONFIG_LED_NUM) return ESP_ERR_INVALID_ARG;
+    if (color > 0xFFFFFF) return ESP_ERR_INVALID_ARG;
+    led_color[index].r = (color >> 16) & 0xFF;
+    led_color[index].g = (color >> 8) & 0xFF;
+    led_color[index].b = color & 0xFF;
+    return led_flush(index);
+}
+
+uint32_t led_get_color(int index) {
+    if (!led_strip || index < 0 || index >= CONFIG_LED_NUM) return 0;
+    return (led_color[index].r << 16) | (led_color[index].g << 8) | led_color[index].b;
+}
 
 #elif CONFIG_BLINK_LED_GPIO
 
@@ -81,12 +100,12 @@ static void led_initialize() {
     gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT);
 }
 
-esp_err_t led_set_light(int index, float brightness) {
-    return gpio_set_level(PIN_LED, !!brightness);
+esp_err_t led_set_light(int index, uint8_t percent) {
+    return gpio_set_level(PIN_LED, !!percent);
 }
 
-float led_get_light(int index) {
-    return gpio_get_level(PIN_LED) ? 1 : 0;
+uint8_t led_get_light(int index) {
+    return gpio_get_level(PIN_LED);
 }
 
 esp_err_t led_set_color(int index, uint32_t color) {
@@ -106,7 +125,7 @@ static esp_adc_cal_characteristics_t adc_chars;
 static const adc_unit_t adc_unit = ADC_UNIT_1;              // ADC 1
 static const adc_atten_t adc_atten = ADC_ATTEN_DB_11;       // 0.15-2.45V
 static const adc_bits_width_t adc_width = ADC_WIDTH_BIT_12; // Dmax=4095
-static const adc1_channel_t adc_chan = ADC1_CHANNEL_6;
+static const adc1_channel_t adc_chan = ADC1_CHANNEL_6;      // Pin 34
 #endif
 
 static void adc_initialize() {
@@ -349,7 +368,9 @@ void i2c_detect(int bus) {
     }
 }
 
-static esp_err_t i2c_trans(int bus, uint8_t addr, uint8_t rw, uint8_t *data, size_t size) {
+static esp_err_t MAYBE_UNUSED i2c_trans(int bus, uint8_t addr,
+                                        uint8_t rw, uint8_t *data, size_t size)
+{
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | rw, true);
@@ -380,8 +401,8 @@ static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
 
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
 #ifdef CONFIG_I2C_GPIOEXP
-    int pin = pin_num - PIN_I2C_MIN - 1;
-    if (0 > pin || pin > PIN_I2C_MAX) return ESP_ERR_INVALID_ARG;
+    if (!PIN_IS_I2CEXP(pin_num)) return ESP_ERR_INVALID_ARG;
+    int pin = pin_num - PIN_I2C_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, datp, 1);
@@ -393,8 +414,8 @@ esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
 esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
 #ifdef CONFIG_I2C_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    int pin = pin_num - PIN_I2C_MIN - 1;
-    if (0 > pin || pin > PIN_I2C_MAX) return err;
+    if (!PIN_IS_I2CEXP(pin_num)) return err;
+    int pin = pin_num - PIN_I2C_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
     if (sync)
         err = i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, datp, 1);
@@ -658,7 +679,7 @@ static void spi_initialize() {
         .cs_ena_posttrans = 0,
         .clock_speed_hz = 5 * 1000 * 1000,  // 5MHz
         .input_delay_ns = 0,
-        .spics_io_num = PIN_HCS0,
+        .spics_io_num = PIN_HCS1,
         .flags = 0,
         .queue_size = 1,                    // only one transaction allowed
         .pre_cb = NULL,
@@ -675,8 +696,8 @@ static void spi_initialize() {
 
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
 #ifdef CONFIG_SPI_GPIOEXP
-    int pin = pin_num - PIN_SPI_MIN - 1;
-    if (0 > pin || pin > PIN_SPI_MAX) return ESP_ERR_INVALID_ARG;
+    if (!PIN_IS_SPIEXP(pin_num)) return ESP_ERR_INVALID_ARG;
+    int pin = pin_num - PIN_SPI_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = spi_pin_data + idx;
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
@@ -688,8 +709,8 @@ esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
 esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 #ifdef CONFIG_SPI_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    int pin = pin_num - PIN_SPI_MIN - 1;
-    if (0 > pin || pin > PIN_SPI_MAX) return err;
+    if (!PIN_IS_SPIEXP(pin_num)) return err;
+    int pin = pin_num - PIN_SPI_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7);
     if (sync)
         err = spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
@@ -703,64 +724,100 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 
 // GPIO Interrupt
 
-// static void IRAM_ATTR gpio_isr_endstop(void *arg) {
-//     i2c_trans(NUM_I2C, i2c_pin_addr[0], I2C_MASTER_READ, i2c_pin_data + 0, 1);
-//     static char buf[9]; itoa(i2c_pin_data[0], buf, 2);
-//     printf("I2C GPIO Expander value: 0b%s", buf);
-// }
-//
+static void IRAM_ATTR gpio_isr_endstop(void *arg) {
+    // static char buf[9];
+#ifdef CONFIG_I2C_GPIOEXP
+    for (uint8_t idx = 0; idx < sizeof(i2c_pin_data); idx++) {
+        i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, i2c_pin_data + idx, 1);
+        // itoa(i2c_pin_data[idx], buf, 2);
+        // ESP_LOGI(TAG, "I2C GPIO Expander value: 0b%s", buf);
+    }
+#endif // CONFIG_I2C_GPIOEXP
+#ifdef CONFIG_SPI_GPIOEXP
+    if (!spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans)) {
+        // ESP_LOGI(TAG, "SPI GPIO Expander value: 0b%s", buf);
+    }
+#endif // CONFIG_SPI_GPIOEXP
+    ets_printf("PIN_BTN %s\n", gpio_get_level(PIN_BTN) ? "RISE" : "FALL");
+}
+
 static void gpio_initialize() {
-//     gpio_config_t inp_conf = {
-//         .pin_bit_mask = BIT64(PIN_INT),
-//         .mode         = GPIO_MODE_INPUT,
-//         .pull_up_en   = GPIO_PULLUP_ENABLE,
-//         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-//         .intr_type    = GPIO_INTR_NEGEDGE,
-//     };
-//     ESP_ERROR_CHECK( gpio_config(&inp_conf) );
-//     ESP_ERROR_CHECK( gpio_install_isr_service(0) );
-//     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
+    gpio_config_t inp_conf = {
+        .pin_bit_mask = BIT64(PIN_BTN),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_ANYEDGE,
+    };
+    ESP_ERROR_CHECK( gpio_config(&inp_conf) );
+    ESP_ERROR_CHECK( gpio_install_isr_service(0) );
+    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_BTN, gpio_isr_endstop, NULL) );
 }
 
 esp_err_t gpioext_set_level(int pin, bool level) {
-    if (pin < 40)
-        return gpio_set_level(pin, level);
-    if (PIN_I2C_MIN < pin && pin < PIN_I2C_MAX)
-        return i2c_gpio_set_level(pin, level);
-    if (PIN_SPI_MIN < pin && pin < PIN_SPI_MAX)
-        return spi_gpio_set_level(pin, level);
+    if (GPIO_IS_VALID_GPIO(pin))    return gpio_set_level(pin, level);
+    if (PIN_IS_I2CEXP(pin))         return i2c_gpio_set_level(pin, level);
+    if (PIN_IS_SPIEXP(pin))         return spi_gpio_set_level(pin, level);
     return ESP_ERR_INVALID_ARG;
 }
 
 esp_err_t gpioext_get_level(int pin, bool * level, bool sync) {
-    if (pin < 40) {
+    if (GPIO_IS_VALID_GPIO(pin)) {
         *level = gpio_get_level(pin);
         return ESP_OK;
     }
-    if (PIN_I2C_MIN < pin && pin < PIN_I2C_MAX)
-        return i2c_gpio_get_level(pin, level, sync);
-    if (PIN_SPI_MIN < pin && pin < PIN_SPI_MAX)
-        return spi_gpio_get_level(pin, level, sync);
+    if (PIN_IS_I2CEXP(pin)) return i2c_gpio_get_level(pin, level, sync);
+    if (PIN_IS_SPIEXP(pin)) return spi_gpio_get_level(pin, level, sync);
     return ESP_ERR_INVALID_ARG;
 }
 
+static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
+    [0]         = "Strapping",
+    [1]         = "UART TXD",
+    [2]         = "Strapping",
+    [3]         = "UART RXD",
+    [5]         = "Strapping",
+    [34]        = "ADC1 Channel6",
+    [PIN_LED]   = "LED",
+    [PIN_BTN]   = "Button",
+    [PIN_SVOH]  = "Servo Yaw",
+    [PIN_SVOV]  = "Servo Pitch",
+    [PIN_SDA0]  = "I2C0 SDA",
+    [PIN_SCL0]  = "I2C0 SCL",
+    [PIN_SDA1]  = "I2C1 SDA",
+    [PIN_SCL1]  = "I2C1 SCL",
+    [PIN_HMISO] = "HSPI MISO",
+    [PIN_HMOSI] = "HSPI MOSI",
+    [PIN_HSCLK] = "HSPI SCLK",
+    [PIN_HCS0]  = "HSPI CS0 (SDCard)",
+    [PIN_HCS1]  = "HSPI CS1 (GPIOExp)",
+};
+
 void gpio_table(bool i2c, bool spi) {
-    for (gpio_num_t pin = 0; pin < 40; pin++) {
-        printf("GPIO %d: %s\n", pin, gpio_get_level(pin) ? "HIGH" : "LOW");
-    }
     bool level;
     esp_err_t err;
-    for (i2c_pin_num_t pin = PIN_I2C_MIN + 1; i2c && pin < PIN_I2C_MAX; pin++) {
-        if (( err = i2c_gpio_get_level(pin, &level, false) ))
-            printf("GPIO %d: %s\n", pin, esp_err_to_name(err));
-        else
-            printf("GPIO %d: %s\n", pin, level ? "HIGH" : "LOW");
+    const char * value;
+    for (gpio_num_t pin = 0; pin < GPIO_PIN_COUNT; pin++) {
+        if (!pin)
+            printf("Native GPIO %d-%d\nPIN Value Usage\n", 0, GPIO_PIN_COUNT - 1);
+        if (!GPIO_IS_VALID_GPIO(pin))
+            continue;
+        value = gpio_get_level(pin) ? "HIGH" : "LOW";
+        printf("%-3d %5s %s\n", pin, value, gpio_default_usage[pin] ?: "");
     }
-    for (spi_pin_num_t pin = PIN_SPI_MIN + 1; spi && pin < PIN_SPI_MAX; pin++) {
-        if (( err = spi_gpio_get_level(pin, &level, false) ))
-            printf("GPIO %d: %s\n", pin, esp_err_to_name(err));
-        else
-            printf("GPIO %d: %s\n", pin, level ? "HIGH" : "LOW");
+    for (i2c_pin_num_t pin = PIN_I2C_MIN; i2c && pin < PIN_I2C_MAX; pin++) {
+        if (pin == PIN_I2C_MIN)
+            printf("\nI2C GPIO EXP %d-%d\nPIN Value\n", PIN_I2C_MIN, PIN_I2C_MAX - 1);
+        err = i2c_gpio_get_level(pin, &level, false);
+        value = err ? esp_err_to_name(err) : (level ? "HIGH" : "LOW");
+        printf("%-3d %5s\n", pin, value);
+    }
+    for (spi_pin_num_t pin = PIN_SPI_MIN; spi && pin < PIN_SPI_MAX; pin++) {
+        if (pin == PIN_SPI_MIN)
+            printf("\nSPI GPIO EXP %d-%d\nPIN Value\n", PIN_SPI_MIN, PIN_SPI_MAX - 1);
+        err = spi_gpio_get_level(pin, &level, false);
+        value = err ? esp_err_to_name(err) : (level ? "HIGH" : "LOW");
+        printf("%-3d %5s\n", pin, value);
     }
 }
 

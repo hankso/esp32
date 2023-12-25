@@ -20,6 +20,7 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "rom/uart.h"
+#include "sys/param.h"
 #include "driver/i2c.h"
 #include "driver/uart.h"
 #include "driver/gpio.h"
@@ -355,7 +356,7 @@ static int driver_led(int argc, char **argv) {
         if (strstr(subcmd, "off")) {
             led_set_light(idx, 0);
         } else if (strstr(subcmd, "on")) {
-            led_set_light(idx, 1);
+            led_set_light(idx, 100);
         } else {
             printf("Invalid command: `%s`\n", subcmd);
             return ESP_ERR_INVALID_ARG;
@@ -533,15 +534,20 @@ static struct {
 static int driver_adc(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &driver_adc_args))
         return ESP_ERR_INVALID_ARG;
-    uint16_t delay_ms = ARG_INT(driver_adc_args.tdly, 500);
-    uint32_t timeout_ms = ARG_INT(driver_adc_args.tout, 0) * 1000;
-    do {
-        printf("ADC value: %umV\n", adc_read());
-        if (timeout_ms > delay_ms) {
+    if (!driver_adc_args.tout->count) {
+        printf("ADC value: %4umV\n", adc_read());
+    } else {
+        uint16_t delay_ms = ARG_INT(driver_adc_args.tdly, 500);
+        uint32_t timeout_ms = driver_adc_args.tout->ival[0] * 1000;
+        delay_ms = MAX(10, MIN(delay_ms, 1000));
+        while (timeout_ms >= delay_ms) {
+            fprintf(stderr, "\rADC value: %4umV", adc_read()); fflush(stderr);
             msleep(delay_ms);
             timeout_ms -= delay_ms;
         }
-    } while (timeout_ms);
+        fputc('\n', stderr);
+        fputc('\n', stdout);
+    }
     return ESP_OK;
 }
 #endif

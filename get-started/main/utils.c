@@ -166,8 +166,8 @@ void hardware_info() {
     esp_chip_info(&info);
     printf(
         "Chip UID: %s-%s\n"
-        "   Model: %s\n"
-        "   Cores: %d\n"
+        "  Model: %s\n"
+        "  Cores: %d\n"
         "Revision: %d\n"
         "  Feature: %s %s flash%s%s%s\n",
         Config.info.NAME, Config.info.UID,
@@ -256,7 +256,7 @@ void partition_info() {
         printf("No partitons found in flash. Skip");
         return;
     }
-    printf("LabelName    Type  SubType Offset   Size     Secure\n");
+    printf("LabelName    Type SubType  Offset   Size     Secure\n");
     while (num--) {
         part = parts[num];
         partition_type_str(part->type, part->subtype, &tstr, &ststr);

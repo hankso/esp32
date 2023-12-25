@@ -16,7 +16,7 @@
 #define CONSOLE_CONFIG_IO           // 2852 Bytes
 
 // #define CONSOLE_DRIVER_LED          // 700 Bytes
-// #define CONSOLE_DRIVER_GPIO         // 700 Bytes
+#define CONSOLE_DRIVER_GPIO         // 700 Bytes
 #define CONSOLE_DRIVER_I2C          // 1436 Bytes
 #define CONSOLE_DRIVER_ALS          // 1920 Bytes
 #define CONSOLE_DRIVER_ADC          // 1424 Bytes
