@@ -91,6 +91,21 @@ const char * format_size(size_t bytes, bool inbit) {
     return buffer;
 }
 
+void cpu_info() {
+#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    char *buf = (char *)calloc(1, 2048);
+    if (!buf) {
+        printf("Cannot allocate space for tasks list");
+        return;
+    }
+    vTaskGetRunTimeStats(buf);
+    puts(buf);
+    free(buf);
+#else
+    printf("Unsupported command! Enable `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` "
+           "in menuconfig/sdkconfig to run this command\n");
+#endif
+}
 
 void task_info() {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY

@@ -35,6 +35,7 @@
 #    define WITH_VLX
 #endif
 #include "led_strip.h"
+#include "iot_knob.h"
 #include "iot_button.h"
 
 static const char *TAG = "Driver";
@@ -249,7 +250,7 @@ static esp_err_t i2c_master_config(int bus, int sda, int scl, int speed) {
         .sda_io_num = sda,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_io_num = scl,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .scl_pullup_en = GPIO_PULLUP_ENABLE
     };
     master_conf.master.clk_speed = speed;
     return i2c_param_config(bus, &master_conf);
@@ -725,17 +726,30 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 // GPIO Interrupt
 
 static button_handle_t btn;
+#ifdef CONFIG_KNOB_INPUT
+static knob_handle_t knob;
+#endif
 
-static void gpio_isr_single_click(void *arg, void *data) {
+static void gpio_cb_single_click(void *arg, void *data) {
     ESP_LOGI(TAG, "Button %d: single click", PIN_BTN);
 }
 
-static void gpio_isr_double_click(void *arg, void *data) {
+static void gpio_cb_double_click(void *arg, void *data) {
     ESP_LOGI(TAG, "Button %d: double click", PIN_BTN);
 }
 
-static void gpio_isr_long_press(void *arg, void *data) {
+static void gpio_cb_long_press(void *arg, void *data) {
     ESP_LOGI(TAG, "Button %d: long press", PIN_BTN);
+}
+
+static void UNUSED gpio_cb_left_rotate(void *arg, void *data) {
+    ESP_LOGI(TAG, "Knob left rotate: %d",
+            iot_knob_get_count_value((button_handle_t)arg));
+}
+
+static void UNUSED gpio_cb_right_rotate(void *arg, void *data) {
+    ESP_LOGI(TAG, "Knob right rotate: %d",
+            iot_knob_get_count_value((button_handle_t)arg));
 }
 
 static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
@@ -762,33 +776,43 @@ static void gpio_initialize() {
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_NEGEDGE,
+        .intr_type    = GPIO_INTR_NEGEDGE
     };
     ESP_ERROR_CHECK( gpio_config(&int_conf) );
     ESP_ERROR_CHECK( gpio_install_isr_service(0) );
     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
 #endif
-    button_cb_t funcs[] = {
-        gpio_isr_single_click,
-        gpio_isr_double_click,
-        gpio_isr_long_press,
+#ifdef CONFIG_KNOB_INPUT
+    knob_cb_t knob_funcs[] = { gpio_cb_left_rotate, gpio_cb_right_rotate };
+    knob_event_t knob_evts[] = { KNOB_LEFT, KNOB_RIGHT };
+    knob_config_t knob_conf = {
+        .default_direction = 0,     // 0:positive; 1:negative
+        .gpio_encoder_a = PIN_ENCA,
+        .gpio_encoder_b = PIN_ENCB
     };
-    button_event_t events[] = {
-        BUTTON_SINGLE_CLICK,
-        BUTTON_DOUBLE_CLICK,
-        BUTTON_LONG_PRESS_START
+    if (!( knob = iot_knob_create(&knob_conf) )) {
+        ESP_LOGE(TAG, "Bind knob to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
+    } else for (uint8_t idx = 0; idx < LEN(knob_evts); idx++) {
+        iot_knob_register_cb(knob, knob_evts[idx], knob_funcs[idx], NULL);
+    }
+#endif
+    button_cb_t btn_funcs[] = {
+        gpio_cb_single_click, gpio_cb_double_click, gpio_cb_long_press
+    };
+    button_event_t btn_evts[] = {
+        BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START
     };
     button_config_t btn_conf = {
         .type = BUTTON_TYPE_GPIO,
         .gpio_button_config = {
             .gpio_num = PIN_BTN,
             .active_level = 1,
-        },
+        }
     };
     if (!( btn = iot_button_create(&btn_conf) )) {
-        ESP_LOGE(TAG, "Listen on GPIO%d failed", PIN_BTN);
-    } else for (uint8_t idx = 0; idx < LEN(events); idx++) {
-        iot_button_register_cb(btn, events[idx], funcs[idx], NULL);
+        ESP_LOGE(TAG, "Bind button to GPIO%d failed", PIN_BTN);
+    } else for (uint8_t idx = 0; idx < LEN(btn_evts); idx++) {
+        iot_button_register_cb(btn, btn_evts[idx], btn_funcs[idx], NULL);
     }
 }
 

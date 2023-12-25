@@ -27,11 +27,12 @@ extern "C" {
 #define CONFIG_DEBUG
 #define CONFIG_AUTO_ALIGN
 #define CONFIG_ADC_INPUT                    // adc_read: 4.6KB
-#define CONFIG_I2C_SCREEN                   // scn_progbar: 4KB
-#define CONFIG_ALS_TRACK                    // als_tracking: 1KB
+#define CONFIG_I2C_SCREEN                   // scn_progbar: 4.0KB
+#define CONFIG_ALS_TRACK                    // als_tracking: 1.0KB
 #define CONFIG_PWM_SERVO                    // pwm_degree: 6.3KB
-// #define CONFIG_VLX_SENSOR                   // vlx_probe: 5KB
-// #define CONFIG_I2C_GPIOEXP                  // i2c_gpio_xxx: 3KB
+// #define CONFIG_KNOB_INPUT                   // knob_input: 2.3KB
+// #define CONFIG_VLX_SENSOR                   // vlx_probe: 5.0KB
+// #define CONFIG_I2C_GPIOEXP                  // i2c_gpio_xxx: 3.0KB
 // #define CONFIG_SPI_GPIOEXP                  // spi_gpio_xxx: 16KB
 // #define CONFIG_OTA_FETCH                    // ota_updation_url: 263KB
 
@@ -122,8 +123,10 @@ extern "C" {
 #endif
 
 #ifndef CONFIG_GPIO_BTN
-#define CONFIG_GPIO_BTN         37
-#define CONFIG_GPIO_INT         38
+#define CONFIG_GPIO_BTN         36
+#define CONFIG_GPIO_ENCA        37
+#define CONFIG_GPIO_ENCB        38
+#define CONFIG_GPIO_INT         39
 #endif
 
 
@@ -155,6 +158,7 @@ const char * format_size(size_t, bool);
 const char * format_mac(const uint8_t*, size_t);
 const char * format_ip(uint32_t, size_t);
 
+void cpu_info();
 void task_info();
 void memory_info();
 void version_info();
