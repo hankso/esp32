@@ -111,10 +111,6 @@ extern "C" {
 #define CONFIG_GPIO_SCN_SCL     19
 #endif
 
-#ifndef CONFIG_GPIO_BTN
-#define CONFIG_GPIO_BTN         23
-#endif
-
 #ifndef CONFIG_GPIO_I2C_SDA
 #define CONFIG_GPIO_I2C_SDA     25
 #define CONFIG_GPIO_I2C_SCL     26
@@ -125,11 +121,16 @@ extern "C" {
 #define CONFIG_GPIO_SERVOH      33
 #endif
 
+#ifndef CONFIG_GPIO_BTN
+#define CONFIG_GPIO_BTN         37
+#define CONFIG_GPIO_INT         38
+#endif
+
 
 #define _STR_IMPL_(x)           #x
 #define STR(x)                  _STR_IMPL_(x)
 #define CASESTR(x, n)           case x: return #x + n;
-#define UNUSED(x)               (void)(x)
+#define NOTUSED(x)              (void)(x)
 #define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
 #define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
 #define LOOP(x, l, h)           for (int (x) = (l); (x) < (h); (x)++)
@@ -138,7 +139,7 @@ extern "C" {
 #define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
 #define LPCHR(c, n)             { LOOPN(x, (n)) putchar(c); putchar('\n'); }
 #define TRYFREE(p)              { if (p) free(p); (p) = NULL; }
-#define MAYBE_UNUSED            __attribute__((unused))
+#define UNUSED                  __attribute__((unused))
 #define PACKED                  __attribute__((packed))
 #define FALLTH                  __attribute__((fallthrough))
 

@@ -30,6 +30,7 @@ extern "C" {
 
 #define PIN_LED     GPIO_NUMBER(CONFIG_GPIO_LED)
 #define PIN_BTN     GPIO_NUMBER(CONFIG_GPIO_BTN)
+#define PIN_INT     GPIO_NUMBER(CONFIG_GPIO_INT)
 
 #define PIN_SVOH    GPIO_NUMBER(CONFIG_GPIO_SERVOH)
 #define PIN_SVOV    GPIO_NUMBER(CONFIG_GPIO_SERVOV)
@@ -101,7 +102,7 @@ esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val);
 // We use PCF8574 for IO expansion: Endstops | Temprature | Valves
 
 typedef enum {
-    PIN_I2C_BASE = GPIO_PIN_COUNT,
+    PIN_I2C_BASE = GPIO_PIN_COUNT - 1,
 
 /*
     // endstops

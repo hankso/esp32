@@ -35,7 +35,7 @@ static const char * const ota_img_states[] = {
     "Running", "OTANext"
 };
 
-static bool MAYBE_UNUSED check_valid() {
+static bool UNUSED check_valid() {
     return true; // TODO: validate app with secure key and signature
 }
 

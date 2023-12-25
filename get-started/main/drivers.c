@@ -35,6 +35,7 @@
 #    define WITH_VLX
 #endif
 #include "led_strip.h"
+#include "iot_button.h"
 
 static const char *TAG = "Driver";
 
@@ -368,7 +369,7 @@ void i2c_detect(int bus) {
     }
 }
 
-static esp_err_t MAYBE_UNUSED i2c_trans(int bus, uint8_t addr,
+static esp_err_t UNUSED i2c_trans(int bus, uint8_t addr,
                                         uint8_t rw, uint8_t *data, size_t size)
 {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -688,8 +689,7 @@ static void spi_initialize() {
     esp_err_t err = spi_bus_initialize(HSPI_HOST, &hspi_busconf, 1);
     assert((!err || err == ESP_ERR_INVALID_STATE) && "SPI init failed");
     ESP_ERROR_CHECK( spi_bus_add_device(HSPI_HOST, &devconf, &spi_pin_hdlr) );
-    uint8_t spi_pin_data_len = sizeof(spi_pin_data) / sizeof(spi_pin_data[0]);
-    spi_pin_trans.length = spi_pin_data_len * 8; // in bits;
+    spi_pin_trans.length = LEN(spi_pin_data) * 8; // in bits;
     spi_pin_trans.tx_buffer = spi_pin_data;
 #endif // CONFIG_SPI_GPIOEXP
 }
@@ -724,10 +724,25 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 
 // GPIO Interrupt
 
-static void IRAM_ATTR gpio_isr_endstop(void *arg) {
+static button_handle_t btn;
+
+static void gpio_isr_single_click(void *arg, void *data) {
+    ESP_LOGI(TAG, "Button %d: single click", PIN_BTN);
+}
+
+static void gpio_isr_double_click(void *arg, void *data) {
+    ESP_LOGI(TAG, "Button %d: double click", PIN_BTN);
+}
+
+static void gpio_isr_long_press(void *arg, void *data) {
+    ESP_LOGI(TAG, "Button %d: long press", PIN_BTN);
+}
+
+static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
     // static char buf[9];
+    ets_printf("PIN_BTN %s\n", gpio_get_level(PIN_BTN) ? "RISE" : "FALL");
 #ifdef CONFIG_I2C_GPIOEXP
-    for (uint8_t idx = 0; idx < sizeof(i2c_pin_data); idx++) {
+    for (uint8_t idx = 0; idx < LEN(i2c_pin_data); idx++) {
         i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, i2c_pin_data + idx, 1);
         // itoa(i2c_pin_data[idx], buf, 2);
         // ESP_LOGI(TAG, "I2C GPIO Expander value: 0b%s", buf);
@@ -738,20 +753,43 @@ static void IRAM_ATTR gpio_isr_endstop(void *arg) {
         // ESP_LOGI(TAG, "SPI GPIO Expander value: 0b%s", buf);
     }
 #endif // CONFIG_SPI_GPIOEXP
-    ets_printf("PIN_BTN %s\n", gpio_get_level(PIN_BTN) ? "RISE" : "FALL");
 }
 
 static void gpio_initialize() {
-    gpio_config_t inp_conf = {
-        .pin_bit_mask = BIT64(PIN_BTN),
+#if defined(CONFIG_I2C_GPIOEXP) || defined(CONFIG_SPI_GPIOEXP)
+    gpio_config_t int_conf = {
+        .pin_bit_mask = BIT64(PIN_INT),
         .mode         = GPIO_MODE_INPUT,
         .pull_up_en   = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type    = GPIO_INTR_ANYEDGE,
+        .intr_type    = GPIO_INTR_NEGEDGE,
     };
-    ESP_ERROR_CHECK( gpio_config(&inp_conf) );
+    ESP_ERROR_CHECK( gpio_config(&int_conf) );
     ESP_ERROR_CHECK( gpio_install_isr_service(0) );
-    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_BTN, gpio_isr_endstop, NULL) );
+    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
+#endif
+    button_cb_t funcs[] = {
+        gpio_isr_single_click,
+        gpio_isr_double_click,
+        gpio_isr_long_press,
+    };
+    button_event_t events[] = {
+        BUTTON_SINGLE_CLICK,
+        BUTTON_DOUBLE_CLICK,
+        BUTTON_LONG_PRESS_START
+    };
+    button_config_t btn_conf = {
+        .type = BUTTON_TYPE_GPIO,
+        .gpio_button_config = {
+            .gpio_num = PIN_BTN,
+            .active_level = 1,
+        },
+    };
+    if (!( btn = iot_button_create(&btn_conf) )) {
+        ESP_LOGE(TAG, "Listen on GPIO%d failed", PIN_BTN);
+    } else for (uint8_t idx = 0; idx < LEN(events); idx++) {
+        iot_button_register_cb(btn, events[idx], funcs[idx], NULL);
+    }
 }
 
 esp_err_t gpioext_set_level(int pin, bool level) {
@@ -780,6 +818,7 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [34]        = "ADC1 Channel6",
     [PIN_LED]   = "LED",
     [PIN_BTN]   = "Button",
+    [PIN_INT]   = "Interrupt",
     [PIN_SVOH]  = "Servo Yaw",
     [PIN_SVOV]  = "Servo Pitch",
     [PIN_SDA0]  = "I2C0 SDA",

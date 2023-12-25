@@ -2,3 +2,5 @@ dist/
 build/
 *.old
 *.lock
+
+managed_components/

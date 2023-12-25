@@ -377,7 +377,7 @@ static struct {
     struct arg_lit *spi;
     struct arg_end *end;
 } driver_gpio_args = {
-    .pin = arg_int0(NULL, NULL, "<0-39|100-123|200-215>", "pin number"),
+    .pin = arg_int0(NULL, NULL, "<0-39|40-79|80-99>", "pin number"),
     .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
     .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
     .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
