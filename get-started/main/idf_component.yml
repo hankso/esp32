@@ -2,6 +2,7 @@
 dependencies:
   espressif/knob: "=*"
   espressif/button: "=*"
+  espressif/led_indicator: "=*"
   ## Required IDF version
   idf:
     version: ">=4.1.0"
