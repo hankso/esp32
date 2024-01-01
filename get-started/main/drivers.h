@@ -30,9 +30,9 @@ extern "C" {
 
 #define PIN_LED     GPIO_NUMBER(CONFIG_GPIO_LED)
 #define PIN_BTN     GPIO_NUMBER(CONFIG_GPIO_BTN)
+#define PIN_INT     GPIO_NUMBER(CONFIG_GPIO_INT)
 #define PIN_ENCA    GPIO_NUMBER(CONFIG_GPIO_ENCA)
 #define PIN_ENCB    GPIO_NUMBER(CONFIG_GPIO_ENCB)
-#define PIN_INT     GPIO_NUMBER(CONFIG_GPIO_INT)
 
 #define PIN_SVOH    GPIO_NUMBER(CONFIG_GPIO_SERVOH)
 #define PIN_SVOV    GPIO_NUMBER(CONFIG_GPIO_SERVOV)
@@ -50,10 +50,11 @@ extern "C" {
 
 void driver_initialize();
 
-esp_err_t led_set_light(int index, uint8_t percent);
+esp_err_t led_set_light(int index, uint8_t brightness);
 uint8_t led_get_light(int index);
 esp_err_t led_set_color(int index, uint32_t color);
 uint32_t led_get_color(int index);
+esp_err_t led_set_blink(int blink_type);
 
 uint32_t adc_read();
 

@@ -83,7 +83,7 @@ static struct {
     .pin = arg_intn("p", "gpio", "<n>", 0, 8, "Wakeup using specified GPIO"),
     .lvl = arg_intn("l", "level", "<0|1>", 0, 8, "GPIO level to trigger wakeup"),
     .mode = arg_str0(NULL, "method", "<light|deep>", "sleep mode"),
-    .end = arg_end(1)
+    .end = arg_end(4)
 };
 
 static int enable_gpio_light_wakeup() {
@@ -187,7 +187,7 @@ static struct {
     .url = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
     .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
     .reset = arg_lit0(NULL, "reset", "clear OTA internal states"),
-    .end = arg_end(1)
+    .end = arg_end(5)
 };
 
 static int system_update(int argc, char **argv) {
@@ -275,7 +275,7 @@ static struct {
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
     .list = arg_lit0(NULL, "list", "list NVS entries"),
-    .end = arg_end(1)
+    .end = arg_end(6)
 };
 
 static int config_io(int argc, char **argv) {
@@ -327,45 +327,76 @@ static void register_config() {
 
 #ifdef CONSOLE_DRIVER_LED
 static struct {
-    struct arg_str *cmd;
     struct arg_int *idx;
+    struct arg_str *lgt;
     struct arg_str *clr;
+    struct arg_int *blk;
     struct arg_end *end;
 } driver_led_args = {
-    .cmd = arg_str0(NULL, NULL, "<on|off>", "enable/disable LED"),
     .idx = arg_int0("i", "index", "<0-20>", "specify index, default 0"),
+    .lgt = arg_str0("l", "light", "<0-255|on|off>", "specify brightness"),
     .clr = arg_str0("c", "color", "<0xAABBCC>", "specify RGB color"),
-    .end = arg_end(1)
+    .blk = arg_int0("b", "blink", "<-1-7>", "specify blink effect"),
+    .end = arg_end(4)
 };
 
 static int driver_led(int argc, char **argv) {
+    static char buf[16];
     if (!arg_noerror(argc, argv, (void **) &driver_led_args))
         return ESP_ERR_INVALID_ARG;
-    uint8_t idx = ARG_INT(driver_led_args.idx, 0);
-    if (driver_led_args.clr->count) {
-        const char *color = driver_led_args.clr->sval[0];
-        uint32_t rgb = strtol(color, NULL, 0);
-        if (rgb > 0xFFFFFF) {
+    esp_err_t err = ESP_OK;
+    int idx = ARG_INT(driver_led_args.idx, -1);
+    int blk = ARG_INT(driver_led_args.blk, -2);
+    const char *light = ARG_STR(driver_led_args.lgt, NULL);
+    const char *color = ARG_STR(driver_led_args.clr, NULL);
+    if (blk > -2) {
+        if (!( err = led_set_blink(blk) )) {
+            if (blk >= 0)
+                printf("LED: set blink to %d\n", blk);
+            else
+                puts("LED: stop blink");
+        }
+        return err;
+    }
+    if (idx < 0) {
+        buf[0] = 0;
+    } else {
+        snprintf(buf, sizeof(buf), " %d", idx);
+    }
+    if (light) {
+        char *ptr;
+        uint8_t brightness = strtol(light, &ptr, 0);
+        if (strstr(light, "off")) {
+            brightness = 0;
+        } else if (strstr(light, "on")) {
+            brightness = 255;
+        } else if (ptr == light) {
+            printf("Invalid brightness: `%s`\n", light);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if (( err = led_set_light(idx, brightness) ))
+            return err;
+        printf("LED%s: set brightness to %d\n", buf, brightness);
+    }
+    if (color) {
+        char *ptr;
+        uint32_t rgb = strtol(color, &ptr, 0);
+        if (ptr == color || rgb > 0xFFFFFF) {
             printf("Unsupported color: `%s`\n", color);
             return ESP_ERR_INVALID_ARG;
         }
-        led_set_color(idx, rgb);
+        if (( err = led_set_color(idx, rgb) ))
+            return err;
+        printf("LED%s: set color to %06X\n", buf, rgb);
     }
-    if (driver_led_args.cmd->count) {
-        const char *subcmd = driver_led_args.cmd->sval[0];
-        if (strstr(subcmd, "off")) {
-            led_set_light(idx, 0);
-        } else if (strstr(subcmd, "on")) {
-            led_set_light(idx, 100);
-        } else {
-            printf("Invalid command: `%s`\n", subcmd);
-            return ESP_ERR_INVALID_ARG;
-        }
-        printf("Setting LED %d to %s\n", idx, subcmd);
+    if (idx >= CONFIG_LED_NUM) {
+        printf("Invalid LED index: `%d`\n", idx);
+        err = ESP_ERR_INVALID_ARG;
+    } else {
+        printf("LED%s: color 0x%06X, brightness %d\n",
+            buf, led_get_color(idx), led_get_light(idx));
     }
-    printf("LED %d: color 0x%06X, brightness %.2f\n",
-            idx, led_get_color(idx), led_get_light(idx));
-    return ESP_OK;
+    return err;
 }
 #endif // CONSOLE_DRIVER_LED
 
@@ -381,7 +412,7 @@ static struct {
     .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
     .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
     .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
-    .end = arg_end(1)
+    .end = arg_end(4)
 };
 
 static int driver_gpio(int argc, char **argv) {
@@ -426,7 +457,7 @@ static struct {
     .val = arg_int0(NULL, NULL, "regval", "Register value"),
     .hex = arg_lit0("w", "word", "R / W in word (16-bit) mode"),
     .len = arg_int0("l", "len", "<num>", "Read specified length of registers"),
-    .end = arg_end(1)
+    .end = arg_end(6)
 };
 
 static int driver_i2c(int argc, char **argv) {
@@ -480,7 +511,7 @@ static struct {
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
     .rlt = arg_str0("t", "track", "<0123HVEOA>", "run light tracking"),
-    .end = arg_end(1)
+    .end = arg_end(2)
 };
 
 static int driver_als(int argc, char **argv) {
@@ -692,7 +723,7 @@ static struct {
 } utils_listdir_args = {
     .dir = arg_str0(NULL, NULL, "abspath", NULL),
     .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
-    .end = arg_end(1)
+    .end = arg_end(2)
 };
 
 static int utils_listdir(int argc, char **argv) {
@@ -730,55 +761,53 @@ static struct {
     .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
     .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
     .dst = arg_str0("f", "file", "history.txt", "relative path to file"),
-    .end = arg_end(1)
+    .end = arg_end(3)
 };
 
 static int utils_history(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &utils_history_args))
         return ESP_ERR_INVALID_ARG;
+    esp_err_t err = ESP_ERR_INVALID_ARG;
     const char *subcmd = utils_history_args.cmd->sval[0];
-    bool save = false;
-    if (strstr(subcmd, "save")) save = true;
-    else if (!strstr(subcmd, "load")) {
+    bool save = false, exists = false;
+    if (strstr(subcmd, "save")) {
+        save = true;
+    } else if (!strstr(subcmd, "load")) {
         printf("Invalid command: `%s`\n", subcmd);
-        return ESP_ERR_INVALID_ARG;
+        return err;
     }
     const char *dev = ARG_STR(utils_history_args.dev, "flash");
     const char *dst = ARG_STR(utils_history_args.dst, "history.txt");
-    size_t plen, len = strlen(Config.web.DIR_DATA) + strlen(dst);
-    char *fullpath = NULL;
-    bool exists;
+    static char fullpath[CONFIG_SPIFFS_OBJ_NAME_LEN];
     if (strstr(dev, "flash")) {
 #ifdef CONFIG_FFS_MP
-        len += (plen = strlen(CONFIG_FFS_MP));
-        if (!( fullpath = (char *)malloc(len + 1) )) return ESP_ERR_NO_MEM;
-        snprintf(fullpath, len, "%s%s%s", CONFIG_FFS_MP, Config.web.DIR_DATA, dst);
-        exists = FFS.exists(fullpath + plen);
+        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+                CONFIG_FFS_MP, Config.web.DIR_DATA, dst);
+        exists = FFS.exists(fullpath + strlen(CONFIG_FFS_MP));
 #else
         ESP_LOGW(TAG, "Flash File System not enabled");
 #endif // CONFIG_FFS_MP
     } else if (strstr(dev, "sdmmc")) {
 #ifdef CONFIG_SDFS_MP
-        len += (plen = strlen(CONFIG_SDFS_MP));
-        if (!( fullpath = (char *)malloc(len + 1) )) return ESP_ERR_NO_MEM;
-        snprintf(fullpath, len, "%s%s%s", CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);
-        exists = SDFS.exists(fullpath + plen);
+        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+                CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);
+        exists = SDFS.exists(fullpath + strlen(CONFIG_SDFS_MP));
 #else
         ESP_LOGW(TAG, "SDMMC File System not enabled");
 #endif // CONFIG_SDFS_MP
     } else {
         printf("Invalid device: `%s`\n", dev);
-        return ESP_ERR_INVALID_ARG;
+        return err;
     }
-    if (!fullpath)
-        return ESP_OK;
     if (!exists && !save) {
         printf("History file `%s` does not exist\n", fullpath);
-        return ESP_ERR_NOT_FOUND;
+        err = ESP_ERR_NOT_FOUND;
+    } else {
+        err = save ? linenoiseHistorySave(fullpath) : linenoiseHistoryLoad(fullpath);
+        printf("History file `%s` %s %s\n",
+                fullpath, subcmd, err ? "fail" : "done");
     }
-    int ret = save ? linenoiseHistorySave(fullpath) : linenoiseHistoryLoad(fullpath);
-    printf("History file `%s` %s %s\n", fullpath, subcmd, ret ? "fail" : "done");
-    return ret;
+    return err;
 }
 #endif // CONSOLE_UTILS_HIST
 
@@ -876,7 +905,7 @@ static struct {
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
     .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
-    .end = arg_end(1)
+    .end = arg_end(4)
 };
 
 static int net_sta(int argc, char **argv) {
@@ -911,7 +940,7 @@ static struct {
     .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
     .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .end = arg_end(1)
+    .end = arg_end(3)
 };
 
 static int net_ap(int argc, char **argv) {
@@ -947,7 +976,7 @@ static struct {
     .tout = arg_int0("t", NULL, "<sec>", "Time to transmit for"),
     .stop = arg_lit0(NULL, "stop", "Stop currently running iperf"),
     .udp = arg_lit0("u", "udp", "Use UDP rather than TCP"),
-    .end = arg_end(1)
+    .end = arg_end(7)
 };
 
 static int net_iperf(int argc, char **argv) {
@@ -974,7 +1003,7 @@ static struct {
     .tout = arg_int0("t", NULL, "<msec>", "Time to wait for a response"),
     .size = arg_int0("s", NULL, "<byte>", "Number of data bytes to be sent"),
     .npkt = arg_int0("c", NULL, "<num>", "Stop after sending num packets"),
-    .end = arg_end(1)
+    .end = arg_end(4)
 };
 
 static int net_ping(int argc, char **argv) {
@@ -1003,7 +1032,7 @@ static struct {
     .tout = arg_int0("t", NULL, "<msec>", "For initiator: Timeout in ms"),
     .base = arg_int0("o", NULL, "<cm>", "For responder: T1 offset in cm"),
     .ctrl = arg_str0("a", NULL, "<on|off>", "For responder: enable / disable"),
-    .end = arg_end(1)
+    .end = arg_end(6)
 };
 
 static int net_ftm(int argc, char **argv) {

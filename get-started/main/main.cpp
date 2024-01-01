@@ -35,6 +35,9 @@ void init() {
 void setup() {
     server_loop_begin();    // Core 0 (i.e. Pro CPU)
     console_loop_begin(1);  // Core 1 (i.e. App CPU)
+#ifdef CONFIG_LED_INDICATOR
+    led_set_blink(0);
+#endif
 }
 
 void loop() {
@@ -48,10 +51,8 @@ void loop() {
     } else if (tick_curr < tick_next) {
         vTaskDelay(tick_next - tick_curr);
     }
-    tick_next += 300 * portTICK_PERIOD_MS;
-
+    tick_next += 500 * portTICK_PERIOD_MS;
     twdt_feed();
-    led_set_light(0, led_get_light(0) ? 0 : 100);
     scn_progbar((count += 2) / 255.0 * 100); // draw on screen
 }
 

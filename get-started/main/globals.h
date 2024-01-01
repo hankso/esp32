@@ -30,6 +30,7 @@ extern "C" {
 #define CONFIG_I2C_SCREEN                   // scn_progbar: 4.0KB
 #define CONFIG_ALS_TRACK                    // als_tracking: 1.0KB
 #define CONFIG_PWM_SERVO                    // pwm_degree: 6.3KB
+#define CONFIG_LED_INDICATOR                // led_xxx: 27.4KB
 // #define CONFIG_KNOB_INPUT                   // knob_input: 2.3KB
 // #define CONFIG_VLX_SENSOR                   // vlx_probe: 5.0KB
 // #define CONFIG_I2C_GPIOEXP                  // i2c_gpio_xxx: 3.0KB
@@ -91,12 +92,15 @@ extern "C" {
 5. GPIO20 is only available on ESP32-PICO-V3 chip package.
 */
 
-#ifndef CONFIG_LED_NUM
-#define CONFIG_LED_NUM          1
-#endif
-
 #ifndef CONFIG_GPIO_LED
 #define CONFIG_GPIO_LED         2
+#endif
+
+#ifndef CONFIG_LED_NUM
+#define CONFIG_LED_NUM          1
+#define CONFIG_LED_MODE_GPIO
+// #define CONFIG_LED_MODE_LEDC
+// #define CONFIG_LED_MODE_RMT
 #endif
 
 #ifndef CONFIG_GPIO_HSPI_MISO
