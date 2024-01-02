@@ -244,7 +244,7 @@ char * console_handle_rpc(const char *json) {
         }
         size_t size = 0; FILE *buf = open_memstream(&cmd, &size);
         fprintf(buf, "%s", cJSON_GetObjectItem(obj, "method")->valuestring);
-        for (uint8_t i = 0; i < cJSON_GetArraySize(params); i++) {
+        LOOPN(i, cJSON_GetArraySize(params)) {
             fprintf(buf, " %s", cJSON_GetArrayItem(params, i)->valuestring);
         }
         fclose(buf);

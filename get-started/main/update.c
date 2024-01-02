@@ -175,7 +175,7 @@ esp_err_t ota_updation_fetch_url(const char *url) {
     if ( (err = esp_http_client_open(client, 0)) ) goto http_clean;
     esp_http_client_fetch_headers(client);
     int rsize;
-    while ( (rsize = esp_http_client_read(client, (char *)ota_buf, 1024)) ) {
+    while (( rsize = esp_http_client_read(client, (char *)ota_buf, 1024) )) {
         if (rsize < 0) {
             err = ESP_FAIL;
             goto http_clean;
@@ -254,7 +254,7 @@ static const char * ota_get_img_state(const esp_partition_t *part) {
 void ota_partition_info() {
     esp_partition_iterator_t iter = esp_partition_find(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
-    if (iter == NULL) {
+    if (!iter) {
         printf("No OTA partition found. Skip");
         return;
     }
@@ -263,7 +263,7 @@ void ota_partition_info() {
     const esp_partition_t *part;
     esp_app_desc_t desc;
     esp_err_t err;
-    while (iter!= NULL) {
+    while (iter) {
         part = esp_partition_get(iter);
         iter = esp_partition_next(iter);
         if ( (err = esp_ota_get_partition_description(part, &desc)) ) {

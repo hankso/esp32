@@ -38,7 +38,7 @@ char hexdigits(uint8_t v) {
 const char * format_sha256(const uint8_t *src, size_t len) {
     static char buf[64 + 1];
     if (!src || !len) { buf[0] = '\0'; return buf; }
-    for (uint8_t i = 0; i < 32; i++) {
+    LOOPN(i, 32) {
         buf[2 * i] = hexdigits(src[i] >> 4);
         buf[2 * i + 1] = hexdigits(src[i] & 0xF);
     }
@@ -49,7 +49,7 @@ const char * format_sha256(const uint8_t *src, size_t len) {
 const char * format_mac(const uint8_t *src, size_t len) {
     static char buf[17 + 1]; // XX:XX:XX:XX:XX:XX
     if (!src || !len) { buf[0] = '\0'; return buf; }
-    for (uint8_t i = 0; i < 6; i++) {
+    LOOPN(i, 6) {
         buf[3 * i] = hexdigits(src[i] >> 4);
         buf[3 * i + 1] = hexdigits(src[i] & 0xF);
         buf[3 * i + 2] = (i == 5) ? '\0' : ':';
@@ -61,7 +61,8 @@ const char * format_mac(const uint8_t *src, size_t len) {
 const char * format_ip(uint32_t addr, size_t len) {
     static char buf[15 + 1]; // XXX.XXX.XXX.XXX
     if (!len) { buf[0] = '\0'; return buf; }
-    for (uint8_t idx = 0, i = 0; i < 4; i++) {
+    uint8_t idx = 0;
+    LOOPN(i, 4) {
         idx += snprintf(buf + idx, 16 - idx, "%d", (addr >> (i * 8)) & 0xFF);
         buf[idx++] = (i == 3) ? '\0' : '.';
     }
@@ -75,7 +76,7 @@ const char * format_ip(uint32_t addr, size_t len) {
 // reused and overwriten.
 const char * format_size(size_t bytes, bool inbit) {
     static char buffer[16]; // xxxx.xxu\0
-    static char * units[] = { "", "K", "M", "G", "T", "P" };
+    static char * units[] = { " ", "K", "M", "G", "T", "P" };
     static int Bdems[] = { 0, 1, 2, 3, 3, 4 };
     static int bdems[] = { 0, 2, 3, 3, 4, 7 };
     if (!bytes)
@@ -91,52 +92,50 @@ const char * format_size(size_t bytes, bool inbit) {
     return buffer;
 }
 
-void cpu_info() {
-#ifdef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    char *buf = (char *)calloc(1, 2048);
-    if (!buf) {
-        printf("Cannot allocate space for tasks list");
-        return;
-    }
-    vTaskGetRunTimeStats(buf);
-    puts(buf);
-    free(buf);
-#else
-    printf("Unsupported command! Enable `CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS` "
-           "in menuconfig/sdkconfig to run this command\n");
-#endif
-}
-
 void task_info() {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
     // Running Ready Blocked Suspended Deleted
-    static const char task_states[] = "*RBSD";
+    static const char task_states[] = "*RBSD", *taskname;
     uint32_t ulTotalRunTime;
     uint16_t num = uxTaskGetNumberOfTasks();
-    TaskStatus_t *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
+    TaskStatus_t tmp, *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
     if (tasks == NULL) {
-        printf("Cannot allocate space for tasks list");
+        printf("Could not allocate space for tasks list");
         return;
     }
-    num = uxTaskGetSystemState(tasks, num, &ulTotalRunTime);
-    if (!num || !ulTotalRunTime) {
+    if (!( num = uxTaskGetSystemState(tasks, num, &ulTotalRunTime) )) {
         printf("TaskStatus_t array size too small. Skip");
         vPortFree(tasks);
         return;
     }
-    printf("TID State" " Name\t\t" "Pri CPU%%" "Counter Stack\n");
+    // Sort tasks by pcTaskName and xCoreID
     LOOPN(i, num) {
-        printf("%3d (%c)\t " " %s\t\t" "%3d %4.1f" "%7lu %5.5s\n",
+        if (tasks[i].xCoreID > 1) tasks[i].xCoreID = -1;
+        LOOP(j, i + 1, num) {
+            if (strcmp(tasks[i].pcTaskName, tasks[j].pcTaskName) > 0) {
+                tmp = tasks[i];
+                tasks[i] = tasks[j];
+                tasks[j] = tmp;
+            }
+        }
+    }
+#   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    LOOPN(i, num) { ulTotalRunTime += tasks[i].ulRunTimeCounter; }
+#   endif
+    printf("TID State Name            Pri CPU Usage%% StackHW\n");
+    LOOPN(i, num) {
+        if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
+            taskname = tasks[i].xCoreID ? "CPU 0 App" : "CPU 1 Pro";
+        printf("%3d  (%c)  %-15s %2d  %3d %5.1f  %7s\n",
                tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
-               tasks[i].pcTaskName, tasks[i].uxCurrentPriority,
+               taskname, tasks[i].uxCurrentPriority, tasks[i].xCoreID,
                100.0 * tasks[i].ulRunTimeCounter / ulTotalRunTime,
-               tasks[i].ulRunTimeCounter,
                format_size(tasks[i].usStackHighWaterMark, false));
     }
     vPortFree(tasks);
 #else
-    printf("Unsupported command! Enable `CONFIG_FREERTOS_USE_TRACE_FACILITY` "
-           "in menuconfig/sdkconfig to run this command\n");
+    puts("Unsupported command! Enable `CONFIG_FREERTOS_USE_TRACE_FACILITY` "
+         "in menuconfig/sdkconfig to run this command");
 #endif
 }
 
@@ -247,7 +246,7 @@ static void partition_type_str(
 }
 
 void partition_info() {
-    uint8_t idx, num = 0;
+    uint8_t num = 0;
     const char *tstr, *ststr;
     const esp_partition_t * parts[16], *part, *tmp;
     esp_partition_iterator_t iter;
@@ -257,9 +256,9 @@ void partition_info() {
             ESP_PARTITION_SUBTYPE_ANY, NULL);
         while (iter != NULL && num < 16) {
             part = esp_partition_get(iter);
-            for (idx = 0; idx < num; idx++) {
-                if (parts[idx]->address < part->address) {
-                    tmp = parts[idx]; parts[idx] = part; part = tmp;
+            LOOPN(j, num) {
+                if (parts[j]->address < part->address) {
+                    tmp = parts[j]; parts[j] = part; part = tmp;
                 }
             }
             parts[num++] = part;

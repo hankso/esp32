@@ -162,7 +162,6 @@ const char * format_size(size_t, bool);
 const char * format_mac(const uint8_t*, size_t);
 const char * format_ip(uint32_t, size_t);
 
-void cpu_info();
 void task_info();
 void memory_info();
 void version_info();

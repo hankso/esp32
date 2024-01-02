@@ -157,8 +157,8 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
 static void wifi_print_ipaddr(esp_netif_t * if_ptr) {
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(if_ptr, &ip);
-    printf("IP: " IPSTR ", GW: " IPSTR ", Mask: " IPSTR "\n",
-            IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
+    ESP_LOGI(TAG, "IP: " IPSTR ", GW: " IPSTR ", Mask: " IPSTR "\n",
+             IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
 }
 
 static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {

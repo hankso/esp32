@@ -677,10 +677,6 @@ static int utils_partinfo(int c, char **v) { partition_info(); return ESP_OK; }
 static int utils_taskinfo(int c, char **v) { task_info(); return ESP_OK; }
 #endif
 
-#ifdef CONSOLE_UTILS_LSCPU
-static int utils_cpuinfo(int c, char **v) { cpu_info(); return ESP_OK; }
-#endif
-
 #ifdef CONSOLE_UTILS_VER
 static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
 #endif
@@ -846,15 +842,6 @@ static void register_utils() {
             .help = "Enumerate running RTOS tasks",
             .hint = NULL,
             .func = &utils_taskinfo,
-            .argtable = NULL
-        },
-#endif
-#ifdef CONSOLE_UTILS_LSCPU
-        {
-            .command = "htop",
-            .help = "Display CPU Usage and tasks info",
-            .hint = NULL,
-            .func = &utils_cpuinfo,
             .argtable = NULL
         },
 #endif

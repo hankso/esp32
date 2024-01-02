@@ -213,10 +213,10 @@ esp_err_t led_set_light(int index, uint8_t brightness) {
     return err;
 #elif defined(CONFIG_LED_MODE_RMT)
     esp_err_t err = ESP_OK;
-    for (int i = CONFIG_LED_NUM - 1; !err && i >= 0; i--) {
+    LOOPND(i, CONFIG_LED_NUM) {
         if (index >= 0 && index != i) continue;
         led_handle->color[i].p = brightness;
-        err = led_flush(i, index == i || !i);
+        if (( err = led_flush(i, index == i || !i) )) break;
     }
     return err;
 #endif // CONFIG_LED_MODE_XXX
@@ -253,12 +253,12 @@ esp_err_t led_set_color(int index, uint32_t color) {
     return led_set_light(index, (r + g + b) / 3);
 #elif defined(CONFIG_LED_MODE_RMT)
     esp_err_t err = ESP_OK;
-    for (int i = CONFIG_LED_NUM - 1; !err && i >= 0; i--) {
+    LOOPND(i, CONFIG_LED_NUM) {
         if (index >= 0 && index != i) continue;
         led_handle->color[i].r = r;
         led_handle->color[i].g = g;
         led_handle->color[i].b = b;
-        err = led_flush(i, index == i || !i);
+        if (( err = led_flush(i, index == i || !i) )) break;
     }
     return err;
 #endif // CONFIG_LED_MODE_XXX
@@ -517,7 +517,7 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
         if (reg == start) {
             printf("I2C %d-%02X register table\n", bus, addr);
             printf("ADDR:");
-            for (int i = 0; i < length; i++) {
+            LOOPN(i, length) {
                 printf(" %02X", i);
             }
             printf("\n%04X:%*s", reg - (reg % length), 3 * (reg % length), "");
@@ -531,12 +531,13 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
 }
 
 void i2c_detect(int bus) {
-    for (uint8_t i = 0; i < 0x10; i++) {
+    LOOPN(i, 0x10) {
         if (!i) printf("  ");
         printf(" %02X", i);
     }
-    for (uint8_t addr = 0; addr < 0x7F; addr++) {
-        if (addr % 0x10 == 0) printf("\n%02X", addr);
+    LOOPN(addr, 0x7F) {
+        if (addr % 0x10 == 0)
+            printf("\n%02X", addr);
         if (!addr) {
             printf("   ");
             continue;
@@ -737,7 +738,7 @@ static void als_initialize() {
     esp_err_t err;
     uint8_t addr;
     uint16_t buf[2];
-    for (int i = 0; i < 4; i++) {
+    LOOPN(i, 4) {
         if (smbus_probe(NUM_I2C, addr = i2c_als_addr[i]))
             continue;
         if (
@@ -938,8 +939,8 @@ static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
     // static char buf[9];
     ets_printf("PIN_BTN %s\n", gpio_get_level(PIN_BTN) ? "RISE" : "FALL");
 #ifdef CONFIG_I2C_GPIOEXP
-    for (uint8_t idx = 0; idx < LEN(i2c_pin_data); idx++) {
-        i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_READ, i2c_pin_data + idx, 1);
+    LOOPN(i, LEN(i2c_pin_data)) {
+        i2c_trans(NUM_I2C, i2c_pin_addr[i], I2C_MASTER_READ, i2c_pin_data + i, 1);
         // itoa(i2c_pin_data[idx], buf, 2);
         // ESP_LOGI(TAG, "I2C GPIO Expander value: 0b%s", buf);
     }
@@ -974,8 +975,8 @@ static void gpio_initialize() {
     };
     if (!( knob = iot_knob_create(&knob_conf) )) {
         ESP_LOGE(TAG, "Knob: bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
-    } else for (uint8_t idx = 0; idx < LEN(knob_evts); idx++) {
-        iot_knob_register_cb(knob, knob_evts[idx], knob_funcs[idx], NULL);
+    } else LOOPN(i, LEN(knob_evts)) {
+        iot_knob_register_cb(knob, knob_evts[i], knob_funcs[i], NULL);
     }
 #endif
     button_cb_t btn_funcs[] = {
@@ -993,8 +994,8 @@ static void gpio_initialize() {
     };
     if (!( btn = iot_button_create(&btn_conf) )) {
         ESP_LOGE(TAG, "BTN: bind to GPIO%d failed", PIN_BTN);
-    } else for (uint8_t idx = 0; idx < LEN(btn_evts); idx++) {
-        iot_button_register_cb(btn, btn_evts[idx], btn_funcs[idx], NULL);
+    } else LOOPN(i, LEN(btn_evts)) {
+        iot_button_register_cb(btn, btn_evts[i], btn_funcs[i], NULL);
     }
 }
 
@@ -1112,15 +1113,15 @@ static void twdt_initialize() {
     // Idle tasks are created on each core automatically by RTOS scheduler
     // with the lowest possible priority (0). Our tasks have higher priority,
     // thus leaving almost no time for idle tasks to run. Disable WDT on them.
-    #ifndef CONFIG_FREERTOS_UNICORE
-    uint8_t num = 2;
+    #ifdef CONFIG_FREERTOS_UNICORE
+    LOOPN(i, 1)
     #else
-    uint8_t num = 1;
+    LOOPN(i, 2)
     #endif // CONFIG_FREERTOS_UNICORE
-    while (num--) {
-        TaskHandle_t idle = xTaskGetIdleTaskHandleForCPU(num);
+    {
+        TaskHandle_t idle = xTaskGetIdleTaskHandleForCPU(i);
         if (idle && !esp_task_wdt_status(idle) && !esp_task_wdt_delete(idle)) {
-            ESP_LOGW(TAG, "Task IDLE%d @ CPU%d removed from WDT", num, num);
+            ESP_LOGW(TAG, "Task IDLE%d @ CPU%d removed from WDT", i, i);
         }
     }
 #endif // CONFIG_TASK_WDT

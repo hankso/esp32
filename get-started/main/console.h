@@ -24,7 +24,6 @@
 
 #define CONSOLE_UTILS_VER           // 272 Bytes
 #define CONSOLE_UTILS_LSHW          // 1988 Bytes
-#define CONSOLE_UTILS_LSCPU         // 300 Bytes
 #define CONSOLE_UTILS_LSTASK        // 300 Bytes
 // #define CONSOLE_UTILS_LSPART        // 808 Bytes
 // #define CONSOLE_UTILS_LSMEM         // 1308 Bytes

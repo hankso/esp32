@@ -139,8 +139,8 @@ static uint16_t numcfg = sizeof(cfglist) / sizeof(config_entry_t);
  */
 
 static int16_t config_index(const char *key) {
-    for (int16_t idx = 0; idx < numcfg; idx++) {
-        if (!strcmp(key, cfglist[idx].key)) return idx;
+    LOOPN(i, numcfg) {
+        if (!strcmp(key, cfglist[i].key)) return i;
     }
     return -1;
 }
@@ -164,7 +164,7 @@ bool config_set(const char *key, const char *value) {
 
 void config_list() {
     printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
-    for (uint16_t i = 0; i < numcfg; i++) {
+    LOOPN(i, numcfg) {
         const char *key = cfglist[i].key, *value = *cfglist[i].value;
         printf("  %-15.15s\t", key);
         if (!strcmp(key + strlen(key) - 4, "pass")) {
@@ -231,7 +231,7 @@ bool config_loads(const char *json) {
 
 char * config_dumps() {
     cJSON *obj = cJSON_CreateObject();
-    for (uint16_t i = 0; i < numcfg; i++) {
+    LOOPN(i, numcfg) {
         cJSON_AddStringToObject(obj, cfglist[i].key, *cfglist[i].value);
     }
     char *string = cJSON_PrintUnformatted(obj);
@@ -376,7 +376,7 @@ bool config_nvs_clear() {
 bool config_nvs_load() {
     esp_err_t err;
     if (config_nvs_open(NAMESPACE_CFG, true)) return false;
-    for (uint16_t i = 0; i < numcfg; i++) {
+    LOOPN(i, numcfg) {
         const char * key = cfglist[i].key;
         if (( err = _nvs_load_str(key, cfglist[i].value) ))
             ESP_LOGD(TAG, "get `%s` failed: %s", key, esp_err_to_name(err));
@@ -387,7 +387,7 @@ bool config_nvs_load() {
 bool config_nvs_dump() {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
     bool success = true;
-    for (uint16_t i = 0; i < numcfg; i++) {
+    LOOPN(i, numcfg) {
         if (nvs_set_str(nvs_st.handle, cfglist[i].key, *cfglist[i].value)) {
             success = false;
             break;
@@ -405,13 +405,13 @@ void config_nvs_list() {
     nvs_iterator_t iter;
     nvs_entry_info_t info;
     iter = nvs_entry_find(nvs_st.part->label, NAMESPACE_CFG, NVS_TYPE_ANY);
-    if (iter == NULL) {
+    if (!iter) {
         ESP_LOGE(TAG, "Cannot find entries under `" NAMESPACE_CFG "` in `%s`",
                  nvs_st.part->label);
         return;
     }
     printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
-    while (iter != NULL) {
+    while (iter) {
         nvs_entry_info(iter, &info);
         iter = nvs_entry_next(iter);
         const char *key = info.key, *value = config_get(key);
