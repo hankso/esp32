@@ -125,7 +125,7 @@ void task_info() {
     printf("TID State Name            Pri CPU Usage%% StackHW\n");
     LOOPN(i, num) {
         if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
-            taskname = tasks[i].xCoreID ? "CPU 0 App" : "CPU 1 Pro";
+            taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
         printf("%3d  (%c)  %-15s %2d  %3d %5.1f  %7s\n",
                tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
                taskname, tasks[i].uxCurrentPriority, tasks[i].xCoreID,

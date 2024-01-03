@@ -79,9 +79,9 @@ static struct {
     struct arg_str *mode;
     struct arg_end *end;
 } system_sleep_args = {
-    .tout = arg_int0("t", "time", "<t>", "wakeup time, ms"),
-    .pin = arg_intn("p", "gpio", "<n>", 0, 8, "Wakeup using specified GPIO"),
-    .lvl = arg_intn("l", "level", "<0|1>", 0, 8, "GPIO level to trigger wakeup"),
+    .tout = arg_int0(NULL, "time", "<t>", "wakeup time, ms"),
+    .pin  = arg_intn(NULL, "gpio", "<n>", 0, 8, "Wakeup using specified GPIO"),
+    .lvl  = arg_intn(NULL, "level", "<0|1>", 0, 8, "GPIO level to trigger wakeup"),
     .mode = arg_str0(NULL, "method", "<light|deep>", "sleep mode"),
     .end = arg_end(4)
 };
@@ -182,11 +182,11 @@ static struct {
     struct arg_lit *reset;
     struct arg_end *end;
 } system_update_args = {
-    .cmd = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
-    .part = arg_str0(NULL, "part", "<label>", "partition to boot from"),
-    .url = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
-    .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
-    .reset = arg_lit0(NULL, "reset", "clear OTA internal states"),
+    .cmd   = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
+    .part  = arg_str0(NULL, "part", "<label>", "partition to boot from"),
+    .url   = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
+    .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
+    .reset = arg_lit0("r", "reset", "clear OTA internal states"),
     .end = arg_end(5)
 };
 
@@ -333,10 +333,10 @@ static struct {
     struct arg_int *blk;
     struct arg_end *end;
 } driver_led_args = {
-    .idx = arg_int0("i", "index", "<0-20>", "specify index, default 0"),
-    .lgt = arg_str0("l", "light", "<0-255|on|off>", "specify brightness"),
-    .clr = arg_str0("c", "color", "<0xAABBCC>", "specify RGB color"),
-    .blk = arg_int0("b", "blink", "<-1-7>", "specify blink effect"),
+    .idx = arg_int0(NULL, NULL, "<0-" STR(CONFIG_LED_NUM) ">", "LED index"),
+    .lgt = arg_str0(NULL, "light", "<0-255|on|off>", "set brightness"),
+    .clr = arg_str0(NULL, "color", "<0xAABBCC>", "set RGB color"),
+    .blk = arg_int0(NULL, "blink", "<-1-7>", "set blink effect"),
     .end = arg_end(4)
 };
 
@@ -453,10 +453,10 @@ static struct {
 } driver_i2c_args = {
     .bus = arg_int1(NULL, NULL, "<0|1>", "I2C bus number"),
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
-    .reg = arg_int0(NULL, NULL, "regaddr", "Register 8-bit address"),
-    .val = arg_int0(NULL, NULL, "regval", "Register value"),
-    .hex = arg_lit0("w", "word", "R / W in word (16-bit) mode"),
-    .len = arg_int0("l", "len", "<num>", "Read specified length of registers"),
+    .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
+    .val = arg_int0(NULL, NULL, "regval", "register value"),
+    .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
+    .len = arg_int0(NULL, "len", "<num>", "read specified length of registers"),
     .end = arg_end(6)
 };
 
@@ -510,7 +510,7 @@ static struct {
     struct arg_end *end;
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
-    .rlt = arg_str0("t", "track", "<0123HVEOA>", "run light tracking"),
+    .rlt = arg_str0(NULL, "track", "<0123HVEOA>", "run light tracking"),
     .end = arg_end(2)
 };
 
@@ -557,8 +557,8 @@ static struct {
     struct arg_int *tout;
     struct arg_end *end;
 } driver_adc_args = {
-    .tdly = arg_int0("d", NULL, "<10-1000>", "Delay in ms"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "Timeout in sec"),
+    .tdly = arg_int0("d", NULL, "<10-1000>", "delay in ms, default 500"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "loop until timeout in sec"),
     .end = arg_end(2)
 };
 
@@ -589,8 +589,8 @@ static struct {
     struct arg_int *vdeg;
     struct arg_end *end;
 } driver_pwm_args = {
-    .hdeg = arg_int1(NULL, NULL, "<0-180>", "Yaw degree"),
-    .vdeg = arg_int1(NULL, NULL, "<0-160>", "Pitch degree"),
+    .hdeg = arg_int1(NULL, NULL, "<0-180>", "yaw degree"),
+    .vdeg = arg_int1(NULL, NULL, "<0-160>", "pitch degree"),
     .end = arg_end(2)
 };
 
@@ -756,7 +756,7 @@ static struct {
 } utils_history_args = {
     .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
     .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
-    .dst = arg_str0("f", "file", "history.txt", "relative path to file"),
+    .dst = arg_str0("f", NULL, "history.txt", "relative path to file"),
     .end = arg_end(3)
 };
 
@@ -889,9 +889,9 @@ static struct {
     struct arg_end *end;
 } net_sta_args = {
     .cmd = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
-    .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
-    .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
-    .tout = arg_int0("t", NULL, "<msec>", "Timeout to wait"),
+    .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
+    .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
+    .tout = arg_int0("t", NULL, "<msec>", "timeout to wait"),
     .end = arg_end(4)
 };
 
@@ -925,8 +925,8 @@ static struct {
     struct arg_end *end;
 } net_ap_args = {
     .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
-    .ssid = arg_str0("s", NULL, "<SSID>", "SSID of AP"),
-    .pass = arg_str0("p", NULL, "<PASS>", "Password of AP"),
+    .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
+    .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
     .end = arg_end(3)
 };
 
@@ -956,13 +956,13 @@ static struct {
     struct arg_lit *udp;
     struct arg_end *end;
 } net_iperf_args = {
-    .host = arg_str0("c", NULL, "<host>", "Run in client mode"),
-    .port = arg_int0("p", NULL, "<port>", "Specify port number"),
-    .size = arg_int0("l", NULL, "<bytes>", "Read/Write buffer size"),
-    .intv = arg_int0("i", NULL, "<sec>", "Time between bandwidth reports"),
-    .tout = arg_int0("t", NULL, "<sec>", "Time to transmit for"),
-    .stop = arg_lit0(NULL, "stop", "Stop currently running iperf"),
-    .udp = arg_lit0("u", "udp", "Use UDP rather than TCP"),
+    .host = arg_str0("c", NULL, "<host>", "run in client mode"),
+    .port = arg_int0("p", NULL, "<port>", "specify port number"),
+    .size = arg_int0("l", NULL, "<bytes>", "read/write buffer size"),
+    .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
+    .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
+    .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
+    .udp = arg_lit0("u", "udp", "use UDP rather than TCP"),
     .end = arg_end(7)
 };
 
@@ -986,10 +986,10 @@ static struct {
     struct arg_int *npkt;
     struct arg_end *end;
 } net_ping_args = {
-    .host = arg_str1(NULL, NULL, "<host>", "Target IP address"),
-    .tout = arg_int0("t", NULL, "<msec>", "Time to wait for a response"),
-    .size = arg_int0("s", NULL, "<byte>", "Number of data bytes to be sent"),
-    .npkt = arg_int0("c", NULL, "<num>", "Stop after sending num packets"),
+    .host = arg_str1(NULL, NULL, "<host>", "target IP address"),
+    .tout = arg_int0("t", NULL, "<msec>", "time to wait for a response"),
+    .size = arg_int0("s", NULL, "<byte>", "number of data bytes to be sent"),
+    .npkt = arg_int0("c", NULL, "<num>", "stop after sending num packets"),
     .end = arg_end(4)
 };
 
@@ -1013,12 +1013,12 @@ static struct {
     struct arg_str *ctrl;
     struct arg_end *end;
 } net_ftm_args = {
-    .cmd = arg_str1(NULL, NULL, "<REP|REQ>", "Run as responder | initiator"),
-    .ssid = arg_str0(NULL, NULL, "<SSID>", "For initiator: target AP"),
-    .npkt = arg_int0("c", NULL, "<0:8:32|64>", "For initiator: frame count"),
-    .tout = arg_int0("t", NULL, "<msec>", "For initiator: Timeout in ms"),
-    .base = arg_int0("o", NULL, "<cm>", "For responder: T1 offset in cm"),
-    .ctrl = arg_str0("a", NULL, "<on|off>", "For responder: enable / disable"),
+    .cmd = arg_str1(NULL, NULL, "<REP|REQ>", "run as responder | initiator"),
+    .ssid = arg_str0(NULL, NULL, "<SSID>", "for initiator: target AP hostname"),
+    .npkt = arg_int0("c", NULL, "<0:8:32|64>", "for initiator: frame count"),
+    .tout = arg_int0("t", NULL, "<msec>", "for initiator: timeout in ms"),
+    .base = arg_int0("o", NULL, "<cm>", "for responder: T1 offset in cm"),
+    .ctrl = arg_str0("a", NULL, "<on|off>", "for responder: enable / disable"),
     .end = arg_end(6)
 };
 
