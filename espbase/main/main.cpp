@@ -1,4 +1,8 @@
-/* Testing ESP-IDF by hank <hankso1106@gmail.com> */
+/*
+ * File: main.cpp
+ * Authors: Hank <hankso1106@gmail.com>
+ * Create: 2020-03-13 18:03:04
+ */
 
 #include "sdkconfig.h"
 #include "globals.h"
