@@ -1,0 +1,41 @@
+{
+  "name": "webpage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix",
+    "format": "prettier --write src/ *.*js"
+  },
+  "dependencies": {
+    "vue": "^3.3.11"
+  },
+  "devDependencies": {
+    "@rushstack/eslint-patch": "^1.3.3",
+    "@vitejs/plugin-vue": "^4.5.2",
+    "@vue/eslint-config-prettier": "^8.0.0",
+    "eslint": "^8.49.0",
+    "eslint-plugin-vue": "^9.17.0",
+    "prettier": "^3.0.3",
+    "vite": "^5.0.10"
+  },
+  "prettier": {
+    "semi": false,
+    "tabWidth": 4,
+    "singleQuote": true,
+    "trailingComma": "none",
+    "$schema": "https://json.schemastore.org/prettierrc"
+  },
+  "eslintConfig": {
+    "root": true,
+    "extends": [
+      "plugin:vue/vue3-strongly-recommended",
+      "eslint:recommended",
+      "@vue/eslint-config-prettier/skip-formatting"
+    ],
+    "parserOptions": { "ecmaVersion": "latest" }
+  }
+}

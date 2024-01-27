@@ -12,6 +12,7 @@
  *  Name    Method  Description
  *  /ws     POST    Websocket connection point: messages are parsed as JSON
  *  /cmd    POST    Manually send in command string just like using console
+ *                  - param `?exec=str&gcode=str`
  *
  * Static files:
  *  Name    Method  Description
@@ -25,9 +26,19 @@
  *  Name    Method  Description
  *  /config GET     Get JSON string of configuration entries
  *  /config POST    Overwrite configuration options
+ *                  - param `?json=str`
  *  /update GET     Updation guide page
+ *                  - param `?raw[=bool]`
  *  /update POST    Upload compiled binary firmware to OTA flash partition
- *  /edit   ANY     Online Editor page: create/delete/edit
+ *                  - param `?reset[=bool]&size=int`
+ *  /edit   GET     Online Editor page
+ *                  - param `?list[=str]&path=str&download=bool`
+ *  /editc  ANY     Create file|dir (accept HTTP_PUT)
+ *                  - param `?path=str&type=<file|dir>`
+ *  /editd  ANY     Delete file (accept HTTP_DELETE)
+ *                  - param `?path=str&from=url`
+ *  /editu  POST    Upload file
+ *                  - param `?overwrite[=bool]`
  */
 
 #ifndef _SERVER_H_

@@ -95,6 +95,25 @@ void onCommand(AsyncWebServerRequest *req) {
     }
 }
 
+void onConfig(AsyncWebServerRequest *req) {
+    log_msg(req);
+    if (req->hasParam("json", true)) {
+        if (!config_loads(req->getParam("json", true)->value().c_str())) {
+            req->send(500, "text/plain", "Load config from JSON failed");
+        } else {
+            req->send(200);
+        }
+    } else {
+        char *json = config_dumps();
+        if (!json) {
+            req->send(500, "text/plain", "Dump configs into JSON failed");
+        } else {
+            req->send(200, "application/json", json);
+            free(json);
+        }
+    }
+}
+
 void onUpdate(AsyncWebServerRequest *req) {
     log_msg(req);
     String update = Config.web.VIEW_OTA;
@@ -130,13 +149,13 @@ void onUpdateHelper(AsyncWebServerRequest *req) {
     }
 }
 
-void onUpdatePost(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+void onUpdatePost(AsyncWebServerRequest *reqt, String filename, size_t index, uint8_t *data, size_t len, bool final) {
     if (!index) {
         if (!ota_updation_begin(0)) {
-            AsyncWebServerResponse *res = request->beginResponse(
+            AsyncWebServerResponse *res = req->beginResponse(
                 400, "text/plain", ota_updation_error());
             res->addHeader("Connection", "close");
-            return request->send(res);
+            return req->send(res);
         }
         printf("Updating file: %s\n", filename.c_str());
     }
@@ -147,28 +166,9 @@ void onUpdatePost(AsyncWebServerRequest *request, String filename, size_t index,
     }
     if (final) {
         if (!ota_updation_end()) {
-            request->send(400, "text/plain", ota_updation_error());
+            req->send(400, "text/plain", ota_updation_error());
         } else {
             printf("Updation success: %s\n", format_size(index + len, false));
-        }
-    }
-}
-
-void onConfig(AsyncWebServerRequest *req) {
-    log_msg(req);
-    if (req->hasParam("json", true)) {
-        if (!config_loads(req->getParam("json", true)->value().c_str())) {
-            req->send(500, "text/plain", "Load config from JSON failed");
-        } else {
-            req->send(200);
-        }
-    } else {
-        char *json = config_dumps();
-        if (!json) {
-            req->send(500, "text/plain", "Dump configs into JSON failed");
-        } else {
-            req->send(200, "application/json", json);
-            free(json);
         }
     }
 }
@@ -197,7 +197,7 @@ void onEdit(AsyncWebServerRequest *req) {
         if (!file) {
             req->send(404, "text/plain", path + " file does not exists");
         } else if (file.isDirectory()) {
-            req->send(400, "text/plain", "Cannot download dir " + path);
+            req->send(400, "text/plain", "Could not download dir " + path);
         } else {
             req->send(file, path, String(), req->hasParam("download"));
         }
@@ -234,7 +234,7 @@ void onCreate(AsyncWebServerRequest *req) {
         if (!file) {
             return req->send(500, "text/plain", "Create failed.");
         }
-    } else if (type == "folder") {
+    } else if (type == "dir") {
         File dir = FFS.open(path);
         if (dir.isDirectory()) {
             dir.close();
@@ -263,14 +263,14 @@ void onDelete(AsyncWebServerRequest *req) {
     }
 }
 
-void onUpload(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+void onUpload(AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final) {
     static File file;
     if (!index) {
-        log_msg(request);
-        if (file) return request->send(400, "text/plain", "Busy uploading");
+        log_msg(req);
+        if (file) return req->send(400, "text/plain", "Busy uploading");
         if (!filename.startsWith("/")) filename = "/" + filename;
-        if (FFS.exists(filename) && !request->hasParam("overwrite")) {
-            return request->send(403, "text/plain", "File already exists.");
+        if (FFS.exists(filename) && !req->hasParam("overwrite")) {
+            return req->send(403, "text/plain", "File already exists.");
         }
         ESP_LOGW(TAG, "Uploading file: %s\n", filename.c_str());
         file = FFS.open(filename, "w");
@@ -288,12 +288,12 @@ void onUpload(AsyncWebServerRequest *request, String filename, size_t index, uin
     }
 }
 
-void onUploadStrict(AsyncWebServerRequest *request, String filename, size_t index, uint8_t *data, size_t len, bool final){
+void onUploadStrict(AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final){
     if (!filename.startsWith(Config.web.DIR_DATA)) {
-        log_msg(request, "400");
-        return request->send(400, "text/plain", "No access to upload.");
+        log_msg(req, "400");
+        return req->send(400, "text/plain", "No access to upload.");
     }
-    onUpload(request, filename, index, data, len, final);
+    onUpload(req, filename, index, data, len, final);
 }
 
 void onError(AsyncWebServerRequest *req) {
@@ -364,8 +364,7 @@ void onWebSocketData(
     if (wsid != cid) {
         if (wsid != -1) {
             ESP_LOGW(TAG, "ws#%d error: message buffer busy. Skip\n", cid);
-            // TODO: trigger client error to stop its messaging
-            return;
+            return; // TODO: trigger client error to stop its messaging
         }
         wsid = cid;
     }
@@ -383,7 +382,6 @@ void onWebSocketData(
             goto clean;
         } else {
             // This frame is splitted into packets
-            // do nothing
         }
     } else if (info->index == 0) {
         // Message is fragmented. Starting a new frame
@@ -398,7 +396,7 @@ void onWebSocketData(
             ESP_LOGW(TAG, "ws#%d error: lost first frame. Skip\n", wsid);
             goto clean;
         } else {
-            // Extend buffer for the comming frame
+            // Extend buffer for the coming frame
             char *tmp = (char *)realloc(msg, buflen + l);
             if (tmp == NULL) goto clean;
             msg = tmp; buflen += l;
@@ -408,7 +406,6 @@ void onWebSocketData(
         goto clean;
     } else {
         // Message is fragmented. Current frame is splitted
-        // do nothing
     }
     // Save/append packets to message buffer
     if (info->opcode == WS_TEXT) {
@@ -420,16 +417,11 @@ void onWebSocketData(
     }
     ESP_LOGD(TAG, "ws#%d >packets[%llu-%llu]\n",
              wsid, info->index, info->index + size);
-    if (info->index + size == info->len) {
-        // Current frame end
-        if (info->final) {
-            // All message buffered
-            handle_websocket_message(client, msg);
-            goto clean;
-        } else {
-            // Waiting for next frame
-            // do nothing
-        }
+    if (info->index + size == info->len && info->final) {
+        // Current frame end and all message buffered
+        handle_websocket_message(client, msg);
+    } else {
+        return; // Waiting for next frame
     }
 clean:
     wsid = -1;
@@ -504,8 +496,8 @@ void WebServerClass::register_api_ap() {
     _server.on("/edit", HTTP_GET, onEdit).setFilter(ON_AP_FILTER);
     _server.on("/editc", HTTP_ANY, onCreate).setFilter(ON_AP_FILTER);
     _server.on("/editd", HTTP_ANY, onDelete).setFilter(ON_AP_FILTER);
-    _server.on("/editu", HTTP_POST, [](AsyncWebServerRequest *request){
-        request->send(200);
+    _server.on("/editu", HTTP_POST, [](AsyncWebServerRequest *req){
+        req->send(200);
     }, onUpload).setFilter(ON_AP_FILTER);
 
     // _server.rewrite("/", "index.html");
