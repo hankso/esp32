@@ -359,26 +359,25 @@ uint32_t adc_read() {
 #endif
 }
 
+// PWM by LEDC
 
-// PWM for Servo
-
-// mapping 0-180 deg to 0.5-2.5 ms by 10bit resolution
-#ifdef CONFIG_PWM_SERVO
-static float duty_offset = 0.5 / 20 * ((1 << 10) - 1);
-static float duty_scale  = 2.0 / 20 * ((1 << 10) - 1) / 180;
+#define SPEED_MODE  LEDC_LOW_SPEED_MODE
+#define RES_SERVO   LEDC_TIMER_10_BIT
+#define RES_BUZZER  LEDC_TIMER_10_BIT
 
 static void pwm_initialize() {
-    ledc_timer_config_t timer_conf = {
-        .speed_mode         = LEDC_LOW_SPEED_MODE,
+#ifdef CONFIG_PWM_SERVO
+    ledc_timer_config_t servo_conf = {
+        .speed_mode         = SPEED_MODE,
         .timer_num          = LEDC_TIMER_1,
-        .duty_resolution    = LEDC_TIMER_10_BIT,
+        .duty_resolution    = RES_SERVO,
         .freq_hz            = 50, // 20ms
         .clk_cfg            = LEDC_AUTO_CLK
     };
-    ESP_ERROR_CHECK(ledc_timer_config(&timer_conf));
+    ESP_ERROR_CHECK(ledc_timer_config(&servo_conf));
     ledc_channel_config_t channel0_conf = {
         .gpio_num           = PIN_SVOH,
-        .speed_mode         = LEDC_LOW_SPEED_MODE,
+        .speed_mode         = SPEED_MODE,
         .channel            = LEDC_CHANNEL_1,
         .timer_sel          = LEDC_TIMER_1,
         .hpoint             = 0,
@@ -386,7 +385,7 @@ static void pwm_initialize() {
     };
     ledc_channel_config_t channel1_conf = {
         .gpio_num           = PIN_SVOV,
-        .speed_mode         = LEDC_LOW_SPEED_MODE,
+        .speed_mode         = SPEED_MODE,
         .channel            = LEDC_CHANNEL_2,
         .timer_sel          = LEDC_TIMER_1,
         .hpoint             = 0,
@@ -394,35 +393,104 @@ static void pwm_initialize() {
     };
     ESP_ERROR_CHECK(ledc_channel_config(&channel0_conf));
     ESP_ERROR_CHECK(ledc_channel_config(&channel1_conf));
+#endif
+#ifdef CONFIG_PWM_BUZZER
+    ledc_timer_config_t buzzer_conf = {
+        .speed_mode         = SPEED_MODE,
+        .timer_num          = LEDC_TIMER_2,
+        .duty_resolution    = RES_BUZZER,
+        .freq_hz            = 1,
+        .clk_cfg            = LEDC_AUTO_CLK
+    };
+    ESP_ERROR_CHECK(ledc_timer_config(&buzzer_conf));
+    ledc_channel_config_t channel2_conf = {
+        .gpio_num           = PIN_BUZZ,
+        .speed_mode         = SPEED_MODE,
+        .channel            = LEDC_CHANNEL_3,
+        .timer_sel          = LEDC_TIMER_2,
+        .hpoint             = 0,
+        .duty               = 0
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&channel2_conf));
+#endif
 }
 
-static esp_err_t pwm_duty(ledc_channel_t channel, int degree) {
-    int duty = degree * duty_scale + duty_offset;
-    esp_err_t err = ledc_set_duty(LEDC_LOW_SPEED_MODE, channel, duty);
-    if (!err) err = ledc_update_duty(LEDC_LOW_SPEED_MODE, channel);
+static esp_err_t pwm_set_duty(int channel, int duty) {
+    esp_err_t err = ledc_set_duty(SPEED_MODE, channel, duty);
+    if (!err) err = ledc_update_duty(SPEED_MODE, channel);
     return err;
 }
 
-esp_err_t pwm_degree(int hdeg, int vdeg) {
+#ifdef CONFIG_PWM_SERVO
+// mapping 0-180 deg to 0.5-2.5 ms
+static float servo_offset = 0.5 / 20 * ((1 << RES_SERVO) - 1);
+static float servo_scale  = 2.0 / 20 * ((1 << RES_SERVO) - 1) / 180;
+
+esp_err_t pwm_set_degree(int hdeg, int vdeg) {
     esp_err_t err = ESP_OK;
-    if (hdeg >= 0) {
-        hdeg = 166 * hdeg / 180 + 14; // map virtual 0-180 to real 14-180
-        if (( err = pwm_duty(LEDC_CHANNEL_1, MAX(14, MIN(hdeg, 180))) ))
-            return err;
+    if (!err && hdeg >= 0) {
+        // calibration: convert 0-180 to real 14-180 degree
+        hdeg = 166 * hdeg / 180 + 14;
+        err = pwm_set_duty(
+            LEDC_CHANNEL_1,
+            MIN(hdeg, 180) * servo_scale + servo_offset
+        );
     }
-    if (vdeg >= 0) {
-        if (( err = pwm_duty(LEDC_CHANNEL_2, MAX(0, MIN(vdeg, 160))) ))
-            return err;
+    if (!err && vdeg >= 0) {
+        err = pwm_set_duty(
+            LEDC_CHANNEL_2,
+            MIN(vdeg, 160) * servo_scale + servo_offset
+        );
     }
     return err;
+}
+
+esp_err_t pwm_get_degree(int *hdeg, int *vdeg) {
+    int hduty = ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_1),
+        vduty = ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_2);
+    *hdeg = (int)((hduty - servo_offset) / servo_scale);
+    *vdeg = (int)((vduty - servo_offset) / servo_scale);
+    return ESP_OK;
 }
 
 #else
+esp_err_t pwm_set_degree(int h, int v) {
+    return ESP_ERR_NOT_FOUND; NOTUSED(h); NOTUSED(v);
+}
+esp_err_t pwm_get_degree(int *h, int *v) {
+    return ESP_ERR_NOT_FOUND; NOTUSED(h); NOTUSED(v);
+}
+#endif
 
-static void pwm_initialize() { ; }
-esp_err_t pwm_degree(int hdeg, int vdeg) { return ESP_ERR_NOT_FOUND; }
+#ifdef CONFIG_PWM_BUZZER
+// mapping 0-100 percent to 0%-50% of duty
+static float buzzer_scale = ((1 << RES_BUZZER) - 1) / 200;
 
-#endif // CONFIG_PWM_SERVO
+esp_err_t pwm_set_tone(uint32_t freq, int pcent) {
+    esp_err_t err = ESP_OK;
+    if (!err && pcent >= 0) {
+        err = pwm_set_duty(LEDC_CHANNEL_3, pcent * buzzer_scale);
+    }
+    if (!err && freq <= 20000) {
+        err = ledc_set_freq(SPEED_MODE, LEDC_TIMER_2, freq);
+    }
+    return err;
+}
+
+esp_err_t pwm_get_tone(uint32_t *freq, int *pcent) {
+    *freq = ledc_get_freq(SPEED_MODE, LEDC_TIMER_2);
+    *pcent = (int)(ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_3) / buzzer_scale);
+    return ESP_OK;
+}
+
+#else
+esp_err_t pwm_set_tone(uint32_t f, int p) {
+    return ESP_ERR_NOT_FOUND; NOTUSED(f); NOTUSED(p);
+}
+esp_err_t pwm_get_tone(uint32_t *f, int *p) {
+    return ESP_ERR_NOT_FOUND; NOTUSED(f); NOTUSED(p);
+}
+#endif
 
 // I2C GPIO Expander
 
@@ -786,7 +854,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
         for (int i = 0, v = 0; v < 90; i++, v += 6) {
             for (int h = 0; h < 180; h += 5) {
                 int htmp = i % 2 ? (180 - h) : h; // S line scanning
-                if (( err = pwm_degree(htmp, v) )) return err;
+                if (( err = pwm_set_degree(htmp, v) )) return err;
                 msleep(50);
                 btmp[0] = als_brightness(idx);
                 ESP_LOGD(TAG, "ALS: H %3d V %3d %8.2f lux\n", htmp, v, btmp[0]);
@@ -800,7 +868,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
         break;
     case ALS_TRACK_H:           // minimize difference of east and west
         for (int h = 0; h < 180; h += 15) {
-            if (( err = pwm_degree(h, -1) )) return err;
+            if (( err = pwm_set_degree(h, -1) )) return err;
             msleep(200);
             if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
@@ -812,7 +880,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
         break;
     case ALS_TRACK_V:           // minimize difference of north and south
         for (int v = 0; v < 90; v += 9) {
-            if (( err = pwm_degree(-1, v) )) return err;
+            if (( err = pwm_set_degree(-1, v) )) return err;
             msleep(200);
             if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
             if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
@@ -827,7 +895,7 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     default: return ESP_ERR_INVALID_ARG;
     }
     if (bmax != 0 || bmin != 1e10) {
-        return pwm_degree(*hdeg, *vdeg);
+        return pwm_set_degree(*hdeg, *vdeg);
     }
 #endif // CONFIG_ALS_TRACK
     return ESP_ERR_NOT_FOUND;

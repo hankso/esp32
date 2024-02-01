@@ -20,7 +20,7 @@
 #define CONSOLE_DRIVER_I2C          // 1436 Bytes
 #define CONSOLE_DRIVER_ALS          // 1920 Bytes
 #define CONSOLE_DRIVER_ADC          // 1424 Bytes
-#define CONSOLE_DRIVER_PWM          // 224 Bytes
+#define CONSOLE_DRIVER_PWM          // 1668 Bytes
 
 #define CONSOLE_UTILS_VER           // 272 Bytes
 #define CONSOLE_UTILS_LSHW          // 1988 Bytes

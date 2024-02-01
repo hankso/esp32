@@ -29,7 +29,8 @@ extern "C" {
 #define CONFIG_ADC_INPUT                    // adc_read: 4.6KB
 #define CONFIG_I2C_SCREEN                   // scn_progbar: 4.0KB
 #define CONFIG_ALS_TRACK                    // als_tracking: 1.0KB
-#define CONFIG_PWM_SERVO                    // pwm_degree: 6.3KB
+#define CONFIG_PWM_SERVO                    // pwm_xxx_degree: 1.5KB
+#define CONFIG_PWM_BUZZER                   // pwm_xxx_tone: 1.1KB
 #define CONFIG_LED_INDICATOR                // led_xxx: 27.4KB
 // #define CONFIG_KNOB_INPUT                   // knob_input: 2.3KB
 // #define CONFIG_VLX_SENSOR                   // vlx_probe: 5.0KB
@@ -69,6 +70,7 @@ extern "C" {
 #ifndef CONFIG_GPIO_SERVOV
 #define CONFIG_GPIO_SERVOV      32
 #define CONFIG_GPIO_SERVOH      33
+#define CONFIG_GPIO_BUZZER      4
 #endif
 
 #ifndef CONFIG_GPIO_BTN

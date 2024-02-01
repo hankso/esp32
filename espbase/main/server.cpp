@@ -149,7 +149,7 @@ void onUpdateHelper(AsyncWebServerRequest *req) {
     }
 }
 
-void onUpdatePost(AsyncWebServerRequest *reqt, String filename, size_t index, uint8_t *data, size_t len, bool final) {
+void onUpdatePost(AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final) {
     if (!index) {
         if (!ota_updation_begin(0)) {
             AsyncWebServerResponse *res = req->beginResponse(

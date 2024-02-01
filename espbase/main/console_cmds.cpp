@@ -587,17 +587,34 @@ static int driver_adc(int argc, char **argv) {
 static struct {
     struct arg_int *hdeg;
     struct arg_int *vdeg;
+    struct arg_int *freq;
+    struct arg_int *pcent;
     struct arg_end *end;
 } driver_pwm_args = {
-    .hdeg = arg_int1(NULL, NULL, "<0-180>", "yaw degree"),
-    .vdeg = arg_int1(NULL, NULL, "<0-160>", "pitch degree"),
-    .end = arg_end(2)
+    .hdeg = arg_int0("y", NULL, "<0-180>", "yaw degree"),
+    .vdeg = arg_int0("p", NULL, "<0-160>", "pitch degree"),
+    .freq = arg_int0("f", NULL, "<1-20000>", "tone frequency"),
+    .pcent = arg_int0("l", NULL, "<0-100>", "tone loudness (percentage)"),
+    .end = arg_end(4)
 };
 
 static int driver_pwm(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &driver_pwm_args))
         return ESP_ERR_INVALID_ARG;
-    return pwm_degree(driver_pwm_args.hdeg->ival[0], driver_pwm_args.vdeg->ival[0]);
+    int hdeg = ARG_INT(driver_pwm_args.hdeg, -1),
+        vdeg = ARG_INT(driver_pwm_args.vdeg, -1),
+        pcent = ARG_INT(driver_pwm_args.pcent, -1);
+    uint32_t freq = ARG_INT(driver_pwm_args.freq, -1);
+    if (hdeg >= 0 || vdeg >= 0)
+        return pwm_set_degree(hdeg, vdeg);
+    if (freq != 0xFFFFFFFF || pcent >= 0)
+        return pwm_set_tone(freq, pcent);
+    esp_err_t err = ESP_OK;
+    if (!( err = pwm_get_degree(&hdeg, &vdeg) ))
+        printf("PWM Degree: %d %d\n", hdeg, vdeg);
+    if (!( err = pwm_get_tone(&freq, &pcent) ))
+        printf("PWM Tone: %dHz %d%%\n", freq, pcent);
+    return err;
 }
 #endif // CONSOLE_DRIVER_PWM
 

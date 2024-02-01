@@ -36,6 +36,7 @@ extern "C" {
 
 #define PIN_SVOH    GPIO_NUMBER(CONFIG_GPIO_SERVOH)
 #define PIN_SVOV    GPIO_NUMBER(CONFIG_GPIO_SERVOV)
+#define PIN_BUZZ    GPIO_NUMBER(CONFIG_GPIO_BUZZER)
 
 #define PIN_SDA0    GPIO_NUMBER(CONFIG_GPIO_I2C_SDA)
 #define PIN_SCL0    GPIO_NUMBER(CONFIG_GPIO_I2C_SCL)
@@ -62,7 +63,10 @@ void gpio_table(bool i2c, bool spi);
 esp_err_t gpioext_set_level(int pin, bool level);
 esp_err_t gpioext_get_level(int pin, bool * level, bool sync);
 
-esp_err_t pwm_degree(int hdeg, int vdeg);
+esp_err_t pwm_set_degree(int hdeg, int vdeg);
+esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
+esp_err_t pwm_set_tone(uint32_t freq, int pcent);
+esp_err_t pwm_get_tone(uint32_t *freq, int *pcent);
 
 esp_err_t twdt_feed();
 
