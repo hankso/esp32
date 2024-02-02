@@ -20,7 +20,7 @@ import posixpath
 
 # these are default values
 __basedir__ = os.path.dirname(os.path.abspath(__file__))
-__distdir__ = os.path.join(__basedir__, 'webdev', 'dist')
+__distdir__ = os.path.join(__basedir__, 'webpage', 'dist')
 __cmkfile__ = os.path.join(__basedir__, 'CMakeLists.txt')
 __nvsfile__ = os.path.join(__basedir__, 'nvs_flash.csv')
 __partcsv__ = os.path.join(__basedir__, 'partitions.csv')
@@ -249,6 +249,7 @@ def webserver(args):
         app.route('/config', ['GET', 'POST'], config)
         app.route('/assets/<filename:path>', 'GET', static_assets)
     app.route('/', 'GET', static_files)
+    app.route('/echo', 'GET', lambda *a, **k: dict(bottle.request.query))
     app.route('/<filename:path>', 'GET', static_files)
     bottle.run(app, reload=True, host=args.host, port=args.port)
 

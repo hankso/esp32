@@ -1,35 +1,206 @@
+// Plugins
+import vue from '@vitejs/plugin-vue'
+import prismjs from 'vite-plugin-prismjs'
+import autoimport from 'unplugin-auto-import/vite'
+import components from 'unplugin-vue-components/vite'
+import compression from 'vite-plugin-compression'
+import vuedevtools from 'vite-plugin-vue-devtools'
+import { visualizer } from 'rollup-plugin-visualizer'
+import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
+
+// Utilities
+import { resolve } from 'node:path'
+import { defineConfig } from 'vite'
+import { spawn, execSync } from 'node:child_process'
 import { fileURLToPath, URL } from 'node:url'
 
-import { defineConfig } from 'vite'
-import vue from '@vitejs/plugin-vue'
+// Colorful logging
+function kolorist(start, end) {
+    if (
+        !process.stdout.isTTY ||
+        process.env.FORCE_COLOR === '0' ||
+        process.env.NODE_DISABLE_COLORS ||
+        process.env.NO_COLOR ||
+        process.env.TERM === 'dumb'
+    ) {
+        return str => '' + str
+    }
+    const open = `\x1b[${start}m`
+    const close = `\x1b[${end}m`
+    const regex = new RegExp(`\\x1b\\[${end}m`, 'g')
+    return str => open + ('' + str).replace(regex, open) + close
+}
+const
+    bold = kolorist(1, 22),
+    dim = kolorist(2, 22),
+    green = kolorist(32, 39),
+    yellow = kolorist(33, 39),
+    cyan = kolorist(36, 39)
+
+// Custom plugin
+const pythonServerPlugin = () => {
+    let pserver
+
+    class PythonServer {
+        constructor(port, host='0.0.0.0', cmd='python', verbose=true) {
+            let entry = resolve(__dirname, '..', 'helper.py')
+            this.proc = this.pid = null
+            this.port = port
+            this.host = host
+            this.verb = verbose
+            this.addr = `${host.replace('0.0.0.0', 'localhost')}:${port}`
+            this.args = [cmd, entry, 'serve', '-H', host, '-P', port]
+            this.log(`Python Server created: ${entry} ${this.addr}`)
+        }
+        log() {
+            if (this.verb)
+                console.log(this.pid ? `[${this.pid}]` : '', ...arguments)
+        }
+        start() {
+            if (this.proc) return this
+            // DO NOT use `exec` on windows system
+            this.proc = spawn(this.args[0], this.args.slice(1), {
+                windowsHide: true
+            })
+            this.pid = this.proc.pid
+            this.proc.on('exit', code => {
+                this.log(`Python Server exit(${code || 0})`)
+                this.proc = this.pid = null
+            })
+            this.proc.on('error', err => this.log(`Error: ${err}`))
+            this.proc.stdout.on('data', msg => this.log(`STDOUT: ${msg}`))
+            this.proc.stderr.on('data', msg => this.log(`STDERR: ${msg}`))
+            this.log('Python Server start')
+            return this
+        }
+        close() {
+            if (!this.proc) return this
+            this.log('Python Server killed')
+            this.proc.kill()
+            this.proc = null
+            return this
+        }
+        toString() {
+            return `  ${green('\u279c')}  ${bold('Python')}:  ` + cyan(
+                `http://${this.host.replace('0.0.0.0', 'localhost')}:`
+                + `${bold(this.port)}/`
+            ) + green(` (PID ${this.pid})`)
+        }
+    }
+    return {
+        name: 'python-api-server',
+        apply: 'serve',
+        enforce: 'pre',
+        buildStart() {
+            pserver && pserver.start()
+        },
+        buildEnd() {
+            pserver && pserver.close()
+        },
+        configResolved(resolvedConfig) {
+            pserver = new PythonServer(
+                resolvedConfig.server.sport,
+                resolvedConfig.server.host,
+                'python', false
+            )
+        },
+        configureServer(server) {
+            let printUrls = server.printUrls
+            server.printUrls = () => {
+                if (pserver && pserver.proc) {
+                    server.config.logger.info(pserver.toString())
+                }
+                printUrls()
+            }
+        },
+    }
+}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
-    let config = {
+    let SRC_VER, BUILD_INFO
+    if (command === 'build') {
+        BUILD_INFO = {
+            NODE_JS: process.versions.node,
+            BUILD_OS: `${process.platform}-${process.arch}`,
+            BUILD_TIME: new Date().toString()
+        }
+        try {
+            SRC_VER = `${execSync('git describe --tags --always')}`
+        } catch {}
+    }
+    return {
         build: {
             outDir: './dist',
             assetsDir: 'assets'
         },
         server: {
-            host: '0.0.0.0'
+            host: '0.0.0.0',
+            port: 5173,
+            sport: 5172, // python api server
+            proxy: {
+                '/api': {
+                    target: `http://localhost:5172`,
+                    rewrite: path => path.replace(/^\/api/, ''),
+                    changeOrigin: true,
+                    secure: false
+                }
+            }
         },
-        defines: {
-            __VITE_MODE__: mode,
-            __VITE_COMMAND__: command
+        define: {
+            'process.env': {
+                VITE_PATH: __dirname,
+                VITE_MODE: mode,
+                VITE_CMD: command,
+                BUILD_INFO,
+                SRC_VER,
+            }
         },
-        plugins: [vue()],
+        plugins: [
+            vue({
+                template: { transformAssetUrls } // add more types
+            }),
+            vuetify(),
+            prismjs({
+                languages: [
+                    'markup', // 0.8kB
+                    'css', // 0.1kB
+                    'js', // 1.6kB
+                    'clike' // 0.1kB
+                ],
+                plugins: [
+                    'previewers', // 3kB
+                    'autolinker', // 0.4kB
+                    'inline-color', // 0.5kB
+                    'show-invisibles' // 0.2kB
+                ],
+                theme: 'default',
+                css: true
+            }),
+            autoimport({
+                imports: ['vue', 'vue-router', 'vue-i18n']
+            }),
+            components({
+                dts: false
+            }),
+            compression({
+                verbose: false,
+                deleteOriginFile: true
+            }),
+            visualizer({
+                filename: 'resources.html',
+                template: 'treemap', // sunburst|treemap|network|raw-data|list
+                emitFile: true,
+                gzipSize: true,
+                brotliSize: true
+            }),
+            vuedevtools(),
+            pythonServerPlugin(),
+        ],
         resolve: {
             alias: {
                 '@': fileURLToPath(new URL('./src', import.meta.url))
             }
         }
     }
-    if (command === 'build') {
-        config.defines['__BUILD_INFO__'] = {
-            NodeJS: process.versions.node,
-            OSInfo: `${process.platform}-${process.arch}`,
-            BuildTime: new Date().toString()
-        }
-    }
-    return config
 })
