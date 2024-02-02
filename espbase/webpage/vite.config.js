@@ -42,34 +42,44 @@ const pythonServerPlugin = () => {
     let pserver
 
     class PythonServer {
-        constructor(port, host='0.0.0.0', cmd='python', verbose=true) {
+        constructor(port=8080, host='0.0.0.0', cmd='python', verbose=true) {
             let entry = resolve(__dirname, '..', 'helper.py')
             this.proc = this.pid = null
             this.port = port
             this.host = host
             this.verb = verbose
             this.addr = `${host.replace('0.0.0.0', 'localhost')}:${port}`
-            this.args = [cmd, entry, 'serve', '-H', host, '-P', port]
-            this.log(`Python Server created: ${entry} ${this.addr}`)
+            this.args = [cmd, '-u', entry, 'serve', '-H', host, '-P', port]
+            if (!verbose) this.args.push('--quiet')
         }
         log() {
-            if (this.verb)
-                console.log(this.pid ? `[${this.pid}]` : '', ...arguments)
+            if (!this.verb) return
+            console.log(
+                dim(new Date().toLocaleTimeString()),
+                cyan(bold('[pser]')),
+                this.pid ? `[${this.pid}]` : '',
+                ...arguments
+            )
+        }
+        onMessage(msg) {
+            msg.toString().trim().split('\n').forEach(line => console.log(
+                dim(new Date().toLocaleTimeString()),
+                cyan(bold('[pser]')),
+                (this.pid ? `[${this.pid}]` : '') + line
+            ))
         }
         start() {
             if (this.proc) return this
             // DO NOT use `exec` on windows system
-            this.proc = spawn(this.args[0], this.args.slice(1), {
-                windowsHide: true
-            })
+            this.proc = spawn(this.args[0], this.args.slice(1))
             this.pid = this.proc.pid
             this.proc.on('exit', code => {
                 this.log(`Python Server exit(${code || 0})`)
                 this.proc = this.pid = null
             })
-            this.proc.on('error', err => this.log(`Error: ${err}`))
-            this.proc.stdout.on('data', msg => this.log(`STDOUT: ${msg}`))
-            this.proc.stderr.on('data', msg => this.log(`STDERR: ${msg}`))
+            this.proc.on('error', err => console.log(`Error: ${err}`))
+            this.proc.stdout.on('data', this.onMessage)
+            this.proc.stderr.on('data', this.onMessage)
             this.log('Python Server start')
             return this
         }

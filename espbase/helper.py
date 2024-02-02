@@ -133,7 +133,8 @@ def webserver(args):
     args.root = os.path.abspath(args.root)
     if not (os.path.exists(args.root)):
         return print('Cannot serve at `%s`: dirctory not found' % args.root)
-    print('WebServer running at `%s`' % _relpath(args.root))
+    if not args.quiet:
+        print('WebServer running at `%s`' % _relpath(args.root))
 
     def edit_get():
         if bottle.request.query.get('list'):
@@ -241,7 +242,8 @@ def webserver(args):
 
     app = bottle.Bottle()
     if not args.static:
-        print('Will simulate ESP32 APIs: edit/config/assets etc.')
+        if not args.quiet:
+            print('Will simulate ESP32 APIs: edit/config/assets etc.')
         app.route('/edit', 'GET', edit_get)
         app.route('/editu', 'POST', edit_upload)
         app.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
@@ -251,7 +253,9 @@ def webserver(args):
     app.route('/', 'GET', static_files)
     app.route('/echo', 'GET', lambda *a, **k: dict(bottle.request.query))
     app.route('/<filename:path>', 'GET', static_files)
-    bottle.run(app, reload=True, host=args.host, port=args.port)
+    bottle.run(
+        app, reload=True, quiet=args.quiet, host=args.host, port=args.port
+    )
 
 
 if __name__ == '__main__':
@@ -266,6 +270,8 @@ if __name__ == '__main__':
         '-H', '--host', default='0.0.0.0', help='Host address to listen on')
     sparser.add_argument(
         '-P', '--port', type=int, default=8080, help='default port 8080')
+    sparser.add_argument(
+        '-q', '--quiet', action='store_true', help='be slient on CLI')
     sparser.add_argument(
         '--static', action='count', help='disable ESP32 API, only statics')
     sparser.add_argument(
