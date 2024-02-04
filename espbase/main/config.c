@@ -29,6 +29,16 @@ static const char * TAG = "Config";
 
 // default values
 config_t Config = {
+    .net = {
+        .STA_SSID  = "",
+        .STA_PASS  = "",
+        .STA_HOST  = "",
+        .AP_SSID   = "EspBase",
+        .AP_PASS   = "16011106",
+        .AP_HOST   = "10.0.2.1",
+        .AP_AUTO   = "1",
+        .AP_HIDE   = "0",
+    },
     .web = {
         .WS_NAME   = "",
         .WS_PASS   = "",
@@ -42,16 +52,6 @@ config_t Config = {
         .DIR_AP    = "/ap/",
         .DIR_ROOT  = "/root/",
         .DIR_DATA  = "/data/",
-    },
-    .net = {
-        .STA_SSID  = "",
-        .STA_PASS  = "",
-        .STA_HOST  = "",
-        .AP_AUTO   = "1",
-        .AP_SSID   = "Hankso@ESP32",
-        .AP_PASS   = "16011106",
-        .AP_HOST   = "10.0.2.1",
-        .AP_HIDE   = "0",
     },
     .app = {
         .DNS_RUN   = "",
@@ -79,118 +79,114 @@ config_t Config = {
     }
 };
 
-// Sometimes we point a const char pointer to char * (e.g. new json comming in),
-// but const char * cannot be deallocated. If the pointer in staticlist, then
-// it's a TRUE const char pointer, or it's actually char * (free it!)
-/*
-static const char * staticlist[] = {
-    Config.web.WS_NAME,   Config.web.WS_PASS,
-    Config.web.HTTP_NAME, Config.web.HTTP_PASS,
-    Config.web.VIEW_EDIT, Config.web.VIEW_FILE, Config.web.VIEW_OTA
-    Config.web.DIR_ASSET, Config.web.DIR_STA,   Config.web.DIR_AP,
-    Config.web.DIR_ROOT,  Config.web.DIR_DATA,
+// The rwlst is a mapping to flattened Configuration attributes.
+// Low level `config_get/config_set` are actually manipulation on this array.
+// Therefore, global variable `Config` is just a link to the rwlst memory.
+//
+// Config values are pointers to constant strings `const char *`, which should
+// not be deallocated. Field `freeval` is designed to hold strdup of new value.
+// Feel free to call `config_set` on `char *` (without memory leak).
+typedef struct {
+    const char *key;
+    const char * *value;
+    char * freeval;
+} config_entry_t;
 
-    Config.net.STA_SSID,  Config.net.STA_PASS,
-    Config.net.STA_HOST,
-    Config.net.AP_AUTO,   Config.net.AP_HIDE,
-    Config.net.AP_SSID,   Config.net.AP_PASS,
-    Config.net.AP_HOST,
+static config_entry_t rwlst[] = {       // read/write entries
+    {"net.sta.ssid",    &Config.net.STA_SSID,   NULL},
+    {"net.sta.pass",    &Config.net.STA_PASS,   NULL},
+    {"net.sta.host",    &Config.net.STA_HOST,   NULL},
+    {"net.ap.ssid",     &Config.net.AP_SSID,    NULL},
+    {"net.ap.pass",     &Config.net.AP_PASS,    NULL},
+    {"net.ap.host",     &Config.net.AP_HOST,    NULL},
+    {"net.ap.auto",     &Config.net.AP_AUTO,    NULL},
+    {"net.ap.hide",     &Config.net.AP_HIDE,    NULL},
 
-    Config.app.DNS_RUN,   Config.app.DNS_HOST,
-    Config.app.OTA_RUN,   Config.app.OTA_URL,
-    Config.app.PROMPT,
-};
-*/
+    {"web.ws.name",     &Config.web.WS_NAME,    NULL},
+    {"web.ws.pass",     &Config.web.WS_PASS,    NULL},
+    {"web.http.name",   &Config.web.HTTP_NAME,  NULL},
+    {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
+    {"web.view.editor", &Config.web.VIEW_EDIT,  NULL},
+    {"web.view.manage", &Config.web.VIEW_FILE,  NULL},
+    {"web.view.update", &Config.web.VIEW_OTA,   NULL},
+    {"web.path.assets", &Config.web.DIR_ASSET,  NULL},
+    {"web.path.sta",    &Config.web.DIR_STA,    NULL},
+    {"web.path.ap",     &Config.web.DIR_AP,     NULL},
+    {"web.path.static", &Config.web.DIR_ROOT,   NULL},
+    {"web.path.data",   &Config.web.DIR_DATA,   NULL},
 
-config_entry_t cfglist[] = {
-    {"web.ws.name",     &Config.web.WS_NAME },
-    {"web.ws.pass",     &Config.web.WS_PASS},
-    {"web.http.name",   &Config.web.HTTP_NAME},
-    {"web.http.pass",   &Config.web.HTTP_PASS},
-    {"web.view.editor", &Config.web.VIEW_EDIT},
-    {"web.view.manage", &Config.web.VIEW_FILE},
-    {"web.view.update", &Config.web.VIEW_OTA},
-    {"web.path.assets", &Config.web.DIR_ASSET},
-    {"web.path.sta",    &Config.web.DIR_STA},
-    {"web.path.ap",     &Config.web.DIR_AP},
-    {"web.path.static", &Config.web.DIR_ROOT},
-    {"web.path.data",   &Config.web.DIR_DATA},
-
-    {"net.sta.ssid",    &Config.net.STA_SSID},
-    {"net.sta.pass",    &Config.net.STA_PASS},
-    {"net.sta.host",    &Config.net.STA_HOST},
-    {"net.ap.auto",     &Config.net.AP_AUTO},
-    {"net.ap.ssid",     &Config.net.AP_SSID},
-    {"net.ap.pass",     &Config.net.AP_PASS},
-    {"net.ap.host",     &Config.net.AP_HOST},
-    {"net.ap.hide",     &Config.net.AP_HIDE},
-
-    {"app.dns.run",     &Config.app.DNS_RUN},
-    {"app.dns.host",    &Config.app.DNS_HOST},
-    {"app.ota.run",     &Config.app.OTA_RUN},
-    {"app.ota.url",     &Config.app.OTA_URL},
-    {"app.cmd.prompt",  &Config.app.PROMPT},
+    {"app.dns.run",     &Config.app.DNS_RUN,    NULL},
+    {"app.dns.host",    &Config.app.DNS_HOST,   NULL},
+    {"app.ota.run",     &Config.app.OTA_RUN,    NULL},
+    {"app.ota.url",     &Config.app.OTA_URL,    NULL},
+    {"app.cmd.prompt",  &Config.app.PROMPT,     NULL},
 };
 
-static uint16_t numcfg = sizeof(cfglist) / sizeof(config_entry_t);
+static config_entry_t rolst[] = {       // readonly entries
+    {"uid",  &Config.info.UID,  NULL},
+    {"name", &Config.info.NAME, NULL},
+};
+
+static uint16_t rwlen = LEN(rwlst);
 
 /******************************************************************************
  * Configuration I/O
  */
 
 static int16_t config_index(const char *key) {
-    LOOPN(i, numcfg) {
-        if (!strcmp(key, cfglist[i].key)) return i;
+    LOOPN(i, rwlen) {
+        if (!strcmp(key, rwlst[i].key)) return i;
     }
     return -1;
 }
 
-const char * config_get(const char *key) {
-    int16_t idx = config_index(key);
-    return idx == -1 ? "Unknown" : *cfglist[idx].value;
+static bool config_set_safe(config_entry_t *ent, const char *value) {
+    if (!strcmp(*ent->value, value)) return true;
+    char *tmp = strdup(value);
+    if (!tmp) return false;
+    TRYFREE(ent->freeval);
+    *ent->value = ent->freeval = tmp;
+    return true;
 }
 
 bool config_set(const char *key, const char *value) {
     int16_t idx = config_index(key);
     if (idx == -1) return false;
-    if (strcmp(*cfglist[idx].value, value)) {
-        *cfglist[idx].value = value ? value : "";
-    }
-    // if (*cfglist[idx].value != staticlist[idx]) {
-    //     free((void *)*cfglist[idx].value);
-    // }
-    return true;
+    return config_set_safe(rwlst + idx, value ? value : "");
+}
+
+const char * config_get(const char *key) {
+    int16_t idx = config_index(key);
+    return idx == -1 ? "Unknown" : *rwlst[idx].value;
 }
 
 void config_list() {
     printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
-    LOOPN(i, numcfg) {
-        const char *key = cfglist[i].key, *value = *cfglist[i].value;
+    LOOPN(i, rwlen) {
+        const char *key = rwlst[i].key, *value = *rwlst[i].value;
         printf("  %-15.15s\t", key);
         if (!strcmp(key + strlen(key) - 4, "pass")) {
-            printf("`%.*s`\n", strlen(value), "********");
+            printf("`%.*s`", strlen(value), "****************");
         } else {
-            printf("`%s`\n", value);
+            printf("`%s`", value);
         }
+        printf("%s\n", rwlst[i].freeval ? " (modified)" : "");
     }
 }
 
-void _set_config_callback(const char *key, cJSON *item) {
+static void set_config_callback(const char *key, cJSON *item) {
     if (!cJSON_IsString(item)) {
         if (!cJSON_IsObject(item)) {
             ESP_LOGE(TAG, "Invalid type of `%s`", cJSON_Print(item));
         }
         return;
     }
-    const char *val = strdup(item->valuestring);
-    if (!val) {
-        ESP_LOGE(TAG, "No memory for new config value");
-    } else if (!config_set(key, val)) {
+    const char *val = item->valuestring;
+    if (!config_set(key, val))
         ESP_LOGD(TAG, "JSON Config set `%s` to `%s` failed", key, val);
-    }
 }
 
-void json_parse_object_recurse(
+static void json_parse_object_recurse(
     cJSON *item, void (*cb)(const char *, cJSON *), const char *prefix)
 {
     while (item) {
@@ -213,7 +209,7 @@ void json_parse_object_recurse(
         // recurse to child and iterate to next sibling
         if (item->child) json_parse_object_recurse(item->child, cb, key);
         item = item->next;
-        free(key);
+        TRYFREE(key);
     }
 }
 
@@ -223,7 +219,7 @@ bool config_loads(const char *json) {
         ESP_LOGE(TAG, "Cannot parse JSON: %s", cJSON_GetErrorPtr());
         return false;
     } else {
-        json_parse_object_recurse(obj, &_set_config_callback, "");
+        json_parse_object_recurse(obj, &set_config_callback, "");
         cJSON_Delete(obj);
         return true;
     }
@@ -231,8 +227,8 @@ bool config_loads(const char *json) {
 
 char * config_dumps() {
     cJSON *obj = cJSON_CreateObject();
-    LOOPN(i, numcfg) {
-        cJSON_AddStringToObject(obj, cfglist[i].key, *cfglist[i].value);
+    LOOPN(i, rwlen) {
+        cJSON_AddStringToObject(obj, rwlst[i].key, *rwlst[i].value);
     }
     char *string = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -250,25 +246,17 @@ static struct {
     const esp_partition_t *part;    // nvs flash partition
 } nvs_st = { false, ESP_OK, 0, NULL };
 
-// nvs helper function: _nvs_load_str wrapps on nvs_get_str
-static esp_err_t _nvs_load_str(const char *key, const char **ptr) {
+// nvs helper function: nvs_load_str wrapps on nvs_get_str
+static esp_err_t nvs_load_str(config_entry_t *ent) {
+    esp_err_t err;
+    char *value;
     size_t len = 0;
-    esp_err_t err = nvs_get_str(nvs_st.handle, key, NULL, &len);
-    if (err) return err;
-    char *tmp = (char *)malloc(len);
-    if (tmp == NULL) return ESP_ERR_NO_MEM;
-    if (( err = nvs_get_str(nvs_st.handle, key, tmp, &len) )) {
-        free(tmp);
-    } else if (!strcmp(*ptr, tmp)) {
-        free(tmp);
-    } else {
-        // TODO: use staticlist to free const char
-        // int16_t idx = config_index(key);
-        // if (idx != -1 && staticlist[idx] != *ptr) {
-        //     free(cast_away_const_force(*ptr));
-        // }
-        *ptr = tmp ? tmp : "";
+    if (( err = nvs_get_str(nvs_st.handle, ent->key, NULL, &len) )) return err;
+    if (!( value = (char *)malloc(len) )) return ESP_ERR_NO_MEM;
+    if (!( err = nvs_get_str(nvs_st.handle, ent->key, value, &len) )) {
+        if (config_set_safe(ent, value)) err = ESP_ERR_NO_MEM;
     }
+    TRYFREE(value);
     return err;
 }
 
@@ -376,10 +364,11 @@ bool config_nvs_clear() {
 bool config_nvs_load() {
     esp_err_t err;
     if (config_nvs_open(NAMESPACE_CFG, true)) return false;
-    LOOPN(i, numcfg) {
-        const char * key = cfglist[i].key;
-        if (( err = _nvs_load_str(key, cfglist[i].value) ))
-            ESP_LOGD(TAG, "get `%s` failed: %s", key, esp_err_to_name(err));
+    LOOPN(i, rwlen) {
+        if (( err = nvs_load_str(rwlst + i) )) {
+            ESP_LOGD(TAG, "get nvs `%s` failed: %s",
+                    rwlst[i].key, esp_err_to_name(err));
+        }
     }
     return config_nvs_close() == ESP_OK;
 }
@@ -387,8 +376,8 @@ bool config_nvs_load() {
 bool config_nvs_dump() {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
     bool success = true;
-    LOOPN(i, numcfg) {
-        if (nvs_set_str(nvs_st.handle, cfglist[i].key, *cfglist[i].value)) {
+    LOOPN(i, rwlen) {
+        if (nvs_set_str(nvs_st.handle, rwlst[i].key, *rwlst[i].value)) {
             success = false;
             break;
         }
@@ -455,10 +444,11 @@ bool config_initialize() {
 
     // load readonly values
     if (config_nvs_open(NAMESPACE_INFO, true) == ESP_OK) {
-        if (( err = _nvs_load_str("uid", &Config.info.UID) )) {
-            ESP_LOGE(TAG, "get `uid` failed: %s", esp_err_to_name(err));
-        } else {
-            _nvs_load_str("name", &Config.info.NAME);
+        LOOPN(i, LEN(rolst)) {
+            if (( err = nvs_load_str(rolst + i) )) {
+                ESP_LOGD(TAG, "get nvs `%s` failed: %s",
+                        rolst[i].key, esp_err_to_name(err));
+            }
         }
         config_nvs_close();
     }

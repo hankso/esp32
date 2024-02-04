@@ -209,7 +209,7 @@ ota_err:
 http_clean:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    if (ota_buf) free(ota_buf);
+    TRYFREE(ota_buf);
     return err;
 #else
     return ESP_ERR_INVALID_STATE;

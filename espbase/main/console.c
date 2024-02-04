@@ -143,7 +143,7 @@ char * console_handle_command(const char *cmd, bool history) {
     fclose(stdout); stdout = bak;
     if (buf != NULL) {
         if (!size) {                        // empty string means no log output
-            free(buf); buf = NULL;
+            TRYFREE(buf);
         } else {                            // rstrip buffer string
             while (size--) {
                 if (buf[size] != '\n' && buf[size] != '\r') break;
@@ -158,12 +158,14 @@ char * console_handle_command(const char *cmd, bool history) {
 
 void console_handle_one() {
     char *ret, *cmd = linenoise(prompt);
-    if (cmd != NULL) {
-        putchar('\n'); fflush(stdout);
-        if (strlen(cmd) && ( ret = console_handle_command(cmd, true) )) {
-            printf("%s\n\n", ret);
-            free(ret);
+    if (!cmd) return;
+    putchar('\n'); fflush(stdout);
+    if (strlen(cmd)) {
+        if (( ret = console_handle_command(cmd, true) )) {
+            printf("%s\n", ret);
+            TRYFREE(ret);
         }
+        putchar('\n');                      // one more blank line
     }
     linenoiseFree(cmd);
 }
@@ -258,8 +260,8 @@ char * console_handle_rpc(const char *json) {
     if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
         ret = rpc_response(cJSON_GetObjectItem(obj ,"id"), tmp ? tmp : "");
 exit:
-    if (tmp) free(tmp);
-    if (cmd) free(cmd);
+    TRYFREE(tmp);
+    TRYFREE(cmd);
     return ret;
 }
 

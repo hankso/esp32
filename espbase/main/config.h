@@ -17,6 +17,17 @@
 extern "C" {
 #endif
 
+typedef struct config_network_t {
+    const char * STA_SSID;  // BSSID of access point to connect after startup
+    const char * STA_PASS;  // Password to connect to access point
+    const char * STA_HOST;  // Use static IP address instead of DHCP
+    const char * AP_SSID;   // AP SSID (hotspot name)
+    const char * AP_PASS;   // AP password
+    const char * AP_HOST;   // AP IP address (aka. Gateway)
+    const char * AP_AUTO;   // Switch to AP mode if STA connection failed
+    const char * AP_HIDE;   // Whether to hide AP SSID
+} config_net_t;
+
 typedef struct config_webserver_t {
     const char * WS_NAME;   // Username to access websocket connection
     const char * WS_PASS;   // Password. Leave it empty("") to disable
@@ -31,17 +42,6 @@ typedef struct config_webserver_t {
     const char * DIR_ROOT;  // Path to static files like sitemap, favicon etc.
     const char * DIR_DATA;  // Directory to storage data (gcode etc)
 } config_web_t;
-
-typedef struct config_network_t {
-    const char * STA_SSID;  // BSSID of access point to connect after startup
-    const char * STA_PASS;  // Password to connect to access point
-    const char * STA_HOST;  // Use static IP address instead of DHCP
-    const char * AP_AUTO;   // Switch to AP mode if STA connection failed
-    const char * AP_SSID;   // AP SSID (hotspot name)
-    const char * AP_PASS;   // AP password
-    const char * AP_HOST;   // AP IP address (aka. Gateway)
-    const char * AP_HIDE;   // Whether to hide AP SSID
-} config_net_t;
 
 // For easier managing, Boolean values are stored as "0" or "1" (string)
 typedef struct config_application_t {
@@ -61,25 +61,13 @@ typedef struct config_information_t {
 
 // Global instance to access configuration
 typedef struct {
-    config_web_t web;
     config_net_t net;
+    config_web_t web;
     config_app_t app;
     config_info_t info;
 } config_t;
 
 extern config_t Config;
-
-/* The cfglist is a mapping to flattened Configuration attributes.
- * Low level config_get/config_set are actually manipulation on this array.
- * Therefore, global variable `Config` is just a reference to the cfglist
- * memory.
- */
-typedef struct {
-    const char *key;
-    const char * *value;
-} config_entry_t;
-
-extern config_entry_t cfglist[];
 
 bool config_initialize();
 bool config_loads(const char *);        // load Config from json

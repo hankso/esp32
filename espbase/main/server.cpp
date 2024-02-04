@@ -17,6 +17,9 @@
 
 static const char
 *TAG = "Server",
+*TYPE_HTML = "text/html",
+*TYPE_TEXT = "text/plain",
+*TYPE_JSON = "application/json",
 *ERROR_HTML =
 "<!DOCTYPE html>"
 "<html>"
@@ -78,20 +81,22 @@ void onCommand(AsyncWebServerRequest *req) {
     log_msg(req);
     if (req->hasParam("exec", true)) {
         log_param(req);
-        char *ret;
+        char *ret = NULL;
         const char *cmd = req->getParam("exec", true)->value().c_str();
-        if (strlen(cmd) && ( ret = console_handle_command(cmd, false) )) {
-            req->send(200, "text/plain", ret);
-            free(ret);
+        if (!strlen(cmd)) {
+            req->send(400, TYPE_TEXT, "Invalid command to execute");
+        } else if (( ret = console_handle_command(cmd, false) )) {
+            req->send(200, TYPE_TEXT, ret);
         } else {
             req->send(200);
         }
+        TRYFREE(ret);
     } else if (req->hasParam("gcode", true)) {
         const char *gcode = req->getParam("gcode", true)->value().c_str();
         printf("GCode parser: `%s`\n", gcode);
-        req->send(500, "text/plain", "GCode parser not implemented yet");
+        req->send(500, TYPE_TEXT, "GCode parser not implemented yet");
     } else {
-        req->send(400, "text/plain", "Invalid parameter");
+        req->send(400, TYPE_TEXT, "Invalid parameter");
     }
 }
 
@@ -99,18 +104,18 @@ void onConfig(AsyncWebServerRequest *req) {
     log_msg(req);
     if (req->hasParam("json", true)) {
         if (!config_loads(req->getParam("json", true)->value().c_str())) {
-            req->send(500, "text/plain", "Load config from JSON failed");
+            req->send(500, TYPE_TEXT, "Load config from JSON failed");
         } else {
             req->send(200);
         }
     } else {
         char *json = config_dumps();
         if (!json) {
-            req->send(500, "text/plain", "Dump configs into JSON failed");
+            req->send(500, TYPE_TEXT, "Dump configs into JSON failed");
         } else {
-            req->send(200, "application/json", json);
-            free(json);
+            req->send(200, TYPE_JSON, json);
         }
+        TRYFREE(json);
     }
 }
 
@@ -119,7 +124,7 @@ void onUpdate(AsyncWebServerRequest *req) {
     String update = Config.web.VIEW_OTA;
     bool raw = !FFS.exists(update) && !FFS.exists(update + ".gz");
     if (raw || req->hasParam("raw")) {
-        req->send(200, "text/html", UPDATE_HTML);
+        req->send(200, TYPE_HTML, UPDATE_HTML);
     } else {
         req->send(FFS, Config.web.VIEW_OTA);
     }
@@ -130,20 +135,20 @@ void onUpdateHelper(AsyncWebServerRequest *req) {
     if (req->hasParam("reset", true)) {
         log_msg(req, "reset");
         ota_updation_reset();
-        req->send(200, "text/plain", "OTA Updation reset done");
+        req->send(200, TYPE_TEXT, "OTA Updation reset done");
     } else if (req->hasParam("size", true)) {
         String size = req->getParam("size", true)->value();
         log_msg(req, ("size: " + size).c_str());
         // erase OTA target partition for preparing
         if (!ota_updation_begin(size.toInt())) {
-            req->send(400, "text/plain", ota_updation_error());
+            req->send(400, TYPE_TEXT, ota_updation_error());
         } else {
-            req->send(200, "text/plain", "OTA Updation ready for upload");
+            req->send(200, TYPE_TEXT, "OTA Updation ready for upload");
         }
     } else {
         const char *error = ota_updation_error();
-        if (error) return req->send(400, "text/plain", error);
-        req->send(200, "text/plain", "OTA Updation success - reboot");
+        if (error) return req->send(400, TYPE_TEXT, error);
+        req->send(200, TYPE_TEXT, "OTA Updation success - reboot");
         msleep(500);
         esp_restart();
     }
@@ -153,7 +158,7 @@ void onUpdatePost(AsyncWebServerRequest *req, String filename, size_t index, uin
     if (!index) {
         if (!ota_updation_begin(0)) {
             AsyncWebServerResponse *res = req->beginResponse(
-                400, "text/plain", ota_updation_error());
+                400, TYPE_TEXT, ota_updation_error());
             res->addHeader("Connection", "close");
             return req->send(res);
         }
@@ -166,7 +171,7 @@ void onUpdatePost(AsyncWebServerRequest *req, String filename, size_t index, uin
     }
     if (final) {
         if (!ota_updation_end()) {
-            req->send(400, "text/plain", ota_updation_error());
+            req->send(400, TYPE_TEXT, ota_updation_error());
         } else {
             printf("Updation success: %s\n", format_size(index + len, false));
         }
@@ -181,30 +186,30 @@ void onEdit(AsyncWebServerRequest *req) {
         if (!path.startsWith("/")) path = "/" + path;
         File root = FFS.open(path);
         if (!root) {
-            req->send(404, "text/plain", path + " dir does not exists");
+            req->send(404, TYPE_TEXT, path + " dir does not exists");
         } else if (!root.isDirectory()) {
-            req->send(400, "text/plain", "No file entries under " + path);
+            req->send(400, TYPE_TEXT, "No file entries under " + path);
         } else {
             root.close();
             char *json = FFS.list(path.c_str());
-            req->send(200, "application/json", json ? json : "failed");
-            if (json) free(json);
+            req->send(200, TYPE_JSON, json ? json : "failed");
+            TRYFREE(json);
         }
     } else if (req->hasParam("path")) { // serve static files for editor
         String path = req->getParam("path")->value();
         if (!path.startsWith("/")) path = "/" + path;
         File file = FFS.open(path);
         if (!file) {
-            req->send(404, "text/plain", path + " file does not exists");
+            req->send(404, TYPE_TEXT, path + " file does not exists");
         } else if (file.isDirectory()) {
-            req->send(400, "text/plain", "Could not download dir " + path);
+            req->send(400, TYPE_TEXT, "Could not download dir " + path);
         } else {
             req->send(file, path, String(), req->hasParam("download"));
         }
     } else if (req->header("If-Modified-Since") != buildTime) {
         String edit = Config.web.VIEW_EDIT;
         if (!FFS.exists(edit) && !FFS.exists(edit + ".gz")) {
-            req->send(404, "text/html", ERROR_HTML);
+            req->send(404, TYPE_HTML, ERROR_HTML);
         } else {
             AsyncWebServerResponse *res = req->beginResponse(FFS, edit);
             res->addHeader("Content-Encoding", "gzip");
@@ -220,7 +225,7 @@ void onCreate(AsyncWebServerRequest *req) {
     // handle file|dir create
     log_msg(req);
     if (!req->hasParam("path")) {
-        return req->send(400, "text/plain", "No filename specified.");
+        return req->send(400, TYPE_TEXT, "No filename specified.");
     }
     String
         path = req->getParam("path")->value(),
@@ -228,19 +233,19 @@ void onCreate(AsyncWebServerRequest *req) {
                req->getParam("type")->value() : "file";
     if (type == "file") {
         if (FFS.exists(path)) {
-            return req->send(403, "text/plain", "File already exists.");
+            return req->send(403, TYPE_TEXT, "File already exists.");
         }
         File file = FFS.open(path, "w");
         if (!file) {
-            return req->send(500, "text/plain", "Create failed.");
+            return req->send(500, TYPE_TEXT, "Create failed.");
         }
     } else if (type == "dir") {
         File dir = FFS.open(path);
         if (dir.isDirectory()) {
             dir.close();
-            return req->send(403, "text/plain", "Dir already exists.");
+            return req->send(403, TYPE_TEXT, "Dir already exists.");
         } else if (!FFS.mkdir(path)) {
-            return req->send(500, "text/plain", "Create failed.");
+            return req->send(500, TYPE_TEXT, "Create failed.");
         }
     }
     req->send(200);
@@ -250,12 +255,12 @@ void onDelete(AsyncWebServerRequest *req) {
     // handle file|dir delete
     log_msg(req);
     if (!req->hasParam("path"))
-        return req->send(400, "text/plain", "No path specified");
+        return req->send(400, TYPE_TEXT, "No path specified");
     String path = req->getParam("path")->value();
     if (!FFS.exists(path))
-        return req->send(403, "text/plain", "File/dir does not exist");
+        return req->send(403, TYPE_TEXT, "File/dir does not exist");
     if (!FFS.remove(path)) {
-        req->send(500, "text/plain", "Delete file/dir failed");
+        req->send(500, TYPE_TEXT, "Delete file/dir failed");
     } else if (req->hasParam("from")) {
         req->redirect(req->getParam("from")->value());
     } else {
@@ -267,10 +272,10 @@ void onUpload(AsyncWebServerRequest *req, String filename, size_t index, uint8_t
     static File file;
     if (!index) {
         log_msg(req);
-        if (file) return req->send(400, "text/plain", "Busy uploading");
+        if (file) return req->send(400, TYPE_TEXT, "Busy uploading");
         if (!filename.startsWith("/")) filename = "/" + filename;
         if (FFS.exists(filename) && !req->hasParam("overwrite")) {
-            return req->send(403, "text/plain", "File already exists.");
+            return req->send(403, TYPE_TEXT, "File already exists.");
         }
         ESP_LOGW(TAG, "Uploading file: %s\n", filename.c_str());
         file = FFS.open(filename, "w");
@@ -291,14 +296,14 @@ void onUpload(AsyncWebServerRequest *req, String filename, size_t index, uint8_t
 void onUploadStrict(AsyncWebServerRequest *req, String filename, size_t index, uint8_t *data, size_t len, bool final){
     if (!filename.startsWith(Config.web.DIR_DATA)) {
         log_msg(req, "400");
-        return req->send(400, "text/plain", "No access to upload.");
+        return req->send(400, TYPE_TEXT, "No access to upload.");
     }
     onUpload(req, filename, index, data, len, final);
 }
 
 void onError(AsyncWebServerRequest *req) {
     if (req->method() == HTTP_OPTIONS) return req->send(200);
-    return req->send(404, "text/html", ERROR_HTML);
+    return req->send(404, TYPE_HTML, ERROR_HTML);
 }
 
 void onErrorFileManager(AsyncWebServerRequest *req) {
@@ -308,10 +313,10 @@ void onErrorFileManager(AsyncWebServerRequest *req) {
     if ((!path.endsWith("/") && (!file || !file.isDirectory())) ||
         (!FFS.exists(fman) && !FFS.exists(fman + ".gz")))
     {
-        return req->send(404, "text/html", ERROR_HTML);
+        return req->send(404, TYPE_HTML, ERROR_HTML);
     }
     log_msg(req, "is directory, goto file manager.");
-    req->send(FFS, fman, "text/html", false,
+    req->send(FFS, fman, TYPE_HTML, false,
         [&path](const String& var){
             if (var == "ROOT") return path;
             if (var == "FILELIST") return String(FFS.list(path.c_str()));
@@ -328,7 +333,7 @@ void handle_websocket_message(AsyncWebSocketClient *client, char *data) {
     char *ret = console_handle_rpc(data);
     if (ret) {
         client->text(ret);
-        free(ret);
+        TRYFREE(ret);
     }
 }
 
@@ -426,10 +431,7 @@ void onWebSocketData(
 clean:
     wsid = -1;
     idx = buflen = 0;
-    if (msg) {
-        free(msg);
-        msg = NULL;
-    }
+    TRYFREE(msg);
     return;
 }
 

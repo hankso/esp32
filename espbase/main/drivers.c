@@ -168,7 +168,7 @@ static void led_initialize() {
     led_strip_rmt_config_t rmt_conf = { .rmt_channel = 0 };
     if (led_strip_new_rmt_device(&strip_conf, &rmt_conf, &local.strip)) {
         ESP_LOGE(TAG, "LED: initialize led_strip failed");
-        free(local.color); local.color = NULL;
+        TRYFREE(local.color);
         return;
     }
     led_strip_clear(local.strip);

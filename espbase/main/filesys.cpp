@@ -43,12 +43,6 @@ bool CFSImpl::exists(const char *path) {
 
 bool CFSImpl::rename(const char *from, const char *to) {
     if (!exists(from) || !_valid_path(to)) return false;
-    // char *tmp1 = (char *)malloc(strlen(_mountpoint) + strlen(from) + 1);
-    // if (!tmp1) return false;
-    // char *tmp2 = (char *)malloc(strlen(_mountpoint) + strlen(to) + 1);
-    // if (!tmp2) { free(tmp1); return false; }
-    // strcpy(tmp1, _mountpoint); strcat(tmp1, from);
-    // strcpy(tmp2, _mountpoint); strcat(tmp2, to);
     String mp = _mountpoint, f = mp + from, t = mp + to;
     return ::rename(f.c_str(), t.c_str()) == 0;
 }
@@ -112,36 +106,34 @@ char * CFS::list(const char *path) {
 
 CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     : _fs(fs)
-    , _file(NULL), _dir(NULL)
-    , _path(NULL), _fullpath(NULL)
-    , _isdir(false)
-    , _badfile(true), _baddir(true)
-    , _npath(NULL), _nisdir(false)
-    , _written(true)
+    , _file(NULL),      _dir(NULL)
+    , _badfile(true),   _baddir(true)
+    , _path(NULL),      _isdir(false)
+    , _npath(NULL),     _nisdir(false)
+    , _fpath(NULL),     _written(true)
 {
     if (!path || !strlen(path)) return;
     size_t plen = strlen(_fs->mountpoint()), len = strlen(path);
-    if (!( _fullpath = (char *)malloc(plen + len + 1) )) return;
-    strcpy(_fullpath, _fs->mountpoint()); strcat(_fullpath, path);
+    if (!( _fpath = (char *)malloc(plen + len + 1) )) return;
+    strcpy(_fpath, _fs->mountpoint()); strcat(_fpath, path);
 
     if (!( _path = strdup(path) )) {
-        free(_fullpath);
-        _fullpath = NULL;
+        TRYFREE(_fpath);
         return;
     }
     if (_getstat()) {
         if (S_ISREG(_stat.st_mode)) {
-            _file = fopen(_fullpath, mode);
+            _file = fopen(_fpath, mode);
         } else if (S_ISDIR(_stat.st_mode)) {
-            _dir = opendir(_fullpath);
+            _dir = opendir(_fpath);
         } else {
-            printf("Unknown %s type 0x%08X", _fullpath, _stat.st_mode & _IFMT);
+            printf("Unknown %s type 0x%08X", _fpath, _stat.st_mode & _IFMT);
         }
     } else {
         if (_write_mode(mode)) {
-            _file = fopen(_fullpath, mode);
+            _file = fopen(_fpath, mode);
         } else if (_path[len - 1] == '/') {
-            _dir = opendir(_fullpath);
+            _dir = opendir(_fpath);
         } else {
             // We're using different `FS.exists` logic so _dir can be NULL
             // do nothing
@@ -153,9 +145,9 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
 }
 
 bool CFSFileImpl::_getstat() const {
-    if (!_fullpath) return false;
+    if (!_fpath) return false;
     if (!_written) return true;
-    if (!stat(_fullpath, &_stat)) {
+    if (!stat(_fpath, &_stat)) {
         _written = false;
         return true;
     } else {
@@ -188,11 +180,11 @@ void CFSFileImpl::flush() {
 }
 
 void CFSFileImpl::close() {
-    if (_path)      { free(_path);      _path = NULL; }
-    if (_npath)     { free(_npath);     _npath = NULL; }
-    if (_fullpath)  { free(_fullpath);  _fullpath = NULL; }
-    if (_dir)       { closedir(_dir);   _dir = NULL; }
-    if (_file)      { fclose(_file);    _file = NULL; }
+    TRYFREE(_path);
+    TRYFREE(_npath);
+    TRYFREE(_fpath);
+    if (_dir)  { closedir(_dir); _dir = NULL; }
+    if (_file) { fclose(_file);  _file = NULL; }
     _badfile = _baddir = true;
 }
 
@@ -213,12 +205,8 @@ void CFSFileImpl::dir_next() {
     // false  + char  => next is file
     // true   + NULL  => ESP_ERR_NO_MEM
     // true   + char  => next is dir
-    if (_baddir)
-        return;
-    if (_npath) {
-        free(_npath);
-        _npath = NULL;
-    }
+    if (_baddir) return;
+    TRYFREE(_npath);
     struct dirent *file = readdir(_dir);
     if (file == NULL) {
         _nisdir = false;

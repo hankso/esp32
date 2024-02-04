@@ -83,15 +83,15 @@ protected:
     CFSImpl *           _fs;
     FILE *              _file;
     DIR *               _dir;
-    char *              _path;
-    char *              _fullpath;
-    bool                _isdir;
     bool                _badfile;
     bool                _baddir;
-    char *              _npath;
+    char *              _path;
+    bool                _isdir;
+    char *              _npath; // path of next file
     bool                _nisdir;
-    mutable struct stat _stat;
+    char *              _fpath; // path with mountpoint
     mutable bool        _written;
+    mutable struct stat _stat;
     bool                _getstat() const;
 private:
     void        dir_next();

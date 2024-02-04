@@ -282,23 +282,23 @@ static int config_io(int argc, char **argv) {
     if (!arg_noerror(argc, argv, (void **) &config_io_args))
         return ESP_ERR_INVALID_ARG;
     bool ret = true;
-    if (config_io_args.stat->count) {
-        config_nvs_stats();
-    } else if (config_io_args.list->count) {
-        config_nvs_list();
-    } else if (config_io_args.load->count) {
-        ret = config_nvs_load();
-    } else if (config_io_args.save->count) {
-        ret = config_nvs_dump();
-    } else if (config_io_args.key->count) {
-        const char *key = config_io_args.key->sval[0];
-        if (config_io_args.val->count) {
-            const char *val = config_io_args.val->sval[0];
+    const char *key = ARG_STR(config_io_args.key, NULL);
+    const char *val = ARG_STR(config_io_args.val, NULL);
+    if (key) {
+        if (val) {
             printf("Set `%s` to `%s` %s\n", key, val,
                    (ret = config_set(key, val)) ? "done" : "fail");
         } else {
             printf("Get `%s` value `%s`\n", key, config_get(key));
         }
+    } else if (config_io_args.load->count) {
+        ret = config_nvs_load();
+    } else if (config_io_args.save->count) {
+        ret = config_nvs_dump();
+    } else if (config_io_args.list->count) {
+        config_nvs_list();
+    } else if (config_io_args.stat->count) {
+        config_nvs_stats();
     } else {
         config_list();
     }
