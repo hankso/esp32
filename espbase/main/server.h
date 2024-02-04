@@ -28,17 +28,17 @@
  *  /config POST    Overwrite configuration options
  *                  - param `?json=str`
  *  /update GET     Updation guide page
- *                  - param `?raw[=bool]`
+ *                  - param `?raw`
  *  /update POST    Upload compiled binary firmware to OTA flash partition
- *                  - param `?reset[=bool]&size=int`
+ *                  - param `?reset&size=int`
  *  /edit   GET     Online Editor page
- *                  - param `?list[=str]&path=str&download=bool`
+ *                  - param `?list[=str]&path=str&download`
  *  /editc  ANY     Create file|dir (accept HTTP_PUT)
  *                  - param `?path=str&type=<file|dir>`
  *  /editd  ANY     Delete file (accept HTTP_DELETE)
  *                  - param `?path=str&from=url`
  *  /editu  POST    Upload file
- *                  - param `?overwrite[=bool]`
+ *                  - param `?overwrite`
  */
 
 #ifndef _SERVER_H_

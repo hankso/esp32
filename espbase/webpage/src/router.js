@@ -36,15 +36,14 @@ export default createRouter({
             redirect: ({ hash, params, query }) => {
                 if (params.url) return { path: params.url, query, hash }
                 if (query.to) return { path: query.to, hash }
-                if (hash) return { path: hash.replace('#', ''), query }
+                if (hash) return { path: hash.slice(1), query }
                 return { path: '/404', query: { reason: 'api-only' } }
             }
         },
         {
             path: '/:url?',
             redirect: ({ hash, params, query }) => ({
-                path: '/404',
-                query: { hash, url: params.url }
+                path: '/404', query: { hash, url: params.url }
             })
         }
     ]

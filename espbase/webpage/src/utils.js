@@ -19,13 +19,43 @@ export function getFPS(ts, times=5) {
     }
 }
 
+export var formatSize = (function () {
+    let units = 'BKMGTP';
+    let decimals = [0, 1, 2, 3, 3, 3];
+    return (size, base=1024) => {
+        let exp = size ? (Math.log2(size) / Math.log2(base)) : 0;
+        exp = Math.min(Math.floor(exp), units.length - 1);
+        return (size / (base ** exp)).toFixed(decimals[exp]) + units[exp];
+    }
+})();
+
+export function camelToSnake(s, sep='_') {
+    return s.replace(/([a-z])([A-Z])/g, `$1${sep}$2`).toLowerCase()
+}
+
+export function debounce(func, timeout=300) {
+    let handler = null
+    return (...args) => {
+        clearTimeout(handler)
+        handler = setTimeout(func, timeout, ...args)
+    }
+}
+
 export var type = (function(global) {
     var key, cache = {};
     return obj => obj === null ? 'null'
-        : obj === global ? 'global' // window in browser or global in nodejs
-        : (key = typeof obj) !== 'object' ? key // basic: string, boolean, number, undefined, function
-        : obj.nodeType ? 'element' // DOM element
-        : cache[key = Object.prototype.toString.call(obj)] // date, regexp, error, object, array, math
+
+        // window in browser or global in nodejs
+        : obj === global ? 'global'
+
+        // basic: string, boolean, number, undefined, function
+        : (key = typeof obj) !== 'object' ? key
+
+        // DOM elements
+        : obj.nodeType ? 'element'
+
+        // date, regexp, error, object, array, math
+        : cache[key = Object.prototype.toString.call(obj)]
         || (cache[key] = key.slice(8, -1).toLowerCase());
 })(this);
 
@@ -173,7 +203,7 @@ export function toggleFullscreen(e) {
 }
 
 export var rules = {
-    require: v => v !== '' || 'This field is required',
+    required: v => v !== '' || 'This field is required',
     inRange: (low=0, high=255) => (v => (low <= v && v <= high) || `Must be a number between ${low}-${high}`),
     isInteger: v => Number(v) === parseInt(v) || 'Must be an integer',
 };

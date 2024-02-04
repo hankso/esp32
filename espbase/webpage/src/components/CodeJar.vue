@@ -1,4 +1,10 @@
+<template>
+    <div ref="elem" :class="`jar-editor lang-${language}`"></div>
+</template>
+
 <script setup>
+import { type, debounce } from '@/utils'
+
 import { CodeJar } from 'codejar'
 import { withLineNumbers } from 'codejar-linenumbers'
 
@@ -35,16 +41,15 @@ function rainbow(ch, i) {
 }
 
 const highlighters = {
-    prism, 'lolcat': editor => {
-        editor.innerHTML = editor.textContent.split('').map(rainbow).join('')
-    }
+    prism,
+    'lolcat': e => e.innerHTML = e.textContent.split('').map(rainbow).join('')
 }
 
 const highlight = computed(() => { // parse highlight from user provided props
     let func = highlighters[props.highlight] || (() => {})
-    if (typeof props.highlight == 'function') {
+    if (type(props.highlight) === 'function') {
         func = props.highlight
-    } else if (typeof props.highlight == 'boolean' && props.highlight) {
+    } else if (type(props.highlight) === 'boolean' && props.highlight) {
         func = highlighters['prism'] // default one
     }
     return props.lineNumber ? withLineNumbers(func) : func
@@ -52,8 +57,6 @@ const highlight = computed(() => { // parse highlight from user provided props
 
 function setReadonly(val) {
     if (!elem.value) return // not ready yet
-    if (val instanceof Array) // as watch callback
-        val = val[0]
     elem.value.setAttribute('contenteditable', val ? false : 'plaintext-only')
 }
 
@@ -65,27 +68,37 @@ function destroy() {
         e.style.whiteSpace = 'pre-wrap'
         e.parentNode.replaceWith(elem.value)
     }
+    return e
 }
 
 function refresh() {
-    if (!elem.value) return // not ready yet
-    destroy()
+    if (!destroy()) return // not ready yet
     editor = CodeJar(elem.value, highlight.value, config)
     editor.updateCode(model.value)
-    editor.onUpdate(code => model.value = code)
+    editor.onUpdate(debounce(() => model.value = editor.toString()))
     setReadonly(props.readonly)
 }
 
 onMounted(refresh)
 onBeforeUnmount(destroy)
-watch([() => props.readonly], setReadonly)
-watch([() => props.language], () => editor.updateCode(editor.toString()))
-watch([() => props.lineNumber, () => props.highlight], refresh)
-</script>
 
-<template>
-    <div ref="elem" :class="`jar-editor lang-${language}`"></div>
-</template>
+watch(highlight, refresh)
+
+watch(() => props.readonly, setReadonly)
+
+watch(model, val => {
+    if (editor && editor.toString() !== val) {
+        try { var pos = editor.save() } catch { var pos = null }
+        editor.updateCode(val) // this will trigger editor.onUpdate
+        pos && editor.restore(pos)
+    }
+})
+
+watchPostEffect(() => { // highlight when class `lang-xxx` is applied to DOM
+    if (props.language && editor)
+        editor.updateCode(editor.toString())
+})
+</script>
 
 <style scoped>
 .jar-editor[contenteditable="false"] {
@@ -98,12 +111,19 @@ watch([() => props.lineNumber, () => props.highlight], refresh)
 </style>
 
 <style>
+/* These elements are generated at runtime and not tracked by scoped CSS */
 .jar-editor .token:before {
     opacity: 0.3;
 }
 
 .codejar-linenumbers-inner-wrap {
     position: absolute;
+    z-index: 2;
+}
+
+.codejar-linenumbers {
+    /* rgba(128, 128, 128, 0.15) => rgb(235, 235, 235) */
+    background-color: rgb(var(--v-theme-surface-light)) !important;
 }
 
 .codejar-linenumber {

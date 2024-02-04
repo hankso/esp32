@@ -48,6 +48,12 @@ const items = computed(() => {
     ]
 })
 
+
+onMounted(() => {
+    // maybe redirected from other html subpage
+    let redirect = new URLSearchParams(location.search).get('to')
+    redirect && useRouter().push(redirect)
+})
 </script>
 
 <template>

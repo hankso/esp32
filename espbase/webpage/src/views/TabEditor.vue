@@ -1,13 +1,18 @@
 <script setup>
+import { readFile, uploadFile } from '@/api'
+import { copyToClipboard, downloadAsFile, camelToSnake } from '@/utils'
+
 import {
     mdiUpload, mdiDownload, mdiLockOutline,
     mdiClipboardTextOutline, mdiClipboardCheckOutline,
     mdiFormatColorText, mdiCounter, mdiFileTreeOutline,
 } from '@mdi/js'
-import { copyToClipboard, downloadAsFile } from '@/utils'
-import axios from 'axios'
 
-const path = ref('assets/test.css')
+import { basename, dirname, resolve, extname } from 'path-browserify'
+
+const route = useRoute()
+
+const path = ref('demo.css')
 const code = ref(`body {
     /* In readonly mode, you can visit this link
      * https://developer.mozilla.org/zh-CN/docs/Web/CSS
@@ -17,6 +22,11 @@ const code = ref(`body {
     transition: 3s;
 }`)
 
+const copied = ref(false)
+const snackbar = ref(false)
+const uploading = ref(false)
+const snackbarMsg = ref('')
+
 const config = ref({
     readonly: false,
     highlight: true,
@@ -25,21 +35,20 @@ const config = ref({
     language: 'css',
 })
 
-const copied = ref(false)
-const uploading = ref(false)
+const propIcons = {
+    readonly: mdiLockOutline,
+    highlight: mdiFormatColorText,
+    lineNumber: mdiCounter,
+    treeView: mdiFileTreeOutline,
+}
 
 const links = computed(() => {
-    let chunks = path.value.replace(/^\//, '').split('/')
+    let chunks = path.value.replace(/^\/|\/$/g, '').split('/')
     return chunks.map((v, i) => ({
         title: v, href: `#${chunks.slice(0, i + 1).join('/')}`
     }))
 })
-const dirname = computed(() => {
-    return path.value.substr(0, path.valueLastIndexOf('/') + 1)
-})
-const basename = computed(() => {
-    return path.value.substr(path.value.lastIndexOf('/') + 1)
-})
+
 const selected = computed(() => {
     return Object.values(config.value).map((v, i) => v === true ? i : '')
 })
@@ -50,38 +59,68 @@ function copy() {
     setTimeout(() => copied.value = false, 3000)
 }
 
+function notify(msg) {
+    snackbar.value = true
+    snackbarMsg.value = msg
+}
+
 function upload() {
+    let ctrl = new AbortController()
     uploading.value = true
-    // TODO: use gzip to compress file
-    let formData = new FormData();
-    fetch('/editu', {
-        method: 'POST',
-        body: formData,
+    uploadFile(path.value, code.value, {
+        signal: ctrl.signal,
+        onUploadProgress(e) {
+            console.log(`
+                total size: ${e.total}
+                loaded size: ${e.loaded}
+                percentage: ${e.progress}
+                current packet size: ${e.bytes}
+                transfer speed: ${e.rate}B/s
+                left time: ${e.estimated}s
+            `)
+        }
     })
-    .then(resp => {
-        if (!resp.ok)
-            throw new Error('')
-    })
-    .catch(err => console.log(err))
+    .catch(({ message }) => notify(message))
+    .finally(() => { uploading.value = false })
+    // call ctrl.abort() to cancel uploading
 }
 
-function camelToSnake(s, sep='_') {
-    return s.replace(/([a-z])([A-Z])/g, `$1${sep}$2`).toLowerCase()
-}
-
-const propIcons = {
-    readonly: mdiLockOutline,
-    highlight: mdiFormatColorText,
-    lineNumber: mdiCounter,
-    treeView: mdiFileTreeOutline,
-}
+watch(() => route.hash, () => {
+    let filename = resolve('/', route.hash.slice(1))
+    if (!filename.slice(1) || path.value === filename) return
+    readFile(filename)
+        .then(resp => {
+            path.value = filename
+            code.value = resp.data
+            config.value.language = extname(filename).slice(1) || 'txt'
+            location.hash = filename.slice(1)
+        })
+        .catch(err => {
+            console.error(err.message)
+            location.hash = ''
+        })
+}, { immediate: true, flush: 'post' })
 </script>
 
 <template>
-<v-sheet border rounded="lg" elevation=1 class="ma-2 overflow-hidden">
+<div class="d-flex flex-column flex-lg-row-reverse ma-4 ga-4">
+
+<v-fade-transition>
+    <Frame v-show="config.treeView" src="fileman" class="border rounded-lg" />
+</v-fade-transition>
+
+<v-sheet border rounded="lg" elevation=1 class="flex-grow-1">
     <v-toolbar density="comfortable" class="border-b">
 
-        <v-tooltip text="save" location="bottom">
+        <v-snackbar v-model="snackbar" timeout="3000">
+            <template #actions>
+                <v-btn color="blue" variant="text" @click="snackbar = false">
+                    Close
+                </v-btn>
+            </template>
+            {{ snackbarMsg }}
+        </v-snackbar>
+        <v-tooltip location="bottom">
             <template #activator="{ props }">
                 <v-btn
                     class="ms-0 me-n4"
@@ -91,6 +130,7 @@ const propIcons = {
                     v-bind="props"
                 ></v-btn>
             </template>
+            Upload as {{ path }}
         </v-tooltip>
 
         <v-breadcrumbs :items="links"></v-breadcrumbs>
@@ -98,7 +138,7 @@ const propIcons = {
         <v-spacer></v-spacer>
 
         <span class="text-error d-none d-md-inline">
-            {{ code.split('\n').length }} lines
+            {{ code.trim().split('\n').length }} lines
             - {{ code.length }} bytes
         </span>
 
@@ -116,10 +156,10 @@ const propIcons = {
                 </v-tooltip>
             </v-btn>
 
-            <v-btn icon @click="downloadAsFile(code, basename)">
+            <v-btn icon @click="downloadAsFile(code, basename(path))">
                 <v-icon :icon="mdiDownload"></v-icon>
                 <v-tooltip activator="parent" location="bottom">
-                    Download as {{ basename }}
+                    Download as {{ basename(path) }}
                 </v-tooltip>
             </v-btn>
         </v-btn-group>
@@ -138,7 +178,8 @@ const propIcons = {
             >
                 <v-icon :icon="icon"></v-icon>
                 <v-tooltip activator="parent" location="bottom">
-                    Toggle {{ camelToSnake(prop, ' ') }}
+                    Turn {{ config[prop] ? 'off' : 'on' }}
+                    {{ camelToSnake(prop, ' ') }}
                 </v-tooltip>
             </v-btn>
         </v-btn-toggle>
@@ -146,4 +187,6 @@ const propIcons = {
     </v-toolbar>
     <CodeJar v-model="code" v-bind="config" />
 </v-sheet>
+
+</div>
 </template>
