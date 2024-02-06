@@ -1,3 +1,8 @@
+Array.prototype.remove = function(item) {
+    let idx = this.indexOf(item);
+    if (idx >= 0) return this.splice(idx, 1)
+}
+
 window.requestAnimationFrame = (                    // for compatiability
     window.requestAnimationFrame       ||           // Chromium  
     window.webkitRequestAnimationFrame ||           // Webkit 
@@ -8,9 +13,14 @@ window.requestAnimationFrame = (                    // for compatiability
 
 export function getFPS(ts, times=5) {
     ts = ts || performance.now();
-    if (window.FPS != undefined) window.FPS.push(ts); else window.FPS = [ts];
-    if (--times) window.requestAnimationFrame(ts => getFPS(ts, times));
-    else {
+    if (window.FPS !== undefined) {
+        window.FPS.push(ts);
+    } else {
+        window.FPS = [ts];
+    }
+    if (--times) {
+        window.requestAnimationFrame(ts => getFPS(ts, times));
+    } else {
         for (var sum = 0, i = 1, l = window.FPS.length; i < l; i++) {
             sum += window.FPS[i] - window.FPS[i - 1];
         }
@@ -122,14 +132,16 @@ export var LoopTask = function(callback, timeout=1000, verbose=false, divider=1)
         taskStop();
     }
     return {
-        byTimeout: function() {
-            if (!run) run = true; else return this;
-            window.requestAnimationFrame((ts)=>{
-                taskStart(ts); byTimeout(ts);
-            });
+        byTimeout() {
+            if (!run) {
+                run = true;
+                window.requestAnimationFrame((ts)=>{
+                    taskStart(ts); byTimeout(ts);
+                });
+            }
             return this;
         },
-        byCancel: function() {
+        byCancel() {
             if (!run) run = true; else return this;
             window.requestAnimationFrame((ts)=>{
                 taskStart(ts); byCancel(ts);
@@ -143,19 +155,17 @@ export var LoopTask = function(callback, timeout=1000, verbose=false, divider=1)
             return this;
         },
         displayFPS: function(id, update=100) {
-            if (!run) return this;
             let elem = document.getElementById(id);
-            if (elem != undefined) {
-                let oldcolor = elem.style.color;
-                elem.style.color = 'green';
-                (function render() {
-                    if (done) return elem.style.color = oldcolor;
-                    if (fps && fps != Infinity) {
-                        elem.innerText = 'FPS: ' + fps.toFixed(2);
-                    }
-                    setTimeout(render, update);
-                })();
-            }
+            if (!run || !elem) return this;
+            let oldcolor = elem.style.color;
+            elem.style.color = 'green';
+            (function render() {
+                if (done) return elem.style.color = oldcolor;
+                if (fps && fps !== Infinity) {
+                    elem.innerText = 'FPS: ' + fps.toFixed(2);
+                }
+                setTimeout(render, update);
+            })();
             return this;
         },
         done: function(callback) { doneHooks.push(callback); return this;  }

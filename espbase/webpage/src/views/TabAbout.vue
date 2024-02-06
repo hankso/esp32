@@ -7,7 +7,7 @@ const tab = ref(null)
 const components = {
     EspBase: EspBase,
     Vue: Vue,
-    Vuetify: Vuetify
+    Vuetify: Vuetify,
 }
 </script>
 

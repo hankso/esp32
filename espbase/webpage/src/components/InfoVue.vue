@@ -1,10 +1,19 @@
 <script setup>
 import {
-    mdiBookOpenVariant, // create-vue/IconDocumentation.vue
-    mdiToolboxOutline,  // create-vue/IconTooling.vue
-    mdiCollage,         // create-vue/IconEcosystem.vue
-    mdiForum,           // create-vue/IconCommunity.vue
-    mdiHeart,           // create-vue/IconSupport.vue
+    // create-vue/IconDocumentation.vue
+    mdiBookOpenVariant,
+
+    // create-vue/IconTooling.vue
+    mdiToolboxOutline,
+
+    // create-vue/IconEcosystem.vue
+    mdiCollage,
+
+    // create-vue/IconCommunity.vue
+    mdiForum,
+
+    // create-vue/IconSupport.vue
+    mdiHeart,
 } from '@mdi/js'
 </script>
 

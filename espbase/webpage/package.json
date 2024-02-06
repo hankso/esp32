@@ -41,8 +41,10 @@
     "$schema": "https://json.schemastore.org/prettierrc",
     "semi": false,
     "tabWidth": 4,
+    "endOfLine": "crlf",
     "singleQuote": true,
-    "trailingComma": "none"
+    "trailingComma": "es5",
+    "arrowParens": "avoid"
   },
   "eslintConfig": {
     "root": true,

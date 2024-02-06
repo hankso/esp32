@@ -14,7 +14,7 @@ function routePages(paths, category) {
             // Route level code-splitting which generates a separate
             // chunk ([page].[hash].js) for each routes. Lazy-loaded
             // when the route is visited.
-            component: importFunc
+            component: importFunc,
         }
     })
 }
@@ -28,8 +28,8 @@ export default createRouter({
                 { path: '', redirect: 'home' },
                 { path: 'index.html', redirect: 'home' },
                 ...routePages(tabs, 'Tab'),
-                ...routePages(apps, 'App')
-            ]
+                ...routePages(apps, 'App'),
+            ],
         },
         {
             path: '/redirect/:url?',
@@ -38,13 +38,14 @@ export default createRouter({
                 if (query.to) return { path: query.to, hash }
                 if (hash) return { path: hash.slice(1), query }
                 return { path: '/404', query: { reason: 'api-only' } }
-            }
+            },
         },
         {
             path: '/:url?',
             redirect: ({ hash, params, query }) => ({
-                path: '/404', query: { hash, url: params.url }
-            })
-        }
-    ]
+                path: '/404',
+                query: { hash, url: params.url },
+            }),
+        },
+    ],
 })

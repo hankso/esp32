@@ -2,19 +2,19 @@
 const { src, hidebar } = defineProps({
     src: {
         type: String,
-        required: true
+        required: true,
     },
     hidebar: {
         type: Boolean,
-        default: true
-    }
+        default: true,
+    },
 })
 </script>
 
 <template>
-<div :class="{ hidebar }">
-    <iframe :src></iframe>
-</div>
+    <div :class="{ hidebar }">
+        <iframe :src></iframe>
+    </div>
 </template>
 
 <style scoped>

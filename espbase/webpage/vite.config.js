@@ -30,8 +30,8 @@ function kolorist(start, end) {
     const regex = new RegExp(`\\x1b\\[${end}m`, 'g')
     return str => open + ('' + str).replace(regex, open) + close
 }
-const
-    bold = kolorist(1, 22),
+
+var bold = kolorist(1, 22),
     dim = kolorist(2, 22),
     green = kolorist(32, 39),
     yellow = kolorist(33, 39),
@@ -42,7 +42,12 @@ const pythonServerPlugin = () => {
     let pserver
 
     class PythonServer {
-        constructor(port=8080, host='0.0.0.0', cmd='python', verbose=true) {
+        constructor(
+            port = 8080,
+            host = '0.0.0.0',
+            cmd = 'python',
+            verbose = false
+        ) {
             let entry = resolve(__dirname, '..', 'helper.py')
             this.proc = this.pid = null
             this.port = port
@@ -53,7 +58,6 @@ const pythonServerPlugin = () => {
             if (!verbose) this.args.push('--quiet')
         }
         log() {
-            if (!this.verb) return
             console.log(
                 dim(new Date().toLocaleTimeString()),
                 cyan(bold('[pser]')),
@@ -61,12 +65,11 @@ const pythonServerPlugin = () => {
                 ...arguments
             )
         }
+        info() {
+            if (this.verb) this.log(...argument)
+        }
         onMessage(msg) {
-            msg.toString().trim().split('\n').forEach(line => console.log(
-                dim(new Date().toLocaleTimeString()),
-                cyan(bold('[pser]')),
-                (this.pid ? `[${this.pid}]` : '') + line
-            ))
+            msg.toString().trim().split('\n').forEach(this.log)
         }
         start() {
             if (this.proc) return this
@@ -74,27 +77,30 @@ const pythonServerPlugin = () => {
             this.proc = spawn(this.args[0], this.args.slice(1))
             this.pid = this.proc.pid
             this.proc.on('exit', code => {
-                this.log(`Python Server exit(${code || 0})`)
+                this.info(`Python Server exit(${code || 0})`)
                 this.proc = this.pid = null
             })
             this.proc.on('error', err => console.log(`Error: ${err}`))
             this.proc.stdout.on('data', this.onMessage)
             this.proc.stderr.on('data', this.onMessage)
-            this.log('Python Server start')
+            this.info('Python Server start')
             return this
         }
         close() {
             if (!this.proc) return this
-            this.log('Python Server killed')
+            this.info('Python Server killed')
             this.proc.kill()
             this.proc = null
             return this
         }
         toString() {
-            return `  ${green('\u279c')}  ${bold('Python')}:  ` + cyan(
-                `http://${this.host.replace('0.0.0.0', 'localhost')}:`
-                + `${bold(this.port)}/`
-            ) + green(` (PID ${this.pid})`)
+            let [host, port] = this.addr.split(':')
+            return [
+                green('  \u279c '),
+                bold('Python: '),
+                cyan('http://' + host + bold(port)),
+                green(`(PID ${this.pid})`),
+            ].join(' ')
         }
     }
     return {
@@ -110,8 +116,7 @@ const pythonServerPlugin = () => {
         configResolved(resolvedConfig) {
             pserver = new PythonServer(
                 resolvedConfig.server.sport,
-                resolvedConfig.server.host,
-                'python', false
+                resolvedConfig.server.host
             )
         },
         configureServer(server) {
@@ -133,7 +138,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
         BUILD_INFO = {
             NODE_JS: process.versions.node,
             BUILD_OS: `${process.platform}-${process.arch}`,
-            BUILD_TIME: new Date().toString()
+            BUILD_TIME: new Date().toString(),
         }
         try {
             SRC_VER = `${execSync('git describe --tags --always')}`
@@ -142,7 +147,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
     return {
         build: {
             outDir: './dist',
-            assetsDir: 'assets'
+            assetsDir: 'assets',
         },
         server: {
             host: '0.0.0.0',
@@ -153,9 +158,9 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
                     target: `http://localhost:5172`,
                     rewrite: path => path.replace(/^\/api/, ''),
                     changeOrigin: true,
-                    secure: false
-                }
-            }
+                    secure: false,
+                },
+            },
         },
         define: {
             'process.env': {
@@ -164,11 +169,11 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
                 VITE_CMD: command,
                 BUILD_INFO,
                 SRC_VER,
-            }
+            },
         },
         plugins: [
             vue({
-                template: { transformAssetUrls } // add more types
+                template: { transformAssetUrls }, // add more types
             }),
             vuetify(),
             prismjs({
@@ -176,41 +181,41 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
                     'markup', // 0.8kB
                     'css', // 0.1kB
                     'js', // 1.6kB
-                    'clike' // 0.1kB
+                    'clike', // 0.1kB
                 ],
                 plugins: [
                     'previewers', // 3kB
                     'autolinker', // 0.4kB
                     'inline-color', // 0.5kB
-                    'show-invisibles' // 0.2kB
+                    'show-invisibles', // 0.2kB
                 ],
                 theme: 'default',
-                css: true
+                css: true,
             }),
             autoimport({
-                imports: ['vue', 'vue-router', 'vue-i18n']
+                imports: ['vue', 'vue-router', 'vue-i18n'],
             }),
             components({
-                dts: false
+                dts: false,
             }),
             compression({
                 verbose: false,
-                deleteOriginFile: true
+                deleteOriginFile: true,
             }),
             visualizer({
                 filename: 'resources.html',
                 template: 'treemap', // sunburst|treemap|network|raw-data|list
                 emitFile: true,
                 gzipSize: true,
-                brotliSize: true
+                brotliSize: true,
             }),
             vuedevtools(),
             pythonServerPlugin(),
         ],
         resolve: {
             alias: {
-                '@': fileURLToPath(new URL('./src', import.meta.url))
-            }
-        }
+                '@': fileURLToPath(new URL('./src', import.meta.url)),
+            },
+        },
     }
 })
