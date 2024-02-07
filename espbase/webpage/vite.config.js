@@ -58,6 +58,7 @@ const pythonServerPlugin = () => {
             if (!verbose) this.args.push('--quiet')
         }
         log() {
+            // print timestamp and colorful string same like vite
             console.log(
                 dim(new Date().toLocaleTimeString()),
                 cyan(bold('[pser]')),
@@ -68,21 +69,24 @@ const pythonServerPlugin = () => {
         info() {
             if (this.verb) this.log(...argument)
         }
-        onMessage(msg) {
-            msg.toString().trim().split('\n').forEach(this.log)
-        }
         start() {
             if (this.proc) return this
+
             // DO NOT use `exec` on windows system
             this.proc = spawn(this.args[0], this.args.slice(1))
             this.pid = this.proc.pid
+
             this.proc.on('exit', code => {
                 this.info(`Python Server exit(${code || 0})`)
                 this.proc = this.pid = null
             })
             this.proc.on('error', err => console.log(`Error: ${err}`))
-            this.proc.stdout.on('data', this.onMessage)
-            this.proc.stderr.on('data', this.onMessage)
+
+            let logger = line => this.log(line)
+            let print = m => m.toString().trim().split('\n').forEach(logger)
+            this.proc.stdout.on('data', print)
+            this.proc.stderr.on('data', print)
+
             this.info('Python Server start')
             return this
         }
@@ -122,9 +126,8 @@ const pythonServerPlugin = () => {
         configureServer(server) {
             let printUrls = server.printUrls
             server.printUrls = () => {
-                if (pserver && pserver.proc) {
+                if (pserver && pserver.proc)
                     server.config.logger.info(pserver.toString())
-                }
                 printUrls()
             }
         },

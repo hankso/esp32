@@ -2,7 +2,12 @@
 import { type, debounce } from '@/utils'
 import { listDir, deletePath } from '@/apis'
 
-import { mdiDelete, mdiPencilBoxMultiple } from '@mdi/js'
+import {
+    mdiUpload,
+    mdiFolderPlus,
+    mdiDelete,
+    mdiPencilBoxMultiple,
+} from '@mdi/js'
 import { join, resolve, basename } from 'path-browserify'
 
 const route = useRoute()
@@ -95,21 +100,21 @@ onMounted(syncPath)
                 <v-btn
                     icon
                     v-if="!select.length"
-                    @click="console.log('create')"
+                    @click="console.log('TODO create')"
                 >
-                    <v-icon icon="$menu"></v-icon>
+                    <v-icon :icon="mdiFolderPlus"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
-                        Create folder under {{ root }}
+                        Create new folder
                     </v-tooltip>
                 </v-btn>
                 <v-btn
                     icon
-                    v-if="select.length <= 1"
-                    @click="console.log('upload')"
+                    v-if="!select.length"
+                    @click="console.log('TODO upload')"
                 >
-                    <v-icon icon="$menu"></v-icon>
+                    <v-icon :icon="mdiUpload"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
-                        Upload files to {{ root }}
+                        Upload
                     </v-tooltip>
                 </v-btn>
             </v-scale-transition>

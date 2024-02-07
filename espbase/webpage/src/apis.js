@@ -1,7 +1,11 @@
 import { type } from '@/utils'
 
-import { axios, mergeConfig as merge } from 'axios'
+import axios from 'axios'
 import { basename, resolve, join } from 'path-browserify'
+
+function merge_compat(opt1, opt2) {
+    return Object.assign(opt1, opt2)
+}
 
 function request_compat(config) {
     let url = config.url
@@ -15,6 +19,8 @@ function request_compat(config) {
         return resp
     })
 }
+
+const merge = axios.mergeConfig
 
 const request = axios.create({
     baseURL: '/api/',
