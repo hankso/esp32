@@ -58,25 +58,25 @@ const highlight = computed(() => {
 })
 
 function setReadonly(val) {
-    if (!elem.value) return // not ready yet
+    if (!toValue(elem)) return // not ready yet
     elem.value.setAttribute('contenteditable', val ? false : 'plaintext-only')
 }
 
 function destroy() {
     editor && editor.destroy()
-    let e = elem.value // hotfix for codejar-linenumbers:exit
+    let e = toValue(elem) // hotfix for codejar-linenumbers:exit
     if (e && e.parentNode.classList.contains('codejar-wrap')) {
         e.style.paddingLeft = ''
         e.style.whiteSpace = 'pre-wrap'
-        e.parentNode.replaceWith(elem.value)
+        e.parentNode.replaceWith(e)
     }
     return e
 }
 
 function refresh() {
     if (!destroy()) return // not ready yet
-    editor = CodeJar(elem.value, highlight.value, config)
-    editor.updateCode(model.value)
+    editor = CodeJar(toValue(elem), toValue(highlight), config)
+    editor.updateCode(toValue(model))
     editor.onUpdate(debounce(() => (model.value = editor.toString())))
     setReadonly(props.readonly)
 }

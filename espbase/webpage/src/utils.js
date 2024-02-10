@@ -8,7 +8,8 @@ export var type = (function () {
         // DOM elements
         if (obj.nodeType) return 'element'
         // date, regexp, error, object, array, math
-        if (cache[(key = Object.prototype.toString.call(obj))]) return key
+        if (cache[(key = Object.prototype.toString.call(obj))])
+            return cache[key]
         return (cache[key] = key.slice(8, -1).toLowerCase())
     }
 })()
@@ -263,10 +264,26 @@ export function toggleFullscreen(e) {
 export var rules = {
     inRange(low = 0, high = 255) {
         return v =>
-            (low <= v && v <= high) || `Must be a number between ${low}-${high}`
+            (low <= v && v <= high) ||
+            `Must be a number between ${low} - ${high}`
     },
     isInteger(v) {
         return Number(v) === parseInt(v) || 'Must be an integer'
+    },
+    length(v, low, high) {
+        if (low !== undefined && high !== undefined)
+            return v =>
+                (low <= v.length && v.length <= high) ||
+                `Length must between ${low}-${high}`
+        if (low !== undefined)
+            return v =>
+                (v.length >= low) ||
+                `Length must be longer than ${low}`
+        if (high !== undefined)
+            return v =>
+                (v.length <= high) ||
+                `Length must be shorter than ${high}`
+        return v.length > 0 || 'This field is required'
     },
     required(v) {
         return v !== '' || 'This field is required'

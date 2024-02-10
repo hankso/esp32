@@ -1,6 +1,6 @@
 <script setup>
-import { type, debounce } from '@/utils'
-import { listDir, deletePath } from '@/apis'
+import { type, rules, debounce } from '@/utils'
+import { listDir, uploadFile, createPath, deletePath } from '@/apis'
 
 import {
     mdiUpload,
@@ -11,20 +11,54 @@ import {
 import { join, resolve, basename } from 'path-browserify'
 
 const route = useRoute()
+const notify = inject('notify', console.log)
+const confirm = inject('confirm', (p, f) => (window.confirm(p) && f()))
 
 const root = ref(resolve('/', route.query.root || ''))
-
 const items = ref([])
 const select = ref(route.hash ? [route.hash.slice(1)] : [])
 
 const loading = ref(false)
+const form = window.data = ref({
+    create: false,
+    fileName: '',
+    fileList: [],
 
-const notify = inject('notify', console.log)
-const confirm = inject('confirm', () => {})
+    upload: false,
+    folderName: '',
+    folderRoot: '/',
+})
 
-function syncPath(path, target, parent) {
-    if (path === undefined) path = root.value
-    if (target === undefined) target = items.value
+const title = computed(() => {
+    let arr = toValue(select)
+    if (!arr.length) return `Files under ${toValue(root)}`
+    if (arr.length === 1) return arr[0]
+    return `Selected ${arr.length} files`
+})
+
+const prompt = computed(() => {
+    let arr = toValue(select)
+    if (!arr.length) return
+    if (arr.length === 1) return `Delete ${arr[0]} permanently?`
+    return ['Delete these files permanently?', ...arr].join('\n - ')
+})
+
+const folders = computed(() => {
+    let nodes = ['/']
+    ;(function findFolder(arr) {
+        for (let node of arr) {
+            if (node.type === 'folder') {
+                nodes.push(node.link)
+                findFolder(node.children || [])
+            }
+        }
+    })(toValue(items))
+    return nodes
+})
+
+function refresh(path, target, parent) {
+    if (path === undefined) path = toValue(root)
+    if (target === undefined) target = toValue(items)
     if (type(path) === 'object') {
         parent = path
         if (parent.type !== 'folder') return
@@ -44,7 +78,7 @@ function syncPath(path, target, parent) {
                 link: join(parent ? parent.link : '/', node.name),
             }))
             target.splice(0, target.length, ...nodes)
-            target.forEach(syncPath)
+            target.forEach(refresh)
         })
         .catch(({ message }) => notify(message))
 }
@@ -60,24 +94,45 @@ function remove(arr) {
                 if (--len) return
                 loading.value = false
                 notify('Deleted!')
-                syncPath()
+                refresh()
             })
     )
 }
 
-const title = computed(() => {
-    let arr = toValue(select)
-    if (!arr.length) return `Files under ${root.value}`
-    if (arr.length === 1) return arr[0]
-    return `Selected ${arr.length} files`
-})
+function create(validation) {
+    if (validation && !validation.valid) return
+    let data = toValue(form)
+    loading.value = true
+    createPath(resolve(data.folderRoot, data.folderName))
+        .then(() => notify('Created!'))
+        .catch(({ message }) => notify(message))
+        .finally(() => {
+            loading.value = false
+            form.value.create = false
+            refresh()
+        })
+}
 
-const prompt = computed(() => {
-    let arr = toValue(select)
-    if (!arr.length) return
-    if (arr.length === 1) return `Delete ${arr[0]} permanently?`
-    return 'Delete these files permanently?' + '<div>TODO</div>'
-})
+function upload(validation) {
+    if (validation && !validation.valid) return
+    let data = toValue(form)
+    let len = data.fileList.length
+    loading.value = true
+    data.fileList.forEach(file => {
+        let filename = file.name
+        if (data.fileList.length === 1 && data.fileName)
+            filename = data.fileName
+        uploadFile(resolve(data.folderRoot, filename), file)
+            .then(() => data.fileList.remove(file))
+            .catch(({ message }) => notify(message))
+            .finally(() => {
+                if (--len) return
+                loading.value = false
+                form.value.upload = false
+                refresh()
+            })
+    })
+}
 
 watch(
     select,
@@ -85,10 +140,94 @@ watch(
     { deep: true }
 )
 
-onMounted(syncPath)
+onMounted(refresh)
 </script>
 
 <template>
+    <v-dialog
+        v-model="form.create"
+        min-width="300"
+        width="auto"
+        persistent
+    >
+        <v-card title="Create new folder">
+            <v-card-text>
+                <v-form ref="fCreate">
+                    <v-select
+                        label="Root *"
+                        v-model="form.folderRoot"
+                        :rules="[rules.required]"
+                        :items="folders"
+                        autofocus
+                        required
+                    ></v-select>
+                    <v-text-field
+                        label="Name *"
+                        v-model="form.folderName"
+                        :rules="[rules.required]"
+                        required
+                    ></v-text-field>
+                </v-form>
+                <small>* indicates required field</small>
+            </v-card-text>
+            <v-card-actions>
+                <v-spacer></v-spacer>
+                <v-btn @click="form.create = false">Cancel</v-btn>
+                <v-btn :loading @click="$refs.fCreate.validate().then(create)">
+                    Create
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
+
+    <v-dialog
+        v-model="form.upload"
+        min-width="400"
+        max-width="80vw"
+        width="auto"
+        persistent
+    >
+        <v-card title="Upload files">
+            <v-card-text>
+                <v-form ref="fUpload">
+                    <v-select
+                        label="Root *"
+                        v-model="form.folderRoot"
+                        :items="folders"
+                        :rules="[rules.required]"
+                        autofocus
+                        required
+                    >
+                    </v-select>
+                    <v-file-input
+                        label="File input *"
+                        v-model="form.fileList"
+                        :show-size="form.fileList.length > 1"
+                        :counter="form.fileList.length > 1"
+                        :rules="[rules.length]"
+                        multiple
+                        required
+                    >
+                    </v-file-input>
+                    <v-text-field
+                        label="Filename"
+                        :disabled="form.fileList.length > 1"
+                        v-model="form.fileName"
+                    >
+                    </v-text-field>
+                </v-form>
+                <small>* indicates required field</small>
+            </v-card-text>
+            <v-card-actions>
+                <v-spacer></v-spacer>
+                <v-btn @click="form.upload = false">Cancel</v-btn>
+                <v-btn :loading @click="$refs.fUpload.validate().then(upload)">
+                    Upload
+                </v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
+
     <v-sheet border rounded="lg" elevation="1" class="ma-4 overflow-hidden">
         <v-toolbar
             class="border-b"
@@ -98,9 +237,9 @@ onMounted(syncPath)
         >
             <v-scale-transition :group="true" leave-absolute>
                 <v-btn
-                    icon
                     v-if="!select.length"
-                    @click="console.log('TODO create')"
+                    @click="form.create = true"
+                    icon
                 >
                     <v-icon :icon="mdiFolderPlus"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -108,22 +247,22 @@ onMounted(syncPath)
                     </v-tooltip>
                 </v-btn>
                 <v-btn
-                    icon
                     v-if="!select.length"
-                    @click="console.log('TODO upload')"
+                    @click="form.upload = true"
+                    icon
                 >
                     <v-icon :icon="mdiUpload"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
-                        Upload
+                        Upload files
                     </v-tooltip>
                 </v-btn>
             </v-scale-transition>
             <v-scale-transition :group="true">
                 <v-btn
-                    icon
                     v-if="select.length === 1"
                     :href="`editor#${select[0]}`"
                     target="_blank"
+                    icon
                 >
                     <v-icon :icon="mdiPencilBoxMultiple"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -131,20 +270,21 @@ onMounted(syncPath)
                     </v-tooltip>
                 </v-btn>
                 <v-btn
-                    icon
                     v-if="select.length"
-                    :loading
                     @click="confirm(prompt, () => remove(select))"
+                    :loading
+                    icon
                 >
                     <v-icon :icon="mdiDelete"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Delete from disk
                     </v-tooltip>
                 </v-btn>
-                <v-btn icon="$close" v-if="select.length" @click="select = []">
+                <v-btn v-if="select.length" @click="select = []" icon="$close">
                 </v-btn>
             </v-scale-transition>
         </v-toolbar>
+
         <TreeView v-model:selection="select" :items auto-icon />
     </v-sheet>
 </template>

@@ -132,7 +132,7 @@ onMounted(() => {
             width="auto"
         >
             <v-card color="red" title="Warning">
-                <v-card-text>
+                <v-card-text style="white-space: pre">
                     {{ dialog.message }}
                 </v-card-text>
                 <v-card-actions>

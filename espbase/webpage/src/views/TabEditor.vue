@@ -15,6 +15,9 @@ import {
 
 import { basename, dirname, resolve, extname } from 'path-browserify'
 
+const route = useRoute()
+const notify = inject('notify', console.log)
+
 const path = ref('demo.css')
 const code = ref(`body {
     /* In readonly mode, you can visit this link
@@ -65,8 +68,6 @@ function copy() {
     setTimeout(() => (copied.value = false), 3000)
 }
 
-const notify = inject('notify', console.log)
-
 function upload() {
     let ctrl = new AbortController()
     loading.value = true
@@ -89,8 +90,6 @@ function upload() {
         .finally(() => (loading.value = false))
     // call ctrl.abort() to cancel uploading
 }
-
-const route = useRoute()
 
 watch(
     () => route.hash,
