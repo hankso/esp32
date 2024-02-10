@@ -8,6 +8,7 @@ import {
     mdiCog,
     mdiUpdate,
     mdiInformation,
+    mdiThemeLightDark,
 } from '@mdi/js'
 
 var desc = process.env.VITE_MODE
@@ -17,8 +18,7 @@ if (process.env.SRC_VER) {
 
 const theme = useTheme()
 
-const drawer = ref()
-const appbar = ref(false)
+const drawer = ref(true)
 const apmode = ref(true) // TODO: get STA/AP mode
 
 const admin = [
@@ -39,7 +39,7 @@ const admin = [
 const items = computed(() => {
     return [
         {
-            title: 'ESP Base',
+            title: 'Home',
             props: {
                 subtitle: desc,
                 prependIcon: mdiHome,
@@ -97,17 +97,17 @@ onMounted(() => {
 <template>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <v-app>
-        <v-app-bar v-if="appbar"></v-app-bar>
-
-        <v-navigation-drawer v-else v-model="drawer">
+        <v-navigation-drawer v-model="drawer">
             <v-list nav :items="items"></v-list>
-            <template #append>
-                <v-btn @click="toggleTheme">Toggle theme</v-btn>
-                <v-btn block color="primary" @click.stop="drawer = !drawer">
-                    Collapse
-                </v-btn>
-            </template>
         </v-navigation-drawer>
+
+        <v-app-bar scroll-behavior="hide" density="comfortable">
+            <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
+            ESP Base WebUI
+            <template #append>
+                <v-btn :icon="mdiCompare" @click="toggleTheme"></v-btn>
+            </template>
+        </v-app-bar>
 
         <v-main id="main-content">
             <router-view></router-view>
