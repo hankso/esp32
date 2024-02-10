@@ -14,12 +14,19 @@ const route = useRoute()
 const notify = inject('notify', console.log)
 const confirm = inject('confirm', (p, f) => (window.confirm(p) && f()))
 
+const props = defineProps({
+    useLink: {
+        type: Boolean,
+        default: true,
+    },
+})
+
 const root = ref(resolve('/', route.query.root || ''))
 const items = ref([])
 const select = ref(route.hash ? [route.hash.slice(1)] : [])
 
 const loading = ref(false)
-const form = window.data = ref({
+const form = ref({
     create: false,
     fileName: '',
     fileList: [],
@@ -136,7 +143,9 @@ function upload(validation) {
 
 watch(
     select,
-    debounce(arr => (location.hash = arr.length !== 1 ? '' : arr[0])),
+    debounce(arr => {
+        if (props.useLink) location.hash = arr.length !== 1 ? '' : arr[0]
+    }),
     { deep: true }
 )
 
@@ -144,91 +153,102 @@ onMounted(refresh)
 </script>
 
 <template>
-    <v-dialog
-        v-model="form.create"
-        min-width="300"
-        width="auto"
-        persistent
-    >
-        <v-card title="Create new folder">
-            <v-card-text>
-                <v-form ref="fCreate">
-                    <v-select
-                        label="Root *"
-                        v-model="form.folderRoot"
-                        :rules="[rules.required]"
-                        :items="folders"
-                        autofocus
-                        required
-                    ></v-select>
-                    <v-text-field
-                        label="Name *"
-                        v-model="form.folderName"
-                        :rules="[rules.required]"
-                        required
-                    ></v-text-field>
-                </v-form>
-                <small>* indicates required field</small>
-            </v-card-text>
-            <v-card-actions>
-                <v-spacer></v-spacer>
-                <v-btn @click="form.create = false">Cancel</v-btn>
-                <v-btn :loading @click="$refs.fCreate.validate().then(create)">
-                    Create
-                </v-btn>
-            </v-card-actions>
-        </v-card>
-    </v-dialog>
+    <v-sheet border rounded="lg" elevation="1" class="ma-4 overflow-x-hidden">
+        <v-dialog
+            v-model="form.create"
+            min-width="300"
+            width="auto"
+            persistent
+        >
+            <v-card title="Create new folder">
+                <v-card-text>
+                    <v-form ref="formCreate">
+                        <v-select
+                            label="Root *"
+                            v-model="form.folderRoot"
+                            :rules="[rules.required]"
+                            :items="folders"
+                            variant="outlined"
+                            autofocus
+                            required
+                        ></v-select>
+                        <v-text-field
+                            label="Name *"
+                            v-model="form.folderName"
+                            :rules="[rules.required]"
+                            variant="outlined"
+                            required
+                        ></v-text-field>
+                    </v-form>
+                    <small>* indicates required field</small>
+                </v-card-text>
+                <v-card-actions>
+                    <v-spacer></v-spacer>
+                    <v-btn @click="form.create = false">Cancel</v-btn>
+                    <v-btn
+                        :loading
+                        @click="$refs.formCreate.validate().then(create)"
+                    >
+                        Create
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
 
-    <v-dialog
-        v-model="form.upload"
-        min-width="400"
-        max-width="80vw"
-        width="auto"
-        persistent
-    >
-        <v-card title="Upload files">
-            <v-card-text>
-                <v-form ref="fUpload">
-                    <v-select
-                        label="Root *"
-                        v-model="form.folderRoot"
-                        :items="folders"
-                        :rules="[rules.required]"
-                        autofocus
-                        required
+        <v-dialog
+            v-model="form.upload"
+            min-width="400"
+            max-width="80vw"
+            width="auto"
+            persistent
+        >
+            <v-card title="Upload files">
+                <v-card-text>
+                    <v-form ref="formUpload">
+                        <v-select
+                            label="Root *"
+                            v-model="form.folderRoot"
+                            :rules="[rules.required]"
+                            :items="folders"
+                            variant="outlined"
+                            autofocus
+                            required
+                        >
+                        </v-select>
+                        <v-file-input
+                            label="File input *"
+                            v-model="form.fileList"
+                            :show-size="form.fileList.length > 1"
+                            :counter="form.fileList.length > 1"
+                            :rules="[rules.length]"
+                            variant="outlined"
+                            multiple
+                            required
+                        >
+                        </v-file-input>
+                        <v-text-field
+                            label="Filename"
+                            :disabled="form.fileList.length > 1"
+                            v-model="form.fileName"
+                            variant="outlined"
+                        >
+                        </v-text-field>
+                    </v-form>
+                    <small>* indicates required field</small>
+                </v-card-text>
+                <v-card-actions>
+                    <v-spacer></v-spacer>
+                    <v-btn @click="form.upload = false">Cancel</v-btn>
+                    <v-btn
+                        :loading
+                        @click="$refs.formUpload.validate().then(upload)"
                     >
-                    </v-select>
-                    <v-file-input
-                        label="File input *"
-                        v-model="form.fileList"
-                        :show-size="form.fileList.length > 1"
-                        :counter="form.fileList.length > 1"
-                        :rules="[rules.length]"
-                        multiple
-                        required
-                    >
-                    </v-file-input>
-                    <v-text-field
-                        label="Filename"
-                        :disabled="form.fileList.length > 1"
-                        v-model="form.fileName"
-                    >
-                    </v-text-field>
-                </v-form>
-                <small>* indicates required field</small>
-            </v-card-text>
-            <v-card-actions>
-                <v-spacer></v-spacer>
-                <v-btn @click="form.upload = false">Cancel</v-btn>
-                <v-btn :loading @click="$refs.fUpload.validate().then(upload)">
-                    Upload
-                </v-btn>
-            </v-card-actions>
-        </v-card>
-    </v-dialog>
+                        Upload
+                    </v-btn>
+                </v-card-actions>
+            </v-card>
+        </v-dialog>
 
-    <v-sheet border rounded="lg" elevation="1" class="ma-4 overflow-hidden">
         <v-toolbar
             class="border-b"
             density="comfortable"
@@ -260,8 +280,8 @@ onMounted(refresh)
             <v-scale-transition :group="true">
                 <v-btn
                     v-if="select.length === 1"
-                    :href="`editor#${select[0]}`"
-                    target="_blank"
+                    :target="useLink ? '_blank' : ''"
+                    :href="`${useLink ? 'editor' : ''}#${select[0]}`"
                     icon
                 >
                     <v-icon :icon="mdiPencilBoxMultiple"></v-icon>

@@ -1,5 +1,5 @@
 <script setup>
-import { useTheme } from 'vuetify'
+import { useTheme, useDisplay } from 'vuetify'
 
 import {
     mdiHome,
@@ -8,7 +8,7 @@ import {
     mdiCog,
     mdiUpdate,
     mdiInformation,
-    mdiThemeLightDark,
+    mdiCompare,
 } from '@mdi/js'
 
 var desc = process.env.VITE_MODE
@@ -17,9 +17,11 @@ if (process.env.SRC_VER) {
 }
 
 const theme = useTheme()
+const { lg } = useDisplay()
 
-const drawer = ref(true)
+const title = "ESP Base WebUI"
 const apmode = ref(true) // TODO: get STA/AP mode
+const drawer = ref(false)
 
 const admin = [
     ['File Manager', '/fileman', mdiFileTree],
@@ -38,10 +40,11 @@ const admin = [
 
 const items = computed(() => {
     return [
+        { type: 'divider' },
+        { type: 'subheader', title: 'STA mode' },
         {
-            title: 'Home',
+            title: 'Dashboard',
             props: {
-                subtitle: desc,
                 prependIcon: mdiHome,
                 to: '/home',
             },
@@ -53,7 +56,9 @@ const items = computed(() => {
 })
 
 function toggleTheme() {
-    theme.global.name.value = theme.global.current.value.dark ? 'light' : 'dark'
+    theme.global.name.value = (
+        theme.global.current.value.dark ? 'light' : 'dark'
+    )
 }
 
 const snackbar = ref({
@@ -97,13 +102,20 @@ onMounted(() => {
 <template>
     <a class="skip-link" href="#main-content">Skip to main content</a>
     <v-app>
-        <v-navigation-drawer v-model="drawer">
+        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-xl'">
+            <v-list nav class="mt-n1 mb-n3">
+                <v-list-item :title :subtitle="desc">
+                    <template #append v-if="!lg">
+                        <v-icon icon="$close" @click="drawer = false"></v-icon>
+                    </template>
+                </v-list-item>
+            </v-list>
             <v-list nav :items="items"></v-list>
         </v-navigation-drawer>
 
         <v-app-bar scroll-behavior="hide" density="comfortable">
             <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
-            ESP Base WebUI
+            {{ title }}
             <template #append>
                 <v-btn :icon="mdiCompare" @click="toggleTheme"></v-btn>
             </template>
@@ -116,12 +128,10 @@ onMounted(() => {
         <v-snackbar v-model="snackbar.show" :timeout="snackbar.timeout">
             <template #actions>
                 <v-btn
+                    icon="$close"
                     color="primary"
-                    variant="text"
                     @click="snackbar.show = false"
-                >
-                    Close
-                </v-btn>
+                ></v-btn>
             </template>
             {{ snackbar.message }}
         </v-snackbar>

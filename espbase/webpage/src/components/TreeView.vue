@@ -37,10 +37,8 @@ provide('TreeView', {
     useLink: computed(() => props.useLink),
     autoIcon: computed(() => props.autoIcon),
     isActive(node) {
-        return (
-            node.link === route.hash.slice(1) ||
-            selection.value.includes(node.link ? node.link : node.name)
-        )
+        if (props.useLink) return node.link === route.hash.slice(1)
+        return selection.value.includes(node.link ? node.link : node.name)
     },
     guessIcon(node) {
         if (node.icon || !props.autoIcon) return node.icon

@@ -1,6 +1,7 @@
 <script setup>
 import { readFile, uploadFile } from '@/apis'
 import { copyToClipboard, downloadAsFile, camelToSnake } from '@/utils'
+import TabFileman from '@/views/TabFileman.vue'
 
 import {
     mdiUpload,
@@ -101,7 +102,7 @@ watch(
                 path.value = filename
                 code.value = resp.data
                 config.value.language = extname(filename).slice(1) || 'txt'
-                location.hash = filename.slice(1)
+                location.hash = filename
             })
             .catch(err => {
                 console.error(err.message)
@@ -114,13 +115,14 @@ watch(
 
 <template>
     <div class="d-flex flex-column flex-lg-row-reverse ma-4 ga-4">
-        <v-fade-transition>
-            <Frame
-                src="fileman"
-                class="border rounded-lg"
+        <v-scale-transition>
+            <TabFileman
                 v-show="config.treeView"
+                :use-link="false"
+                class="mx-0 my-0"
+                height="35vh"
             />
-        </v-fade-transition>
+        </v-scale-transition>
 
         <v-sheet
             border
