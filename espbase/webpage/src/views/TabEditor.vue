@@ -18,6 +18,7 @@ import { basename, dirname, resolve, extname } from 'path-browserify'
 
 const route = useRoute()
 const notify = inject('notify', console.log)
+const loading = inject('progbar')
 
 const path = ref('demo.css')
 const code = ref(`body {
@@ -30,7 +31,6 @@ const code = ref(`body {
 }`)
 
 const copied = ref(false)
-const loading = ref(false)
 
 const config = ref({
     readonly: false,
@@ -48,7 +48,7 @@ const propIcons = {
 }
 
 const links = computed(() => {
-    let chunks = path.value.replace(/^\/|\/$/g, '').split('/')
+    let chunks = toValue(path).replace(/^\/|\/$/g, '').split('/')
     return chunks.map((v, i) => ({
         title: v,
         href: `#${chunks.slice(0, i + 1).join('/')}`,
@@ -56,47 +56,43 @@ const links = computed(() => {
 })
 
 const select = computed(() => {
-    return Object.values(config.value).map((v, i) => (v === true ? i : ''))
+    return Object.values(toValue(config)).map((v, i) => (v === true ? i : ''))
 })
 
 const copyIcon = computed(() => {
-    return copied.value ? mdiClipboardCheckOutline : mdiClipboardTextOutline
+    return toValue(copied) ? mdiClipboardCheckOutline : mdiClipboardTextOutline
 })
 
 function copy() {
-    copyToClipboard(code.value)
+    copyToClipboard(toValue(code))
     copied.value = true
     setTimeout(() => (copied.value = false), 3000)
 }
 
 function upload() {
-    let ctrl = new AbortController()
-    loading.value = true
-    uploadFile(path.value, code.value, {
-        signal: ctrl.signal,
+    if (toValue(loading) !== false && upload.ctrl) return upload.ctrl.abort()
+    loading.value = 0
+    upload.ctrl = new AbortController()
+    uploadFile(toValue(path), toValue(code), {
+        signal: upload.ctrl.signal,
         onUploadProgress(e) {
-            // TODO: progressbar
-            console.log(`
-                total size: ${e.total}
-                loaded size: ${e.loaded}
-                percentage: ${e.progress}
-                current packet size: ${e.bytes}
-                transfer speed: ${e.rate}B/s
-                left time: ${e.estimated}s
-            `)
+            if (e.total === undefined) {
+                loading.value = true
+            } else {
+                loading.value = e.progress * 100
+            }
         },
     })
         .then(() => notify('Uploaded!'))
         .catch(({ message }) => notify(message))
-        .finally(() => (loading.value = false))
-    // call ctrl.abort() to cancel uploading
+        .finally(() => (loading.value = upload.ctrl = false))
 }
 
 watch(
     () => route.hash,
     () => {
         let filename = resolve('/', route.hash.slice(1))
-        if (!filename.slice(1) || path.value === filename) return
+        if (!filename.slice(1) || toValue(path) === filename) return
         readFile(filename)
             .then(resp => {
                 path.value = filename
@@ -135,13 +131,12 @@ watch(
                     <template #activator="{ props }">
                         <v-btn
                             class="ms-0 me-n4"
-                            :icon="mdiUpload"
-                            :loading
+                            :icon="loading === false ? mdiUpload : '$close'"
                             @click="upload"
                             v-bind="props"
                         ></v-btn>
                     </template>
-                    Upload as {{ path }}
+                    {{ loading === false ? `Upload as ${path}` : 'Cancel' }}
                 </v-tooltip>
 
                 <v-breadcrumbs :items="links"></v-breadcrumbs>

@@ -61,6 +61,9 @@ function toggleTheme() {
     )
 }
 
+const progbar = ref(false)
+provide('progbar', progbar)
+
 const snackbar = ref({
     show: false,
     message: '',
@@ -119,6 +122,7 @@ onMounted(() => {
             <template #append>
                 <v-btn :icon="mdiCompare" @click="toggleTheme"></v-btn>
             </template>
+            <ProgressBar :loading="progbar" style="position: absolute" />
         </v-app-bar>
 
         <v-main id="main-content">

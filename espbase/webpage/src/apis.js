@@ -45,8 +45,44 @@ export function setConfig(cfg, opt = {}) {
     )
 }
 
-export function update() {
-    /* TODO POST update?reset&size=int */
+function toFormData(data, dataname = 'data') {
+    let tmp = data,
+        tstr = type(data),
+        filename
+    switch (tstr) {
+        case 'formdata': return Promise.resolve(data)
+        case 'file': break
+        case 'blob': break
+        case 'string':
+            filename = basename(dataname)
+            tmp = new Blob([tmp], { type: 'text/plain' })
+            break
+        case 'uint8array':
+            filename = basename(dataname)
+            tmp = new Blob([tmp], { type: 'application/octet-stream' })
+            break
+        case 'object':
+            tmp = new Blob([JSON.stringify(tmp)], { type: 'application/json' })
+            break
+        default: return Promise.reject({message: `Invalid data type ${tstr}`})
+    }
+    data = new FormData()
+    data.append(dataname, tmp, ...(filename ? [filename] : []))
+    return Promise.resolve(data)
+}
+
+export function update(firmware, opt = {}) {
+    return toFormData(firmware, 'update').then(data =>
+        request(
+            merge(opt, {
+                url: 'update',
+                method: 'POST',
+                // params: { reset: '', size: 1 },
+                timeout: 0,
+                data,
+            })
+        )
+    )
 }
 
 export function listDir(path = '', opt = {}) {
@@ -86,24 +122,16 @@ export function deletePath(path, opt = {}) {
     )
 }
 
-export function uploadFile(filename, data, opt = {}) {
-    if (type(data) !== 'formdata') {
-        let tmp = data
-        if (type(tmp) === 'string') {
-            tmp = new Blob([tmp], { type: 'text/plain' })
-        } else if (!['file', 'blob'].includes(type(tmp))) {
-            return Promise.reject('Invalid file content-type')
-        }
-        data = new FormData()
-        data.append(filename, tmp, basename(filename))
-    }
-    return request(
-        merge(opt, {
-            url: 'editu',
-            method: 'POST',
-            params: { overwrite: '' },
-            data,
-            timeout: 5000,
-        })
+export function uploadFile(filename, file, opt = {}) {
+    return toFormData(file, filename).then(data =>
+        request(
+            merge(opt, {
+                url: 'editu',
+                method: 'POST',
+                params: { overwrite: '' },
+                timeout: 0,
+                data,
+            })
+        )
     )
 }

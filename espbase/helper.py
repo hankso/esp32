@@ -276,6 +276,7 @@ def webserver(args):
         app.route('/editu', 'POST', edit_upload)
         app.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
         app.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
+        app.route('/update', 'POST', edit_upload)
         app.route('/config', ['GET', 'POST'], config)
         app.route('/assets/<filename:path>', 'GET', static_assets)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
