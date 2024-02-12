@@ -18,21 +18,21 @@ extern "C" {
 #endif
 
 typedef struct config_network_t {
-    const char * STA_SSID;  // BSSID of access point to connect after startup
-    const char * STA_PASS;  // Password to connect to access point
-    const char * STA_HOST;  // Use static IP address instead of DHCP
-    const char * AP_SSID;   // AP SSID (hotspot name)
-    const char * AP_PASS;   // AP password
-    const char * AP_HOST;   // AP IP address (aka. Gateway)
+    const char * STA_SSID;  // SSID of the AP to connect after startup
+    const char * STA_PASS;  // Password of the AP to connect
+    const char * STA_HOST;  // Static IP address (ignore DHCP)
+    const char * AP_SSID;   // SSID of the AP to serve (hotspot name)
+    const char * AP_PASS;   // Password of the AP to serve
+    const char * AP_HOST;   // IP address of Gateway
     const char * AP_AUTO;   // Switch to AP mode if STA connection failed
-    const char * AP_HIDE;   // Whether to hide AP SSID
+    const char * AP_HIDE;   // Hide AP SSID (not shown on scan)
 } config_net_t;
 
 typedef struct config_webserver_t {
-    const char * WS_NAME;   // Username to access websocket connection
-    const char * WS_PASS;   // Password. Leave it empty("") to disable
-    const char * HTTP_NAME; // Username to access webpage (HTML/JS/CSS)
-    const char * HTTP_PASS; // Password. Leave it empty("") to disable
+    const char * WS_NAME;   // Username to auth websocket connection
+    const char * WS_PASS;   // Password to auth websocket connection
+    const char * HTTP_NAME; // Username to auth webserver (HTTP)
+    const char * HTTP_PASS; // Password to auth webserver (HTTP)
     const char * VIEW_EDIT; // Template filename for Online Editor
     const char * VIEW_FILE; // Template filename for Files Manager
     const char * VIEW_OTA;  // Template filename for OTA Updation
@@ -46,13 +46,13 @@ typedef struct config_webserver_t {
 // For easier managing, Boolean values are stored as "0" or "1" (string)
 typedef struct config_application_t {
     const char * DNS_RUN;   // Enable mDNS service
-    const char * DNS_HOST;  // redirect http://{DNS_HOST} to http://{AP_HOST}
+    const char * DNS_HOST;  // Redirect http://{DNS_HOST} to http://{AP_HOST}
     const char * OTA_RUN;   // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
     const char * PROMPT;    // Console promption string
 } config_app_t;
 
-// information are readonly values (after initialization)
+// Information is readonly after initialization
 typedef struct config_information_t {
     const char * NAME;      // Program name (PROJECT_NAME if defined)
     const char * VER;       // Program version (PROJECT_VER if defined)

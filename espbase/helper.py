@@ -18,6 +18,7 @@ import socket
 import argparse
 import tempfile
 import posixpath
+import os.path as op
 
 # requirements.txt: bottle
 try:
@@ -26,11 +27,11 @@ except Exception:
     bottle = None
 
 # these are default values
-__basedir__ = os.path.dirname(os.path.abspath(__file__))
-__distdir__ = os.path.join(__basedir__, 'webpage', 'dist')
-__cmkfile__ = os.path.join(__basedir__, 'CMakeLists.txt')
-__nvsfile__ = os.path.join(__basedir__, 'nvs_flash.csv')
-__partcsv__ = os.path.join(__basedir__, 'partitions.csv')
+__basedir__ = op.dirname(op.abspath(__file__))
+__distdir__ = op.join(__basedir__, 'webpage', 'dist')
+__cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
+__nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
+__partcsv__ = op.join(__basedir__, 'partitions.csv')
 
 
 def _random_id(len=8):
@@ -78,10 +79,10 @@ def _process_nvs(args):
             'components/nvs_flash/nvs_partition_generator',
             'components/esptool_py/esptool',
         ):
-            sys.path.append(os.path.join(idf_path, folder))
+            sys.path.append(op.join(idf_path, folder))
         from nvs_partition_gen import main as nvs_gen
         from esptool import _main as nvs_flash
-        dest = os.path.join(__basedir__, 'build', 'nvs.bin')
+        dest = op.join(__basedir__, 'build', 'nvs.bin')
         sys.argv[1:] = ['generate', args.out, dest, size]
         nvs_gen()
         if args.flash:
@@ -90,13 +91,13 @@ def _process_nvs(args):
     except Exception as e:
         return print('Generate NVS partition binary failed: %s' % e)
     finally:
-        if os.path.exists(args.out):
+        if op.exists(args.out):
             os.remove(args.out)
         sys.argv = argv_backup
 
 
 def genid(args):
-    if os.path.exists(args.tpl):
+    if op.exists(args.tpl):
         with open(args.tpl, 'r') as f:
             prefix = _project_name()
             data = f.read().replace('{NAME}', prefix)
@@ -120,17 +121,16 @@ def genid(args):
 
 
 def _relpath(p, ref='.', strip=True):
-    p = os.path.relpath(p, ref)
+    p = op.relpath(p, ref)
     if not strip:
         return p
-    if (len(p.split(os.path.sep)) > 3 and len(p) > 30) or len(p) > 80:
-        m = re.findall(r'\w+%s(.+)%s\w+' % tuple([os.path.sep] * 2), p)
+    if (len(p.split(op.sep)) > 3 and len(p) > 30) or len(p) > 80:
+        m = re.findall(r'\w+%s(.+)%s\w+' % tuple([op.sep] * 2), p)
         p = p.replace((m or [''])[0], '...')
     return p
 
 
-def _absjoin(*a):
-    return os.path.abspath(os.path.join(*a))
+def _absjoin(*a): return op.abspath(op.join(*a))
 
 
 def edit_get(root):
@@ -138,19 +138,19 @@ def edit_get(root):
     print('params', dict(bottle.request.params))
     if 'list' in bottle.request.query:
         name = bottle.request.query.get('list').strip('/')
-        path = os.path.join(root, name)
-        if not os.path.exists(path):
+        path = op.join(root, name)
+        if not op.exists(path):
             bottle.abort(404)
-        elif os.path.isfile(path):
+        elif op.isfile(path):
             bottle.abort(403)
         d = []
         for fn in os.listdir(path):
-            fpath = os.path.join(path, fn)
+            fpath = op.join(path, fn)
             d.append({
                 'name': fn,
-                'type': 'folder' if os.path.isdir(fpath) else 'file',
-                'size': os.path.getsize(fpath),
-                'date': int(os.path.getmtime(fpath)) * 1000
+                'type': 'folder' if op.isdir(fpath) else 'file',
+                'size': op.getsize(fpath),
+                'date': int(op.getmtime(fpath)) * 1000
             })
         bottle.response.content_type = 'application/json'
         return json.dumps(d)
@@ -194,45 +194,45 @@ def config():
     print('params', dict(bottle.request.params))
 
 
-def static_factory(filename, root, fileman=True, auto=True, redirect=False):
+def static_factory(filename, root, auto=True, fileman=False, redirect=False):
     '''
     1. auto append ".gz" if resolving file
     2. auto detect "index.html" if resolving directory
     3. fallback to file manager if no "index.html" under dir
     '''
-    fn = os.path.join(root, filename.strip('/\\'))
-    if os.path.exists(fn):
-        if os.path.isfile(fn):
-            return bottle.static_file(filename, root)
-        elif not os.path.isdir(fn):
-            return bottle.HTTPError(404, 'Path not found')
-        if auto and os.path.exists(os.path.join(fn, 'index.html')):
-            if redirect:
-                fn = os.path.join(bottle.request.path, filename, 'index.html')
-                return bottle.redirect(fn)
-            else:
-                fn = os.path.join(filename, 'index.html')
-                return bottle.static_file(fn, root)
-        if not hasattr(static_factory, 'tpl'):
-            p1 = _absjoin(root, '**', 'fileman*', 'index*.html*')
-            p2 = _absjoin(root, '**', 'fileman*.html*')
-            tpls = (glob.glob(p1, recursive=True) +
-                    glob.glob(p2, recursive=True))
-            if tpls:
-                print('Using template %s' % _relpath(tpls[0]))
-                with open(tpls[0], 'rb') as f:
-                    bstr = f.read()
-                if tpls[0].endswith('.gz'):
-                    bstr = gzip.decompress(bstr)
-                static_factory.tpl = bstr.decode('utf-8')
-            else:
-                static_factory.tpl = None
-        if not fileman or not static_factory.tpl:
-            return bottle.HTTPError(404, 'Cannot serve directory')
-        return static_factory.tpl.replace('%ROOT%', bottle.request.path)
-    elif os.path.exists(fn + '.gz'):
-        return bottle.static_file(filename + '.gz', root)
-    return bottle.HTTPError(404, 'File not found')
+    target = op.join(root, filename.strip('/\\'))
+    index = op.join(target, 'index.html')
+    if op.isfile(target):
+        return bottle.static_file(_relpath(target, root), root)
+    if op.isfile(target + '.gz'):
+        return bottle.static_file(_relpath(target + '.gz', root), root)
+    if not op.exists(target):
+        return bottle.HTTPError(404, 'File not found')
+    if not op.isdir(target):
+        return bottle.HTTPError(404, 'Path not found')
+    if auto and any([index, index + '.gz'].map(op.isfile)):
+        if redirect:
+            fn = op.join(bottle.request.path, filename, 'index.html')
+            return bottle.redirect(fn)
+        if not op.isfile(index):
+            index += '.gz'
+        return bottle.static_file(_relpath(index, root), root)
+    if not hasattr(static_factory, 'tpl'):
+        p1 = _absjoin(root, '**', 'fileman*', 'index*.html*')
+        p2 = _absjoin(root, '**', 'fileman*.html*')
+        tpls = (glob.glob(p1, recursive=True) + glob.glob(p2, recursive=True))
+        if tpls:
+            print('Using template %s' % _relpath(tpls[0]))
+            with open(tpls[0], 'rb') as f:
+                bstr = f.read()
+            if tpls[0].endswith('.gz'):
+                bstr = gzip.decompress(bstr)
+            static_factory.tpl = bstr.decode('utf-8')
+        else:
+            static_factory.tpl = None
+    if not fileman or not static_factory.tpl:
+        return bottle.HTTPError(404, 'Cannot serve directory')
+    return static_factory.tpl.replace('%ROOT%', bottle.request.path)
 
 
 def webserver(args):
@@ -248,25 +248,16 @@ def webserver(args):
                                         |
         [URL Query String] -> bottle.request.query
     '''
-    args.root = os.path.abspath(args.root)
-    if not (os.path.exists(args.root)):
+    args.root = op.abspath(args.root)
+    if not (op.exists(args.root)):
         return print('Cannot serve at `%s`: dirctory not found' % args.root)
     if not args.quiet:
         print('WebServer running at `%s`' % _relpath(args.root))
 
-    def static_assets(filename):
-        srcdir = os.path.join(args.root, 'src')
-        if os.path.exists(srcdir):
-            filename = os.path.join('src', filename)
-        else:
-            filename = bottle.request.path  # treat as normal static file
-        return static_factory(
-            filename, args.root, fileman=False, auto=False, redirect=False)
-
     def static_files(filename='/'):
         return static_factory(
-            filename, args.root, fileman=not args.static,
-            auto=bottle.request.query.get('auto', True))
+            filename, args.root, auto=bottle.request.query.get('auto', True)
+        )
 
     app = bottle.Bottle()
     if not args.static:
@@ -278,9 +269,7 @@ def webserver(args):
         app.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
         app.route('/update', 'POST', edit_upload)
         app.route('/config', ['GET', 'POST'], config)
-        app.route('/assets/<filename:path>', 'GET', static_assets)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
-    app.route('/echo', 'GET', lambda *a, **k: dict(bottle.request.params))
     app.route('/<filename:path>', 'GET', static_files)
     bottle.run(
         app, reload=True, quiet=args.quiet, host=args.host, port=args.port

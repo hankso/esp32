@@ -496,6 +496,7 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
         ap->authmode = WIFI_AUTH_WPA_WPA2_PSK;
         snprintf((char *)ap->password, sizeof(ap->password), "%s", pass);
     }
+    ap->ssid_hidden = strbool(Config.net.AP_HIDE);
     return esp_wifi_set_config(WIFI_IF_AP, &config_ap);
 }
 

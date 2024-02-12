@@ -78,8 +78,8 @@ function refresh(path, target, parent) {
         return
     }
     listDir(path)
-        .then(resp => {
-            let nodes = resp.data.map((node, idx) => ({
+        .then(({ data }) => {
+            let nodes = data.map((node, idx) => ({
                 ...node,
                 id: parent ? `${parent.id}-${idx}` : `${idx}`,
                 link: join(parent ? parent.link : '/', node.name),

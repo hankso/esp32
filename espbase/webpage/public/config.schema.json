@@ -1,0 +1,88 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema",
+  "$id": "/config.schema.json",
+  "title": "ESP Base Config",
+  "description": "Generated from espbase/main/config.h",
+  "type": "object",
+  "properties": {
+    "net.sta.ssid": {
+      "description": "SSID of the AP to connect after startup",
+      "type": "string",
+      "format": "hostname"
+    },
+    "net.sta.pass": {
+      "description": "Password of the AP to connect",
+      "type": "string",
+      "pattern": "^([0-9a-zA-Z]{8,})?$"
+    },
+    "net.sta.host": {
+      "description": "Static IP address (ignore DHCP)",
+      "type": "string",
+      "format": "ipv4"
+    },
+    "net.ap.ssid": {
+      "description": "SSID of the AP to serve (hotspot name)",
+      "type": "string",
+      "format": "hostname"
+    },
+    "net.ap.pass": {
+      "description": "Password of the AP to serve",
+      "type": "string",
+      "pattern": "^([0-9a-zA-Z]{8,})?$"
+    },
+    "net.ap.host": {
+      "description": "IP address of Gateway",
+      "type": "string",
+      "format": "ipv4"
+    },
+    "net.ap.auto": {
+      "description": "Switch to AP mode if STA connection failed",
+      "type": "boolean"
+    },
+    "net.ap.hide": {
+      "description": "Hide AP SSID (not shown on scan)",
+      "type": "boolean"
+    },
+    "web.ws.name": {
+      "description": "Username to auth websocket connection",
+      "type": "string"
+    },
+    "web.ws.pass": {
+      "description": "Password to auth websocket connection",
+      "type": "string",
+      "pattern": "^([0-9a-zA-Z]{8,})?$"
+    },
+    "web.http.name": {
+      "description": "Username to auth webserver (HTTP)",
+      "type": "string"
+    },
+    "web.http.pass": {
+      "description": "Password to auth webserver (HTTP)",
+      "type": "string",
+      "pattern": "^[0-9a-zA-Z]{8,}?$"
+    },
+    "web.dns.run": {
+      "description": "Enable mDNS server",
+      "type": "boolean"
+    },
+    "web.dns.host": {
+      "description": "Redirect http://{DNS_HOST} to http://{AP_HOST}",
+      "type": "string",
+      "format": ["hostname", "ipv4"]
+    },
+    "web.ota.run": {
+      "description": "Enable auto updation checking",
+      "type": "boolean"
+    },
+    "web.ota.url": {
+      "description": "URL to fetch firmware from",
+      "type": "string",
+      "format": "uri-reference"
+    },
+    "web.prompt": {
+      "description": "Console promption string",
+      "type": "string",
+      "pattern": "^[0-9a-zA-Z ]+ > $"
+    }
+  }
+}

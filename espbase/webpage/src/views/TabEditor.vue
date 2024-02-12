@@ -100,8 +100,8 @@ watch(
                 config.value.language = extname(filename).slice(1) || 'txt'
                 location.hash = filename
             })
-            .catch(err => {
-                console.error(err.message)
+            .catch(({ message }) => {
+                notify(message)
                 location.hash = ''
             })
     },

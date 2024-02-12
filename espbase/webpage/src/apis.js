@@ -14,7 +14,7 @@ function request_compat(config) {
         url = `${url}${char}${new URLSearchParams(config.params)}`
     }
     if (config.data) config.body = config.data
-    return fetch(join('/api', resolve(url)), config).then(resp => {
+    return fetch(join('/api', resolve('/', url)), config).then(resp => {
         if (!resp.ok) throw new Error(`${resp.status}: ${resp.statusText}`)
         return resp
     })
@@ -22,13 +22,17 @@ function request_compat(config) {
 
 const merge = axios.mergeConfig
 
-const request = axios.create({
+const instance = axios.create({
     baseURL: '/api/',
     timeout: 1000,
 })
 
+export function getAsset(url, opt = {}) {
+    return instance(merge(opt, { url }))
+}
+
 export function getConfig(opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'config',
         })
@@ -36,7 +40,7 @@ export function getConfig(opt = {}) {
 }
 
 export function setConfig(cfg, opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'config',
             method: 'POST',
@@ -45,7 +49,7 @@ export function setConfig(cfg, opt = {}) {
     )
 }
 
-function toFormData(data, dataname = 'data') {
+function toFormData(data, name = 'data') {
     let tmp = data,
         tstr = type(data),
         filename
@@ -54,11 +58,11 @@ function toFormData(data, dataname = 'data') {
         case 'file': break
         case 'blob': break
         case 'string':
-            filename = basename(dataname)
+            filename = basename(name)
             tmp = new Blob([tmp], { type: 'text/plain' })
             break
         case 'uint8array':
-            filename = basename(dataname)
+            filename = basename(name)
             tmp = new Blob([tmp], { type: 'application/octet-stream' })
             break
         case 'object':
@@ -67,13 +71,13 @@ function toFormData(data, dataname = 'data') {
         default: return Promise.reject({message: `Invalid data type ${tstr}`})
     }
     data = new FormData()
-    data.append(dataname, tmp, ...(filename ? [filename] : []))
+    data.append(name, tmp, ...(filename ? [filename] : []))
     return Promise.resolve(data)
 }
 
 export function update(firmware, opt = {}) {
     return toFormData(firmware, 'update').then(data =>
-        request(
+        instance(
             merge(opt, {
                 url: 'update',
                 method: 'POST',
@@ -86,7 +90,7 @@ export function update(firmware, opt = {}) {
 }
 
 export function listDir(path = '', opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'edit',
             params: { list: path },
@@ -95,7 +99,7 @@ export function listDir(path = '', opt = {}) {
 }
 
 export function readFile(path, download = false, opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'edit',
             params: download ? { path } : { path, download },
@@ -104,7 +108,7 @@ export function readFile(path, download = false, opt = {}) {
 }
 
 export function createPath(path, isdir = true, opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'editc',
             method: 'PUT',
@@ -113,7 +117,7 @@ export function createPath(path, isdir = true, opt = {}) {
     )
 }
 export function deletePath(path, opt = {}) {
-    return request(
+    return instance(
         merge(opt, {
             url: 'editd',
             method: 'DELETE',
@@ -124,7 +128,7 @@ export function deletePath(path, opt = {}) {
 
 export function uploadFile(filename, file, opt = {}) {
     return toFormData(file, filename).then(data =>
-        request(
+        instance(
             merge(opt, {
                 url: 'editu',
                 method: 'POST',

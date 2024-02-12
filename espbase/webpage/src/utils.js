@@ -14,6 +14,10 @@ export var type = (function () {
     }
 })()
 
+export function isEmpty(obj) {
+    return Object.keys(obj).length === 0 && obj.constructor === Object
+}
+
 export var formatSize = (function () {
     let units = 'BKMGTP'
     let decimals = [0, 1, 2, 3, 3, 3]
