@@ -18,6 +18,10 @@ export function isEmpty(obj) {
     return Object.keys(obj).length === 0 && obj.constructor === Object
 }
 
+export function parseBool(str) {
+    return ['1', 'y', 'on', 'true'].includes(str.toString().toLowerCase())
+}
+
 export var formatSize = (function () {
     let units = 'BKMGTP'
     let decimals = [0, 1, 2, 3, 3, 3]

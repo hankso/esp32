@@ -31,6 +31,10 @@ export function getAsset(url, opt = {}) {
     return instance(merge(opt, { url }))
 }
 
+export function isApmode() {
+    return instance({ url: '/apmode' })
+}
+
 export function getConfig(opt = {}) {
     return instance(
         merge(opt, {

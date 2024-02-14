@@ -3,7 +3,7 @@ import Vue from '@/components/InfoVue.vue'
 import Vuetify from '@/components/InfoVuetify.vue'
 import EspBase from '@/components/InfoEspBase.vue'
 
-const tab = ref(null)
+const tab = ref()
 const components = {
     EspBase: EspBase,
     Vue: Vue,

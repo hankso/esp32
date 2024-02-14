@@ -63,9 +63,9 @@ function setReadonly(val) {
 }
 
 function destroy() {
-    editor && editor.destroy()
+    editor?.destroy()
     let e = toValue(elem) // hotfix for codejar-linenumbers:exit
-    if (e && e.parentNode.classList.contains('codejar-wrap')) {
+    if (e?.parentNode.classList.contains('codejar-wrap')) {
         e.style.paddingLeft = ''
         e.style.whiteSpace = 'pre-wrap'
         e.parentNode.replaceWith(e)

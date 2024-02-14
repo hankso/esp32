@@ -9,9 +9,10 @@
 # built-in
 import os
 import re
+import csv
 import sys
-import gzip
 import glob
+import gzip
 import json
 import time
 import socket
@@ -19,6 +20,7 @@ import argparse
 import tempfile
 import posixpath
 import os.path as op
+from io import StringIO
 
 # requirements.txt: bottle
 try:
@@ -30,8 +32,9 @@ except Exception:
 __basedir__ = op.dirname(op.abspath(__file__))
 __distdir__ = op.join(__basedir__, 'webpage', 'dist')
 __cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
-__nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
 __partcsv__ = op.join(__basedir__, 'partitions.csv')
+__nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
+__nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
 
 
 def _random_id(len=8):
@@ -82,11 +85,14 @@ def _process_nvs(args):
             sys.path.append(op.join(idf_path, folder))
         from nvs_partition_gen import main as nvs_gen
         from esptool import _main as nvs_flash
-        dest = op.join(__basedir__, 'build', 'nvs.bin')
-        sys.argv[1:] = ['generate', args.out, dest, size]
+        if op.isdir(op.dirname(__nvsdist__)):
+            dist = __nvsdist__
+        else:
+            dist = tempfile.mktemp()
+        sys.argv[1:] = ['generate', args.out, dist, size]
         nvs_gen()
         if args.flash:
-            sys.argv[1:] = ['-p', args.flash, 'write_flash', offset, dest]
+            sys.argv[1:] = ['-p', args.flash, 'write_flash', offset, dist]
             nvs_flash()
     except Exception as e:
         return print('Generate NVS partition binary failed: %s' % e)
@@ -109,7 +115,10 @@ def genid(args):
         data = _random_id(args.len)
     if args.pack and 'IDF_PATH' in os.environ:
         args.out = tempfile.mktemp()
-    filename = getattr(args.out, 'name', args.out).strip('<>')
+    if hasattr(args.out, 'name'):
+        filename = args.out.name
+    else:
+        filename = str(args.out).strip('<>')
     print('Writing NVS information to `%s`' % filename)
     if hasattr(args.out, 'write'):
         args.out.write(data)
@@ -120,7 +129,7 @@ def genid(args):
         _process_nvs(args)
 
 
-def _relpath(p, ref='.', strip=True):
+def _relpath(p, ref='.', strip=False):
     p = op.relpath(p, ref)
     if not strip:
         return p
@@ -181,17 +190,34 @@ def edit_upload():
     time.sleep(1)
 
 
+def config_init():
+    configs = []
+    try:
+        args = make_parser().parse_args(['genid'])
+        args.out = StringIO()
+        args.func(args)
+        args.out.seek(0)
+        record = False
+        for line in csv.reader(args.out):
+            if 'namespace' in line:
+                record = 'config' in line
+                continue
+            if not record or len(line) != 4:
+                continue
+            configs.append([line[0], line[3]])
+    except Exception:
+        pass
+    return dict(configs)
+
+
 def config():
+    if not hasattr(config, 'data'):
+        config.data = config_init()
     if bottle.request.method == 'GET':
-        return {
-            'a.b.c': 123,       # number
-            'a.b.d': 'adsf',    # string
-            'e.f.g': True,      # boolean
-            'e.h.i': '1',       # fake boolean
-            'x.y.z': [1, 2]     # invalid type
-        }
+        return config.data
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
+    config.data.update(bottle.request.params)
 
 
 def static_factory(filename, root, auto=True, fileman=False, redirect=False):
@@ -222,7 +248,7 @@ def static_factory(filename, root, auto=True, fileman=False, redirect=False):
         p2 = _absjoin(root, '**', 'fileman*.html*')
         tpls = (glob.glob(p1, recursive=True) + glob.glob(p2, recursive=True))
         if tpls:
-            print('Using template %s' % _relpath(tpls[0]))
+            print('Using template %s' % _relpath(tpls[0], strip=True))
             with open(tpls[0], 'rb') as f:
                 bstr = f.read()
             if tpls[0].endswith('.gz'):
@@ -252,12 +278,11 @@ def webserver(args):
     if not (op.exists(args.root)):
         return print('Cannot serve at `%s`: dirctory not found' % args.root)
     if not args.quiet:
-        print('WebServer running at `%s`' % _relpath(args.root))
+        print('WebServer running at `%s`' % _relpath(args.root, strip=True))
 
-    def static_files(filename='/'):
+    def static_assets(filename='/'):
         return static_factory(
-            filename, args.root, auto=bottle.request.query.get('auto', True)
-        )
+            filename, args.root, bottle.request.query.get('auto', True))
 
     app = bottle.Bottle()
     if not args.static:
@@ -269,14 +294,15 @@ def webserver(args):
         app.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
         app.route('/update', 'POST', edit_upload)
         app.route('/config', ['GET', 'POST'], config)
+        app.route('/apmode', 'GET', lambda: None)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
-    app.route('/<filename:path>', 'GET', static_files)
+    app.route('/<filename:path>', 'GET', static_assets)
     bottle.run(
         app, reload=True, quiet=args.quiet, host=args.host, port=args.port
     )
 
 
-if __name__ == '__main__':
+def make_parser():
     parser = argparse.ArgumentParser(epilog='see <command> -h for more')
     parser.set_defaults(func=lambda args: parser.print_help())
     subparsers = parser.add_subparsers(
@@ -310,5 +336,13 @@ if __name__ == '__main__':
         '-f', '--tpl', default=__nvsfile__, help='render nvs from template')
     sparser.set_defaults(func=genid)
 
-    args = parser.parse_args(sys.argv[1:])
-    sys.exit(args.func(args))
+    return parser
+
+
+def main(args=sys.argv[1:]):
+    args = make_parser().parse_args(args)
+    return args.func(args)
+
+
+if __name__ == '__main__':
+    sys.exit(main())

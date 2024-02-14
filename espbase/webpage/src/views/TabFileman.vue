@@ -64,15 +64,15 @@ const folders = computed(() => {
 })
 
 function refresh(path, target, parent) {
-    if (path === undefined) path = toValue(root)
-    if (target === undefined) target = toValue(items)
+    path ??= toValue(root)
+    target ??= toValue(items)
     if (type(path) === 'object') {
         parent = path
         if (parent.type !== 'folder') return
         if ((parent.id || '').split('-').length > 5)
             return notify('Too deep into subfolders. Maybe recursive loop?')
         path = parent.link
-        parent.children = parent.children || [] // let vue track this new array
+        parent.children ??= [] // let vue track this new array
         target = parent.children
     } else if (type(path) !== 'string') {
         return
@@ -153,7 +153,7 @@ onMounted(refresh)
 </script>
 
 <template>
-    <v-sheet border rounded="lg" elevation="1" class="ma-4 overflow-x-hidden">
+    <v-sheet border rounded="lg" elevation="1" class="overflow-x-hidden">
         <v-dialog
             v-model="form.create"
             min-width="350"

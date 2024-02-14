@@ -29,7 +29,7 @@ async function upgrade(e) {
 </script>
 
 <template>
-    <v-sheet border rounded="lg" elevation="1" class="ma-4">
+    <v-sheet border rounded="lg" elevation="1">
         <v-form class="ma-4" @submit.prevent="upgrade">
             <v-file-input
                 label="Firmware *"
@@ -39,7 +39,7 @@ async function upgrade(e) {
                 variant="outlined"
                 show-size
             >
-                <template v-slot:loader>
+                <template #loader>
                     <ProgressBar :loading />
                 </template>
             </v-file-input>

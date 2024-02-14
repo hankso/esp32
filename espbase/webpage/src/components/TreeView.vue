@@ -45,7 +45,7 @@ provide('TreeView', {
         if (node.type === 'file') return mdiFile
         if (node.type === 'folder')
             return opened.value.includes(node.id) ? mdiFolderOpen : mdiFolder
-        if (node.children && node.children.length)
+        if (node.children?.length)
             return opened.value.includes(node.id) ? '$collapse' : '$expand'
         let key = node.link ? node.link : node.name
         return selection.value.includes(key) ? '$close' : ''

@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema",
+  "$schema": "http://json-schema.org/draft-07/schema#",
   "$id": "/config.schema.json",
   "title": "ESP Base Config",
   "description": "Generated from espbase/main/config.h",
@@ -61,25 +61,25 @@
       "type": "string",
       "pattern": "^[0-9a-zA-Z]{8,}?$"
     },
-    "web.dns.run": {
+    "app.dns.run": {
       "description": "Enable mDNS server",
       "type": "boolean"
     },
-    "web.dns.host": {
+    "app.dns.host": {
       "description": "Redirect http://{DNS_HOST} to http://{AP_HOST}",
       "type": "string",
-      "format": ["hostname", "ipv4"]
+      "format": "ipv4"
     },
-    "web.ota.run": {
+    "app.ota.run": {
       "description": "Enable auto updation checking",
       "type": "boolean"
     },
-    "web.ota.url": {
+    "app.ota.url": {
       "description": "URL to fetch firmware from",
       "type": "string",
       "format": "uri-reference"
     },
-    "web.prompt": {
+    "app.prompt": {
       "description": "Console promption string",
       "type": "string",
       "pattern": "^[0-9a-zA-Z ]+ > $"

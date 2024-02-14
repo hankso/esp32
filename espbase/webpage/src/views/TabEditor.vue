@@ -110,7 +110,7 @@ watch(
 </script>
 
 <template>
-    <div class="d-flex flex-column flex-lg-row-reverse ma-4 ga-4">
+    <div class="d-flex flex-column flex-lg-row-reverse ga-4">
         <v-scale-transition>
             <TabFileman
                 v-show="config.treeView"

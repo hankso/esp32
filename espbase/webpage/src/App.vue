@@ -1,6 +1,7 @@
 <script setup>
-import { useTheme, useDisplay } from 'vuetify'
+import { isApmode } from '@/apis'
 
+import { useTheme, useDisplay } from 'vuetify'
 import {
     mdiHome,
     mdiFileTree,
@@ -20,40 +21,40 @@ const theme = useTheme()
 const { lg } = useDisplay()
 
 const title = "ESP Base WebUI"
-const apmode = ref(true) // TODO: get STA/AP mode
+const apmode = ref(true)
 const drawer = ref(false)
 
-const admin = [
-    ['File Manager', '/fileman', mdiFileTree],
-    ['Online Editor', '/editor', mdiPencilBoxMultiple],
-    ['Configuration', '/config', mdiCog],
-    ['Upgradation', '/update', mdiUpdate],
-    ['About', '/about', mdiInformation],
-].map(([t, l, i]) => ({
-    title: t,
-    props: {
-        prependIcon: i,
-        color: 'primary',
-        to: l,
-    },
-}))
-
-const items = computed(() => {
-    return [
-        { type: 'divider' },
-        { type: 'subheader', title: 'STA mode' },
-        {
-            title: 'Dashboard',
-            props: {
-                prependIcon: mdiHome,
-                to: '/home',
-            },
+const aponly = [
+    { type: 'divider' },
+    { type: 'subheader', title: 'AP mode' },
+    ...[
+        ['File Manager', '/fileman', mdiFileTree],
+        ['Online Editor', '/editor', mdiPencilBoxMultiple],
+        ['Configuration', '/config', mdiCog],
+        ['Upgradation', '/update', mdiUpdate],
+        ['About', '/about', mdiInformation],
+    ].map(([t, l, i]) => ({
+        title: t,
+        props: {
+            prependIcon: i,
+            color: 'primary',
+            to: l,
         },
-        { type: 'divider' },
-        { type: 'subheader', title: apmode.value ? 'AP mode' : '' },
-        ...(apmode.value ? admin : []),
-    ]
-})
+    }))
+]
+
+const items = computed(() => ([
+    { type: 'divider' },
+    { type: 'subheader', title: 'STA mode' },
+    {
+        title: 'Dashboard',
+        props: {
+            prependIcon: mdiHome,
+            to: '/home',
+        },
+    },
+    ...(toValue(apmode) ? aponly : [])
+]))
 
 function toggleTheme() {
     theme.global.name.value = (
@@ -89,21 +90,54 @@ provide('confirm', function (msg, callback, persistent = false) {
     dialog.value.message = `${msg}`
     dialog.value.callback = () => {
         dialog.value.show = false
-        callback && callback(dialog.value)
+        callback?.(dialog.value)
     }
     dialog.value.persist = persistent
     return (dialog.value.show = true)
 })
 
 onMounted(() => {
-    // maybe redirected from other html subpage
+    // maybe redirected from other html subpages
     let redirect = new URLSearchParams(location.search).get('to')
-    redirect && useRouter().push(redirect)
+    if (redirect) return useRouter().push(redirect)
+    // unlock some features if http client is connected from AP
+    isApmode()
+        .then(() => (apmode.value = true))
+        .catch(() => (apmode.value = false))
 })
 </script>
 
 <template>
     <a class="skip-link" href="#main-content">Skip to main content</a>
+
+    <v-snackbar v-model="snackbar.show" :timeout="snackbar.timeout">
+        <template #actions>
+            <v-btn
+                icon="$close"
+                color="primary"
+                @click="snackbar.show = false"
+            ></v-btn>
+        </template>
+        {{ snackbar.message }}
+    </v-snackbar>
+
+    <v-dialog
+        v-model="dialog.show"
+        :persistent="dialog.persist"
+        width="auto"
+    >
+        <v-card color="red" title="Warning">
+            <v-card-text style="white-space: pre">
+                {{ dialog.message }}
+            </v-card-text>
+            <v-card-actions>
+                <v-spacer></v-spacer>
+                <v-btn @click="dialog.show = false">Cancel</v-btn>
+                <v-btn @click="dialog.callback">Confirm</v-btn>
+            </v-card-actions>
+        </v-card>
+    </v-dialog>
+
     <v-app>
         <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-xl'">
             <v-list nav class="mt-n1 mb-n3">
@@ -113,7 +147,7 @@ onMounted(() => {
                     </template>
                 </v-list-item>
             </v-list>
-            <v-list nav :items="items"></v-list>
+            <v-list nav :items></v-list>
         </v-navigation-drawer>
 
         <v-app-bar scroll-behavior="hide" density="comfortable">
@@ -126,36 +160,10 @@ onMounted(() => {
         </v-app-bar>
 
         <v-main id="main-content">
-            <router-view></router-view>
+            <v-container>
+                <router-view></router-view>
+            </v-container>
         </v-main>
-
-        <v-snackbar v-model="snackbar.show" :timeout="snackbar.timeout">
-            <template #actions>
-                <v-btn
-                    icon="$close"
-                    color="primary"
-                    @click="snackbar.show = false"
-                ></v-btn>
-            </template>
-            {{ snackbar.message }}
-        </v-snackbar>
-
-        <v-dialog
-            v-model="dialog.show"
-            :persistent="dialog.persist"
-            width="auto"
-        >
-            <v-card color="red" title="Warning">
-                <v-card-text style="white-space: pre">
-                    {{ dialog.message }}
-                </v-card-text>
-                <v-card-actions>
-                    <v-spacer></v-spacer>
-                    <v-btn @click="dialog.show = false">Cancel</v-btn>
-                    <v-btn @click="dialog.callback">Confirm</v-btn>
-                </v-card-actions>
-            </v-card>
-        </v-dialog>
     </v-app>
 </template>
 
