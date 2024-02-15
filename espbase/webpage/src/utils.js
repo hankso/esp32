@@ -213,11 +213,30 @@ export function LoopFrame(
 }
 
 export function debounce(func, timeout = 300) {
+    if (!func) return () => {}
     let handler = null
     return (...args) => {
         clearTimeout(handler)
         handler = setTimeout(func, timeout, ...args)
     }
+}
+
+export function gzip_compress(string) {
+    return new Response(
+        new Blob([string])
+            .stream()
+            .pipeThrough(new CompressionStream('gzip'))
+    )
+        .arrayBuffer()
+}
+
+export function gzip_decompress(byteArray) {
+    return new Response(
+        new Blob([byteArray])
+            .stream()
+            .pipeThrough(new DecompressionStream('gzip'))
+    )
+        .text()
 }
 
 export function camelToSnake(s, sep = '_') {

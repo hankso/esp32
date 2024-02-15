@@ -1,5 +1,7 @@
 <template>
-    <div ref="elem" :class="`jar-editor lang-${language}`"></div>
+    <div class="codejar">
+        <div ref="elem" :class="`codejar-editor lang-${language}`"></div>
+    </div>
 </template>
 
 <script setup>
@@ -23,7 +25,10 @@ const model = defineModel({
 const props = defineProps({
     language: String,
     readonly: Boolean,
-    highlight: [Function, String, Boolean],
+    highlight: {
+        type: [Function, String, Boolean],
+        default: true,
+    },
     lineNumber: Boolean,
 })
 
@@ -107,18 +112,18 @@ onBeforeUnmount(destroy)
 </script>
 
 <style scoped>
-.jar-editor[contenteditable='false'] {
+.codejar-editor[contenteditable='false'] {
     cursor: not-allowed;
 }
 
-.jar-editor {
+.codejar-editor {
     padding-left: 8px;
 }
 </style>
 
 <style>
 /* These elements are generated at runtime and not tracked by scoped CSS */
-.jar-editor .token:before {
+.codejar-editor .token:before {
     opacity: 0.3;
 }
 

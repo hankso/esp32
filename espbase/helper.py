@@ -211,13 +211,19 @@ def config_init():
 
 
 def config():
+    print('method', bottle.request.method)
+    print('params', dict(bottle.request.params))
     if not hasattr(config, 'data'):
         config.data = config_init()
     if bottle.request.method == 'GET':
         return config.data
-    print('method', bottle.request.method)
-    print('params', dict(bottle.request.params))
-    config.data.update(bottle.request.params)
+    try:
+        data = bottle.request.params.get('json', {})
+        if isinstance(data, str):
+            data = json.loads(data)
+        config.data.update(data)
+    except Exception:
+        pass
 
 
 def static_factory(filename, root, auto=True, fileman=False, redirect=False):
@@ -267,7 +273,7 @@ def webserver(args):
 
         [CGI FieldStorage] -> bottle.request.POST
                              /          |
-                            /           |
+                           |/           V
         bottle.request.files  bottle.request.forms
                                         |
                                         +---------> bottle.request.params

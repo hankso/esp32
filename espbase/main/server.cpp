@@ -130,7 +130,7 @@ void onUpdate(AsyncWebServerRequest *req) {
     }
 }
 
-void onUpdateHelper(AsyncWebServerRequest *req) {
+void onUpdateDone(AsyncWebServerRequest *req) {
     log_param(req);
     if (req->hasParam("reset", true)) {
         log_msg(req, "reset");
@@ -491,7 +491,7 @@ void WebServerClass::register_api_ap() {
     _server.on("/config", HTTP_ANY, onConfig).setFilter(ON_AP_FILTER);
 
     _server.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
-    _server.on("/update", HTTP_POST, onUpdateHelper, onUpdatePost)
+    _server.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
         .setFilter(ON_AP_FILTER);
 
     // Use HTTP_ANY for compatibility with HTTP_PUT/HTTP_DELETE

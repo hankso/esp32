@@ -97,8 +97,10 @@ watch(
             .then(resp => {
                 path.value = filename
                 code.value = resp.data
-                config.value.language = extname(filename).slice(1) || 'txt'
                 location.hash = filename
+                if (filename.endsWith('.gz'))
+                    filename = filename.slice(0, filename.length - 3)
+                config.value.language = extname(filename).slice(1) || 'txt'
             })
             .catch(({ message }) => {
                 notify(message)

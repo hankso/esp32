@@ -1,4 +1,4 @@
-import { type } from '@/utils'
+import { type, gzip_compress } from '@/utils'
 
 import axios from 'axios'
 import { basename, resolve, join } from 'path-browserify'
@@ -22,7 +22,7 @@ function request_compat(config) {
 
 const merge = axios.mergeConfig
 
-const instance = axios.create({
+export const instance = axios.create({
     baseURL: '/api/',
     timeout: 1000,
 })
@@ -48,31 +48,36 @@ export function setConfig(cfg, opt = {}) {
         merge(opt, {
             url: 'config',
             method: 'POST',
-            data: { json: cfg },
+            data: `json=${JSON.stringify(cfg)}`,
         })
     )
 }
 
-function toFormData(data, name = 'data') {
-    let tmp = data,
-        tstr = type(data),
-        filename
-    switch (tstr) {
-        case 'formdata': return Promise.resolve(data)
+async function toFormData(data, name = 'data') {
+    let filename
+    let tmp = data
+    switch (type(data)) {
         case 'file': break
         case 'blob': break
-        case 'string':
-            filename = basename(name)
-            tmp = new Blob([tmp], { type: 'text/plain' })
-            break
-        case 'uint8array':
-            filename = basename(name)
-            tmp = new Blob([tmp], { type: 'application/octet-stream' })
-            break
         case 'object':
             tmp = new Blob([JSON.stringify(tmp)], { type: 'application/json' })
             break
-        default: return Promise.reject({message: `Invalid data type ${tstr}`})
+        case 'string':
+            filename = basename(name)
+            if (filename.endsWith('.gz')) {
+                let bytes = await gzip_compress(tmp)
+                tmp = new Blob([bytes], { type: 'application/gzip' })
+            } else {
+                tmp = new Blob([tmp], { type: 'text/plain' })
+            }
+            break
+        case 'uint8array':
+        case 'arraybuffer':
+            filename = basename(name)
+            tmp = new Blob([tmp], { type: 'application/octet-stream' })
+            break
+        case 'formdata': return Promise.resolve(data)
+        default: return Promise.reject({message: `Invalid type ${type(data)}`})
     }
     data = new FormData()
     data.append(name, tmp, ...(filename ? [filename] : []))
@@ -85,7 +90,6 @@ export function update(firmware, opt = {}) {
             merge(opt, {
                 url: 'update',
                 method: 'POST',
-                // params: { reset: '', size: 1 },
                 timeout: 0,
                 data,
             })
@@ -106,7 +110,8 @@ export function readFile(path, download = false, opt = {}) {
     return instance(
         merge(opt, {
             url: 'edit',
-            params: download ? { path } : { path, download },
+            responseType: 'text', // raw file: do NOT parse to json
+            params: download ? { path, download } : { path },
         })
     )
 }

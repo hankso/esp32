@@ -182,6 +182,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
             prismjs({
                 languages: [
                     'markup', // 0.8kB
+                    'json', // 0.1kB
                     'css', // 0.1kB
                     'js', // 1.6kB
                     'clike', // 0.1kB

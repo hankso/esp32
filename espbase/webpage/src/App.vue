@@ -139,11 +139,15 @@ onMounted(() => {
     </v-dialog>
 
     <v-app>
-        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-xl'">
+        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-lg'">
             <v-list nav class="mt-n1 mb-n3">
                 <v-list-item :title :subtitle="desc">
                     <template #append v-if="!lg">
-                        <v-icon icon="$close" @click="drawer = false"></v-icon>
+                        <v-icon
+                            size="small"
+                            icon="$close"
+                            @click="drawer = false"
+                        ></v-icon>
                     </template>
                 </v-list-item>
             </v-list>
@@ -166,19 +170,3 @@ onMounted(() => {
         </v-main>
     </v-app>
 </template>
-
-<style scoped>
-.skip-link {
-    line-height: 100%;
-    position: absolute;
-    text-decoration: none;
-    left: 50%;
-    top: 10px;
-    z-index: 9999;
-    transform: translate(-50%, -200%); /* align center and hide to top */
-    transition: 0.5s;
-}
-.skip-link:focus {
-    transform: translate(-50%, 0%);
-}
-</style>

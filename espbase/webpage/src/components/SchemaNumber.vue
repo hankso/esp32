@@ -1,19 +1,18 @@
 <template>
-    <v-list-item :title="schema?.title ?? prop" :subtitle="schema?.description">
-        <template #append>
-            <v-text-field
-                :modelValue="value"
-                @update:modelValue="update"
-            ></v-text-field>
-        </template>
-    </v-list-item>
+    <v-text-field
+        clearable
+        hide-details
+        type="number"
+        :modelValue="value.includes('.') ? parseFloat(value) : parseInt(value)"
+        @update:modelValue="val => update?.(val.toString())"
+    ></v-text-field>
 </template>
 
 <script setup>
 defineProps({
-    prop: { type: String },
-    value: {  },
-    schema: { type: Object },
-    update: { type: Function },
+    name: String,
+    value: String,
+    schema: Object,
+    update: Function,
 })
 </script>

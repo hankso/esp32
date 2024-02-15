@@ -1,16 +1,35 @@
 <template>
     <v-expansion-panels class="my-2">
-        <v-expansion-panel title="Schema">
-            <template #text>
-                <v-textarea
-                    v-model="schemaPlain"
-                    :error-messages="schemaError"
-                ></v-textarea>
-            </template>
+        <v-expansion-panel>
+            <v-expansion-panel-title v-slot="{ expanded }">
+                Edit Schema
+                <span class="mx-auto text-red" v-if="!expanded">
+                    {{ schemaError.split(':')[0] }}
+                </span>
+            </v-expansion-panel-title>
+            <v-expansion-panel-text>
+                <div class="fix-margin">
+                    <!--
+                    <v-textarea
+                        v-model="schemaPlain"
+                        hide-details="auto"
+                        :error-messages="schemaError"
+                    ></v-textarea>
+                    -->
+                    <CodeJar
+                        v-model="schemaPlain"
+                        language="json"
+                        line-number
+                    />
+                    <v-scroll-y-transition>
+                        <p v-show="schemaError">{{ schemaError }}</p>
+                    </v-scroll-y-transition>
+                </div>
+            </v-expansion-panel-text>
         </v-expansion-panel>
     </v-expansion-panels>
     <v-sheet border rounded="lg" elevation="1">
-        <SchemaForm v-model="config" :schema @submit="submit" />
+        <SchemaForm v-model="config" :schema @submit.prevent="submit" />
     </v-sheet>
 </template>
 
@@ -30,7 +49,7 @@ const validator = computed(() => ajv.compile(toValue(schema)))
 
 function submit() {
     setConfig(toValue(config))
-        .then(() => notify('Configuration saved!'))
+        .then(() => (notify('Configuration saved!') && refresh()))
         .catch(({ message }) => notify(message))
 }
 
@@ -53,7 +72,6 @@ watch(schemaPlain, debounce(val => {
         let obj = JSON.parse(val)
         if (!ajv.validateSchema(obj))
             throw new Error(ajv.errorsText())
-        // TODO: this will trigger schemaPlain, save pos
         schema.value = obj
         schemaError.value = ''
     } catch (e) {
@@ -61,3 +79,21 @@ watch(schemaPlain, debounce(val => {
     }
 }))
 </script>
+
+<style scoped>
+/* hotfix for v-expansion-panel-text__wrapper */
+.fix-margin {
+    margin: -8px -24px -16px;
+}
+
+.codejar {
+    max-height: 30vh;
+    overflow-y: auto;
+}
+
+.codejar + p {
+    color: #B00020;
+    font-size: 12px;
+    margin-left: 8px;
+}
+</style>
