@@ -12,7 +12,7 @@ import { join, resolve, basename } from 'path-browserify'
 
 const route = useRoute()
 const notify = inject('notify', console.log)
-const confirm = inject('confirm', (p, f) => (window.confirm(p) && f()))
+const confirm = inject('confirm', (p, f) => window.confirm(p) && f())
 
 const props = defineProps({
     useLink: {
@@ -153,12 +153,8 @@ onMounted(refresh)
 </script>
 
 <template>
-    <v-sheet border rounded="lg" elevation="1" class="overflow-x-hidden">
-        <v-dialog
-            v-model="form.create"
-            min-width="350"
-            width="auto"
-        >
+    <v-sheet border rounded="lg" class="overflow-x-hidden">
+        <v-dialog v-model="form.create" min-width="350" width="auto">
             <v-card>
                 <v-card-title class="d-flex align-center">
                     Create new folder
@@ -276,21 +272,13 @@ onMounted(refresh)
             :title
         >
             <v-scale-transition :group="true" leave-absolute>
-                <v-btn
-                    v-if="!select.length"
-                    @click="form.create = true"
-                    icon
-                >
+                <v-btn icon v-if="!select.length" @click="form.create = true">
                     <v-icon :icon="mdiFolderPlus"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Create new folder
                     </v-tooltip>
                 </v-btn>
-                <v-btn
-                    v-if="!select.length"
-                    @click="form.upload = true"
-                    icon
-                >
+                <v-btn icon v-if="!select.length" @click="form.upload = true">
                     <v-icon :icon="mdiUpload"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Upload files
@@ -299,10 +287,10 @@ onMounted(refresh)
             </v-scale-transition>
             <v-scale-transition :group="true">
                 <v-btn
+                    icon
                     v-if="select.length === 1"
                     :target="useLink ? '_blank' : ''"
                     :href="`${useLink ? 'editor' : ''}#${select[0]}`"
-                    icon
                 >
                     <v-icon :icon="mdiPencilBoxMultiple"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -310,17 +298,17 @@ onMounted(refresh)
                     </v-tooltip>
                 </v-btn>
                 <v-btn
+                    icon
                     v-if="select.length"
                     @click="confirm(prompt, () => remove(select))"
                     :loading
-                    icon
                 >
                     <v-icon :icon="mdiDelete"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Delete from disk
                     </v-tooltip>
                 </v-btn>
-                <v-btn v-if="select.length" @click="select = []" icon="$close">
+                <v-btn icon="$close" v-if="select.length" @click="select = []">
                 </v-btn>
             </v-scale-transition>
         </v-toolbar>

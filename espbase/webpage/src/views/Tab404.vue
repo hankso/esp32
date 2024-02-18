@@ -1,20 +1,3 @@
-<script setup>
-const route = useRoute()
-const router = useRouter()
-const timeout = ref(route.query.timeout ? route.query.timeout : 10)
-
-onMounted(function redirect() {
-    if (timeout.value < 0) {
-        return
-    } else if (timeout.value > 1) {
-        timeout.value--
-    } else {
-        router.push('/home')
-    }
-    setTimeout(redirect, 1000)
-})
-</script>
-
 <template>
     <v-row class="fill-height align-center justify-center">
         <v-col cols="auto">
@@ -40,3 +23,20 @@ onMounted(function redirect() {
         </v-col>
     </v-row>
 </template>
+
+<script setup>
+const route = useRoute()
+const router = useRouter()
+const timeout = ref(route.query.timeout ? route.query.timeout : 10)
+
+onMounted(function redirect() {
+    if (timeout.value < 0) {
+        return
+    } else if (timeout.value > 1) {
+        timeout.value--
+    } else {
+        router.push('/home')
+    }
+    setTimeout(redirect, 1000)
+})
+</script>

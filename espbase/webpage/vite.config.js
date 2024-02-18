@@ -7,132 +7,13 @@ import compression from 'vite-plugin-compression'
 import vuedevtools from 'vite-plugin-vue-devtools'
 import { visualizer } from 'rollup-plugin-visualizer'
 import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
+import pythonServer from './src/plugins/vite-python'
 
 // Utilities
-import { resolve } from 'node:path'
 import { defineConfig } from 'vite'
-import { spawn, execSync } from 'node:child_process'
+import { resolve } from 'node:path'
+import { execSync } from 'node:child_process'
 import { fileURLToPath, URL } from 'node:url'
-
-// Colorful logging
-function kolorist(start, end) {
-    if (
-        !process.stdout.isTTY ||
-        process.env.FORCE_COLOR === '0' ||
-        process.env.NODE_DISABLE_COLORS ||
-        process.env.NO_COLOR ||
-        process.env.TERM === 'dumb'
-    ) {
-        return str => '' + str
-    }
-    const open = `\x1b[${start}m`
-    const close = `\x1b[${end}m`
-    const regex = new RegExp(`\\x1b\\[${end}m`, 'g')
-    return str => open + ('' + str).replace(regex, open) + close
-}
-
-var bold = kolorist(1, 22),
-    dim = kolorist(2, 22),
-    green = kolorist(32, 39),
-    yellow = kolorist(33, 39),
-    cyan = kolorist(36, 39)
-
-// Custom plugin
-const pythonServerPlugin = () => {
-    let pserver
-
-    class PythonServer {
-        constructor(
-            port = 8080,
-            host = '0.0.0.0',
-            cmd = 'python',
-            verbose = false
-        ) {
-            let entry = resolve(__dirname, '..', 'helper.py')
-            this.proc = this.pid = null
-            this.port = port
-            this.host = host
-            this.verb = verbose
-            this.addr = `${host.replace('0.0.0.0', 'localhost')}:${port}`
-            this.args = [cmd, '-u', entry, 'serve', '-H', host, '-P', port]
-            if (!verbose) this.args.push('--quiet')
-        }
-        log() {
-            // print timestamp and colorful string same like vite
-            console.log(
-                dim(new Date().toLocaleTimeString()),
-                cyan(bold('[pser]')),
-                this.pid ? `[${this.pid}]` : '',
-                ...arguments
-            )
-        }
-        info() {
-            if (this.verb) this.log(...argument)
-        }
-        start() {
-            if (this.proc) return this
-
-            // DO NOT use `exec` on windows system
-            this.proc = spawn(this.args[0], this.args.slice(1))
-            this.pid = this.proc.pid
-
-            this.proc.on('exit', code => {
-                this.info(`Python Server exit(${code || 0})`)
-                this.proc = this.pid = null
-            })
-            this.proc.on('error', err => console.log(`Error: ${err}`))
-
-            let logger = line => this.log(line)
-            let print = m => m.toString().trim().split('\n').forEach(logger)
-            this.proc.stdout.on('data', print)
-            this.proc.stderr.on('data', print)
-
-            this.info('Python Server start')
-            return this
-        }
-        close() {
-            if (!this.proc) return this
-            this.info('Python Server killed')
-            this.proc.kill()
-            this.proc = null
-            return this
-        }
-        toString() {
-            let [host, port] = this.addr.split(':')
-            return [
-                green('  \u279c '),
-                bold('Python: '),
-                cyan('http://' + host + bold(port)),
-                green(`(PID ${this.pid})`),
-            ].join(' ')
-        }
-    }
-    return {
-        name: 'python-api-server',
-        apply: 'serve',
-        enforce: 'pre',
-        buildStart() {
-            pserver && pserver.start()
-        },
-        buildEnd() {
-            pserver && pserver.close()
-        },
-        configResolved(resolvedConfig) {
-            pserver = new PythonServer(
-                resolvedConfig.server.sport,
-                resolvedConfig.server.host
-            )
-        },
-        configureServer(server) {
-            let printUrls = server.printUrls
-            server.printUrls = () => {
-                if (pserver && pserver.proc)
-                    server.config.logger.info(pserver.toString())
-                printUrls()
-            }
-        },
-    }
-}
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
@@ -214,7 +95,10 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
                 brotliSize: true,
             }),
             vuedevtools(),
-            pythonServerPlugin(),
+            pythonServer({
+                entry: resolve(__dirname, '..', 'helper.py'),
+                verbose: false,
+            }),
         ],
         resolve: {
             alias: {

@@ -28,15 +28,15 @@
             </v-expansion-panel-text>
         </v-expansion-panel>
     </v-expansion-panels>
-    <v-sheet border rounded="lg" elevation="1">
+    <v-sheet border rounded="lg">
         <SchemaForm v-model="config" :schema @submit.prevent="submit" />
     </v-sheet>
 </template>
 
 <script setup>
-import { type, isEmpty, debounce } from '@/utils'
-import { getConfig, setConfig, getAsset } from '@/apis'
 import ajv from '@/plugins/ajv'
+import { type, isEmpty, debounce } from '@/utils'
+import { getSchema, getConfig, setConfig } from '@/apis'
 
 const notify = inject('notify', console.log)
 
@@ -49,13 +49,13 @@ const validator = computed(() => ajv.compile(toValue(schema)))
 
 function submit() {
     setConfig(toValue(config))
-        .then(() => (notify('Configuration saved!') && refresh()))
+        .then(() => notify('Configuration saved!') && refresh())
         .catch(({ message }) => notify(message))
 }
 
 function refresh() {
     if (isEmpty(toValue(schema))) {
-        getAsset('/config.schema.json')
+        getSchema('config')
             .then(({ data }) => (schema.value = data))
             .catch(({ message }) => notify(message))
     }
@@ -67,17 +67,19 @@ function refresh() {
 onMounted(refresh)
 
 watch(schema, val => (schemaPlain.value = JSON.stringify(val, null, 4)))
-watch(schemaPlain, debounce(val => {
-    try {
-        let obj = JSON.parse(val)
-        if (!ajv.validateSchema(obj))
-            throw new Error(ajv.errorsText())
-        schema.value = obj
-        schemaError.value = ''
-    } catch (e) {
-        schemaError.value = e.toString()
-    }
-}))
+watch(
+    schemaPlain,
+    debounce(val => {
+        try {
+            let obj = JSON.parse(val)
+            if (!ajv.validateSchema(obj)) throw new Error(ajv.errorsText())
+            schema.value = obj
+            schemaError.value = ''
+        } catch (e) {
+            schemaError.value = e.toString()
+        }
+    })
+)
 </script>
 
 <style scoped>
@@ -92,7 +94,7 @@ watch(schemaPlain, debounce(val => {
 }
 
 .codejar + p {
-    color: #B00020;
+    color: #b00020;
     font-size: 12px;
     margin-left: 8px;
 }

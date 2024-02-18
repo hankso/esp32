@@ -52,8 +52,8 @@ const data = defineModel({ type: Object })
 const props = defineProps({
     schema: {
         type: Object,
-        default: {}
-    }
+        default: {},
+    },
 })
 
 const overlay = ref(false)
@@ -76,10 +76,14 @@ function inputType(schema) {
     if (schema.widget) return schema.widget
     if (schema.enum) return SchemaSelect
     switch (schema.type) {
-        case 'boolean': return SchemaBoolean
-        case 'integer': return SchemaNumber
-        case 'number': return SchemaNumber
-        default: return SchemaText
+        case 'boolean':
+            return SchemaBoolean
+        case 'integer':
+            return SchemaNumber
+        case 'number':
+            return SchemaNumber
+        default:
+            return SchemaText
     }
 }
 
@@ -90,7 +94,7 @@ function genItem(obj) {
             name: key,
             value: obj[key],
             schema: props.schema.properties?.[key],
-            update: val => (toValue(data) && (data.value[key] = val)),
+            update: val => toValue(data) && (data.value[key] = val),
         }
     }
     return rst

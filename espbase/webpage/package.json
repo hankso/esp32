@@ -19,6 +19,7 @@
     "prismjs": "^1.29.0",
     "vue": "^3.4.15",
     "vue-router": "^4.2.5",
+    "vue-web-terminal": "^3.2.5",
     "vuetify": "^3.0.0"
   },
   "devDependencies": {

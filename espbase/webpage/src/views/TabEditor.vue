@@ -48,7 +48,9 @@ const propIcons = {
 }
 
 const links = computed(() => {
-    let chunks = toValue(path).replace(/^\/|\/$/g, '').split('/')
+    let chunks = toValue(path)
+        .replace(/^\/|\/$/g, '')
+        .split('/')
     return chunks.map((v, i) => ({
         title: v,
         href: `#${chunks.slice(0, i + 1).join('/')}`,
@@ -122,12 +124,7 @@ watch(
             />
         </v-scale-transition>
 
-        <v-sheet
-            border
-            rounded="lg"
-            elevation="1"
-            class="flex-grow-1 overflow-hidden"
-        >
+        <v-sheet border rounded="lg" class="flex-grow-1 overflow-hidden">
             <v-toolbar density="comfortable" class="border-b">
                 <v-tooltip location="bottom">
                     <template #activator="{ props }">

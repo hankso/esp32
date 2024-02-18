@@ -3,62 +3,15 @@ import { type, gzip_compress } from '@/utils'
 import axios from 'axios'
 import { basename, resolve, join } from 'path-browserify'
 
-function merge_compat(opt1, opt2) {
-    return Object.assign(opt1, opt2)
-}
-
-function request_compat(config) {
-    let url = config.url
-    if (config.params) {
-        let char = url.includes('?') ? '&' : '?'
-        url = `${url}${char}${new URLSearchParams(config.params)}`
-    }
-    if (config.data) config.body = config.data
-    return fetch(join('/api', resolve('/', url)), config).then(resp => {
-        if (!resp.ok) throw new Error(`${resp.status}: ${resp.statusText}`)
-        return resp
-    })
-}
-
-const merge = axios.mergeConfig
-
-export const instance = axios.create({
-    baseURL: '/api/',
-    timeout: 1000,
-})
-
-export function getAsset(url, opt = {}) {
-    return instance(merge(opt, { url }))
-}
-
-export function isApmode() {
-    return instance({ url: '/apmode' })
-}
-
-export function getConfig(opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'config',
-        })
-    )
-}
-
-export function setConfig(cfg, opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'config',
-            method: 'POST',
-            data: `json=${JSON.stringify(cfg)}`,
-        })
-    )
-}
-
 async function toFormData(data, name = 'data') {
     let filename
     let tmp = data
-    switch (type(data)) {
-        case 'file': break
-        case 'blob': break
+    let dtype = type(data)
+    switch (dtype) {
+        case 'file':
+            break
+        case 'blob':
+            break
         case 'object':
             tmp = new Blob([JSON.stringify(tmp)], { type: 'application/json' })
             break
@@ -76,75 +29,138 @@ async function toFormData(data, name = 'data') {
             filename = basename(name)
             tmp = new Blob([tmp], { type: 'application/octet-stream' })
             break
-        case 'formdata': return Promise.resolve(data)
-        default: return Promise.reject({message: `Invalid type ${type(data)}`})
+        case 'formdata':
+            return Promise.resolve(data)
+        default:
+            return Promise.reject({ message: `Invalid type ${dtype}` })
     }
     data = new FormData()
     data.append(name, tmp, ...(filename ? [filename] : []))
     return Promise.resolve(data)
 }
 
-export function update(firmware, opt = {}) {
-    return toFormData(firmware, 'update').then(data =>
-        instance(
-            merge(opt, {
-                url: 'update',
-                method: 'POST',
-                timeout: 0,
-                data,
-            })
-        )
-    )
+const api = axios.create({
+    baseURL: '/api/',
+    timeout: 1000,
+})
+
+function merge(opt1, opt2, instance = api) {
+    return instance(axios.mergeConfig(opt1, opt2))
+}
+
+export function getSchema(name = '', opt = {}) {
+    return axios.get(resolve('/', `${name ? name + '.' : ''}schema.json`), opt)
+}
+
+export function isApmode(opt = {}) {
+    return merge(opt, { url: 'apmode' })
+}
+
+export function getConfig(opt = {}) {
+    return merge(opt, { url: 'config' })
+}
+
+export function setConfig(cfg, opt = {}) {
+    return merge(opt, {
+        url: 'config',
+        method: 'POST',
+        data: `json=${JSON.stringify(cfg)}`,
+    })
 }
 
 export function listDir(path = '', opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'edit',
-            params: { list: path },
-        })
-    )
+    return merge(opt, {
+        url: 'edit',
+        params: { list: path },
+    })
 }
 
 export function readFile(path, download = false, opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'edit',
-            responseType: 'text', // raw file: do NOT parse to json
-            params: download ? { path, download } : { path },
-        })
-    )
+    return merge(opt, {
+        url: 'edit',
+        responseType: 'text', // raw file: do NOT parse to json
+        params: download ? { path, download } : { path },
+    })
 }
 
 export function createPath(path, isdir = true, opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'editc',
-            method: 'PUT',
-            params: { path, type: isdir ? 'dir' : 'file' },
-        })
-    )
+    return merge(opt, {
+        url: 'editc',
+        method: 'PUT',
+        params: { path, type: isdir ? 'dir' : 'file' },
+    })
 }
 export function deletePath(path, opt = {}) {
-    return instance(
-        merge(opt, {
-            url: 'editd',
-            method: 'DELETE',
-            params: { path },
-        })
-    )
+    return merge(opt, {
+        url: 'editd',
+        method: 'DELETE',
+        params: { path },
+    })
 }
 
 export function uploadFile(filename, file, opt = {}) {
     return toFormData(file, filename).then(data =>
-        instance(
-            merge(opt, {
-                url: 'editu',
-                method: 'POST',
-                params: { overwrite: '' },
-                timeout: 0,
-                data,
-            })
-        )
+        merge(opt, {
+            url: 'editu',
+            method: 'POST',
+            params: { overwrite: '' },
+            timeout: 0,
+            data,
+        })
     )
+}
+
+export function updateOTA(firmware, opt = {}) {
+    return toFormData(firmware, 'update').then(data =>
+        merge(opt, {
+            url: 'update',
+            method: 'POST',
+            timeout: 0,
+            data,
+        })
+    )
+}
+
+export function execCommand(cmd, opt = {}) {
+    let ctype = type(cmd)
+    switch (ctype) {
+        case 'string':
+            break
+        case 'array':
+            cmd = cmd.join(' ')
+            break
+        case 'object':
+            cmd = Object.entries(cmd)
+                .filter(kv => kv[1])
+                .map(kv => kv[0])
+                .join(' ')
+            break
+        default:
+            return Promise.reject({ message: `Invalid type ${ctype}` })
+    }
+    return merge(opt, {
+        url: 'cmd',
+        method: 'POST',
+        data: `exec=${cmd.trim().replace('helpESP', 'help')}`,
+    })
+}
+
+export function getCommands(opt = {}) {
+    return execCommand('help', opt).then(resp => {
+        resp.data = resp.data
+            .split('\n\n')
+            .filter(cmd => cmd.trim().length)
+            .map(cmd => cmd.trim().split('\n'))
+            .map(lines => ({
+                key: lines[0].split(' ')[0].replace('help', 'helpESP'),
+                group: 'server',
+                usage: lines[0].trim(),
+                description: lines[1].trim(),
+                example:
+                    lines.length < 3
+                        ? null
+                        : [{ des: lines.slice(2).join('\n') }],
+            }))
+        return resp
+    })
 }

@@ -1,5 +1,5 @@
 <script setup>
-import { update } from '@/apis'
+import { updateOTA } from '@/apis'
 import { rules, type } from '@/utils'
 
 const notify = inject('notify', console.log)
@@ -12,7 +12,7 @@ async function upgrade(e) {
     if (!(await e).valid) return
     loading.value = 0
     upgrade.ctrl = new AbortController()
-    update(toValue(firmware)[0], {
+    updateOTA(toValue(firmware)[0], {
         signal: upgrade.ctrl.signal,
         onUploadProgress(e) {
             if (e.total === undefined) {
@@ -20,7 +20,7 @@ async function upgrade(e) {
             } else {
                 loading.value = e.progress * 100
             }
-        }
+        },
     })
         .then(() => notify('Upgraded!'))
         .catch(({ message }) => notify(message))
@@ -29,7 +29,7 @@ async function upgrade(e) {
 </script>
 
 <template>
-    <v-sheet border rounded="lg" elevation="1">
+    <v-sheet border rounded="lg">
         <v-form class="ma-4" @submit.prevent="upgrade">
             <v-file-input
                 label="Firmware *"

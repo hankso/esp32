@@ -286,6 +286,11 @@ def webserver(args):
     if not args.quiet:
         print('WebServer running at `%s`' % _relpath(args.root, strip=True))
 
+    def redirect_esp32():
+        target = 'http://' + args.esphost + bottle.request.path
+        print('Redirect to %s %s' % (target, dict(bottle.request.params)))
+        return bottle.redirect(target, 308)
+
     def static_assets(filename='/'):
         return static_factory(
             filename, args.root, bottle.request.query.get('auto', True))
@@ -294,6 +299,7 @@ def webserver(args):
     if not args.static:
         if not args.quiet:
             print('Will simulate ESP32 APIs: edit/config/assets etc.')
+        app.route('/cmd', 'POST', redirect_esp32)
         app.route('/edit', 'GET', lambda: edit_get(args.root))
         app.route('/editu', 'POST', edit_upload)
         app.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
@@ -322,6 +328,8 @@ def make_parser():
         '-P', '--port', type=int, default=8080, help='default port 8080')
     sparser.add_argument(
         '-q', '--quiet', action='store_true', help='be slient on CLI')
+    sparser.add_argument(
+        '--esphost', default='10.0.0.112', help='IP address of ESP chip')
     sparser.add_argument(
         '--static', action='count', help='disable ESP32 API, only statics')
     sparser.add_argument(

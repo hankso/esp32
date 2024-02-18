@@ -20,7 +20,7 @@ if (process.env.SRC_VER) {
 const theme = useTheme()
 const { lg } = useDisplay()
 
-const title = "ESP Base WebUI"
+const title = 'ESP Base WebUI'
 const apmode = ref(true)
 const drawer = ref(false)
 
@@ -40,10 +40,10 @@ const aponly = [
             color: 'primary',
             to: l,
         },
-    }))
+    })),
 ]
 
-const items = computed(() => ([
+const items = computed(() => [
     { type: 'divider' },
     { type: 'subheader', title: 'STA mode' },
     {
@@ -53,13 +53,11 @@ const items = computed(() => ([
             to: '/home',
         },
     },
-    ...(toValue(apmode) ? aponly : [])
-]))
+    ...(toValue(apmode) ? aponly : []),
+])
 
 function toggleTheme() {
-    theme.global.name.value = (
-        theme.global.current.value.dark ? 'light' : 'dark'
-    )
+    theme.global.name.value = theme.global.current.value.dark ? 'light' : 'dark'
 }
 
 const progbar = ref(false)
@@ -121,11 +119,7 @@ onMounted(() => {
         {{ snackbar.message }}
     </v-snackbar>
 
-    <v-dialog
-        v-model="dialog.show"
-        :persistent="dialog.persist"
-        width="auto"
-    >
+    <v-dialog v-model="dialog.show" :persistent="dialog.persist" width="auto">
         <v-card color="red" title="Warning">
             <v-card-text style="white-space: pre">
                 {{ dialog.message }}

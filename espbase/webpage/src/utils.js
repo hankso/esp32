@@ -223,20 +223,14 @@ export function debounce(func, timeout = 300) {
 
 export function gzip_compress(string) {
     return new Response(
-        new Blob([string])
-            .stream()
-            .pipeThrough(new CompressionStream('gzip'))
-    )
-        .arrayBuffer()
+        new Blob([string]).stream().pipeThrough(new CompressionStream('gzip'))
+    ).arrayBuffer()
 }
 
-export function gzip_decompress(byteArray) {
+export function gzip_decompress(bytes) {
     return new Response(
-        new Blob([byteArray])
-            .stream()
-            .pipeThrough(new DecompressionStream('gzip'))
-    )
-        .text()
+        new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+    ).text()
 }
 
 export function camelToSnake(s, sep = '_') {
@@ -289,27 +283,22 @@ export function toggleFullscreen(e) {
 }
 
 export var rules = {
-    inRange(low = 0, high = 255) {
+    inRange(r0 = 0, r1 = 255) {
         return v =>
-            (low <= v && v <= high) ||
-            `Must be a number between ${low} - ${high}`
+            (r0 <= v && v <= r1) || `Must be a number between ${r0} - ${r1}`
     },
     isInteger(v) {
         return Number(v) === parseInt(v) || 'Must be an integer'
     },
-    length(v, low, high) {
-        if (low !== undefined && high !== undefined)
+    length(v, r0, r1) {
+        if (r0 !== undefined && r1 !== undefined)
             return v =>
-                (low <= v.length && v.length <= high) ||
-                `Length must between ${low}-${high}`
-        if (low !== undefined)
-            return v =>
-                (v.length >= low) ||
-                `Length must be longer than ${low}`
-        if (high !== undefined)
-            return v =>
-                (v.length <= high) ||
-                `Length must be shorter than ${high}`
+                (r0 <= v.length && v.length <= r1) ||
+                `Length must between ${r0}-${r1}`
+        if (r0 !== undefined)
+            return v => v.length >= r0 || `Length must be longer than ${r0}`
+        if (r1 !== undefined)
+            return v => v.length <= r1 || `Length must be shorter than ${r1}`
         return v.length > 0 || 'This field is required'
     },
     required(v) {

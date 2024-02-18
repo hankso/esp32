@@ -8,29 +8,23 @@
  *
  * This component (AsyncServer framework & APIs) occupy about 113KB in firmware.
  *
- * API list:
+ * Static files:
  *  Name    Method  Description
+ *  /data   GET     Serve static files from /flashfs/data/ folder
+ *  /docs   GET     Serve static files from /flashfs/docs/ folder
+ *  /       GET     Serve static files from /flashfs/www/ folder
+ *
+ * API list:
+ *  Name    Method  Description (for STA & AP mode)
  *  /ws     POST    Websocket connection point: messages are parsed as JSON
  *  /cmd    POST    Manually send in command string just like using console
  *                  - param `?exec=str&gcode=str`
  *
- * Static files:
- *  Name    Method  Description
- *  /       GET     Serve static files from /flashfs/root/ folder
- *  /ap     GET     Serve static files from /flashfs/ap/ folder (auth needed)
- *  /sta    GET     Serve static files from /flashfs/sta/ folder
- *  /data   GET     Serve static files from /flashfs/data/ folder
- *  /assets GET     Serve static files from /flashfs/src/ folder
- *
- * SoftAP only:
- *  Name    Method  Description
+ *  Name    Method  Description (for AP mode only and auth needed)
+ *  /apmode ANY     Test whether TCP client is connected from AP
  *  /config GET     Get JSON string of configuration entries
  *  /config POST    Overwrite configuration options
  *                  - param `?json=str`
- *  /update GET     Updation guide page
- *                  - param `?raw`
- *  /update POST    Upload compiled binary firmware to OTA flash partition
- *                  - param `?reset&size=int`
  *  /edit   GET     Online Editor page
  *                  - param `?list[=str]&path=str&download`
  *  /editc  ANY     Create file|dir (accept HTTP_PUT)
@@ -39,6 +33,10 @@
  *                  - param `?path=str&from=url`
  *  /editu  POST    Upload file
  *                  - param `?overwrite`
+ *  /update GET     Updation guide page
+ *                  - param `?raw`
+ *  /update POST    Upload compiled binary firmware to OTA flash partition
+ *                  - param `?reset&size=int`
  */
 
 #ifndef _SERVER_H_
