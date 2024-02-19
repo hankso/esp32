@@ -33,14 +33,9 @@ typedef struct config_webserver_t {
     const char * WS_PASS;   // Password to auth websocket connection
     const char * HTTP_NAME; // Username to auth webserver (HTTP)
     const char * HTTP_PASS; // Password to auth webserver (HTTP)
-    const char * VIEW_EDIT; // Template filename for Online Editor
-    const char * VIEW_FILE; // Template filename for Files Manager
-    const char * VIEW_OTA;  // Template filename for OTA Updation
-    const char * DIR_ASSET; // Path to public CSS/JS files
-    const char * DIR_STA;   // Path to static files hosted on STA interface
-    const char * DIR_AP;    // Path to static files hosted on AP interface
-    const char * DIR_ROOT;  // Path to static files like sitemap, favicon etc.
     const char * DIR_DATA;  // Directory to storage data (gcode etc)
+    const char * DIR_DOCS;  // Directory to generated documentation
+    const char * DIR_ROOT;  // Directory to static webpage files
 } config_web_t;
 
 // For easier managing, Boolean values are stored as "0" or "1" (string)

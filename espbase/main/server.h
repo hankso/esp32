@@ -22,9 +22,6 @@
  *
  *  Name    Method  Description (for AP mode only and auth needed)
  *  /apmode ANY     Test whether TCP client is connected from AP
- *  /config GET     Get JSON string of configuration entries
- *  /config POST    Overwrite configuration options
- *                  - param `?json=str`
  *  /edit   GET     Online Editor page
  *                  - param `?list[=str]&path=str&download`
  *  /editc  ANY     Create file|dir (accept HTTP_PUT)
@@ -33,6 +30,9 @@
  *                  - param `?path=str&from=url`
  *  /editu  POST    Upload file
  *                  - param `?overwrite`
+ *  /config GET     Get JSON string of configuration entries
+ *  /config POST    Overwrite configuration options
+ *                  - param `?json=str`
  *  /update GET     Updation guide page
  *                  - param `?raw`
  *  /update POST    Upload compiled binary firmware to OTA flash partition

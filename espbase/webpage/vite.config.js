@@ -11,6 +11,7 @@ import pythonServer from './src/plugins/vite-python'
 
 // Utilities
 import { defineConfig } from 'vite'
+import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 import { fileURLToPath, URL } from 'node:url'
@@ -28,9 +29,13 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
             SRC_VER = `${execSync('git describe --tags --always')}`
         } catch {}
     }
+    let dist = resolve(__dirname, '..', 'files', 'www')
+    if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory())
+        dist = './dist'
     return {
         build: {
-            outDir: './dist',
+            outDir: dist,
+            emptyOutDir: true,
             assetsDir: 'assets',
         },
         server: {
