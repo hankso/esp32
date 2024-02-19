@@ -90,12 +90,17 @@ function refresh(path, target, parent) {
         .catch(({ message }) => notify(message))
 }
 
+function pop(arr, item) {
+    let idx = arr.indexOf(item)
+    if (idx >= 0) return arr.splice(idx, 1)
+}
+
 function remove(arr) {
     let len = arr.length
     loading.value = true
     arr.forEach(path =>
         deletePath(path)
-            .then(() => arr.remove(path))
+            .then(() => pop(arr, path))
             .catch(({ message }) => notify(message))
             .finally(() => {
                 if (--len) return
@@ -130,7 +135,7 @@ async function upload(e) {
         if (data.fileList.length === 1 && data.fileName)
             filename = data.fileName
         uploadFile(resolve(data.folderRoot, filename), file)
-            .then(() => data.fileList.remove(file))
+            .then(() => pop(data.fileList, file))
             .catch(({ message }) => notify(message))
             .finally(() => {
                 if (--len) return

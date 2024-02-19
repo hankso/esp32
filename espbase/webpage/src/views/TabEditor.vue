@@ -66,9 +66,10 @@ const copyIcon = computed(() => {
 })
 
 function copy() {
-    copyToClipboard(toValue(code))
-    copied.value = true
-    setTimeout(() => (copied.value = false), 3000)
+    copyToClipboard(toValue(code)).then(() => {
+        copied.value = true
+        setTimeout(() => (copied.value = false), 3000)
+    })
 }
 
 function upload() {

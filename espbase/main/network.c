@@ -210,7 +210,6 @@ static void wifi_print_aplist() {
             ESP_LOGE(TAG, "STA get AP failed: %s", esp_err_to_name(err));
         } else {
             ESP_LOGI(TAG, "STA found %d AP", nap);
-            putchar('\n');
             wifi_print_apinfo(aps, nap);
         }
         free(aps);
@@ -518,12 +517,11 @@ esp_err_t wifi_sta_list_ap() {
         puts("failed");
     } else if (bits & WIFI_CONNECTED_BIT) {
         puts("connected");
-        wifi_print_ipaddr(if_sta);
         wifi_ap_record_t info;
         if (( err = esp_wifi_sta_get_ap_info(&info) ))
             return err;
-        putchar('\n');
         wifi_print_apinfo(&info, 1);
+        wifi_print_ipaddr(if_sta);
     } else {
         puts("not initialized");
     }

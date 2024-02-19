@@ -15,7 +15,18 @@ export var type = (function () {
 })()
 
 export function isEmpty(obj) {
-    return Object.keys(obj).length === 0 && obj.constructor === Object
+    return (
+        obj === undefined ||
+        obj === null ||
+        (type(obj) === 'string' && obj.trim().length === 0) ||
+        (type(obj) === 'object' &&
+            Object.keys(obj).length === 0 &&
+            obj.constructor === Object)
+    )
+}
+
+export function notEmpty(obj) {
+    return !isEmpty(obj)
 }
 
 export function parseBool(str) {
@@ -237,13 +248,65 @@ export function camelToSnake(s, sep = '_') {
     return s.replace(/([a-z])([A-Z])/g, `$1${sep}$2`).toLowerCase()
 }
 
+export function pause(msec) {
+    return new Promise(resolve => setTimeout(resolve, msec))
+}
+
+const htmlCodes = {
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quto;',
+    "'": '&#39;',
+    '`': '&#96;',
+    '&': '&amp;',
+    ' ': '&nbsp;',
+
+    '&lt;': '<',
+    '&gt;': '>',
+    '&quto;': '"',
+    '&#39;': "'",
+    '&#96;': '`',
+    '&amp;': '&',
+    '&nbsp;': ' ',
+}
+
+export function html(str, space = false, crlf = false) {
+    return String(str)
+        .replace(/\r?\n/g, crlf ? '<br>' : '\n')
+        .replace(/ /g, space ? '&nbsp;' : ' ')
+        .replace(/[<"'`>]|&(?![\w#]+;)/g, _ => htmlCodes[_])
+}
+
+export function unhtml(str) {
+    return String(str).replace(/&[\w#]+;/g, _ => htmlCodes[_] || _)
+}
+
 export function copyToClipboard(text) {
+    if (!text) return
+    if (navigator?.clipboard) return navigator.clipboard.writeText(unhtml(text))
     let input = document.createElement('input')
-    input.value = text
+    input.value = unhtml(text)
     document.body.appendChild(input)
     input.select()
-    document.execCommand('Copy')
-    document.body.removeChild(input)
+    document.execCommand('copy')
+    input.remove()
+    return Promise.resolve()
+}
+
+export function readFromClipboard() {
+    if (navigator?.clipboard) return navigator.clipboard.readText()
+    return new Promise((resolve, reject) => {
+        try {
+            let input = document.createElement('input')
+            document.body.appendChild(input)
+            input.focus()
+            document.execCommand('paste')
+            input.remove()
+            resolve(input.value)
+        } catch (e) {
+            reject(e)
+        }
+    })
 }
 
 export function downloadAsFile(data, fn = 'data.txt', type = 'text/plain') {
@@ -304,11 +367,6 @@ export var rules = {
     required(v) {
         return v !== '' || 'This field is required'
     },
-}
-
-Array.prototype.remove = function (item) {
-    let idx = this.indexOf(item)
-    if (idx >= 0) return this.splice(idx, 1)
 }
 
 // Modified based on github.com/sindresorhus/ip-regex

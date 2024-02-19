@@ -11,7 +11,7 @@
             :commandStore
             contextSuffix=" "
             @execCmd="onCommand"
-            @onKeydown.stop="onKeydown"
+            @onKeydown="onKeydown"
         />
     </v-sheet>
 </template>
@@ -36,7 +36,8 @@
     line-height: normal;
 }
 
-.fix-height .cmdrst {
+.fix-height .t-cmd-help code,
+.fix-height .t-example-li code {
     white-space: pre;
 }
 </style>
@@ -67,6 +68,7 @@ const initLog = [
 
 const commandStore = ref(
     [
+        ['reload', 'Reload configuration of current terminal'],
         ['info', 'Get information of current window'],
         ['logs', 'Show supported logging levels'],
         ['ansi', 'Show supported ANSI colorful string'],
@@ -78,32 +80,44 @@ const commandStore = ref(
         description,
     }))
 )
-// TODO: egNaN
 
 const commands = computed(() => toValue(commandStore).map(obj => obj.key))
 
-function inputFilter(curChar, curString) {
+function refresh(name) {
+    return Promise.all([getConfig(), getCommands()])
+        .then(([cfg, cmds]) => {
+            if (cfg.data['app.prompt']) context.value = cfg.data['app.prompt']
+            cmds.data.forEach(cmd => {
+                if (!toValue(commands).includes(cmd.key))
+                    commandStore.value.push(cmd)
+            })
+            forceUpdate.value++
+        })
+        .catch(({ message }) => flash[name]?.flush(message) || notify(message))
+        .finally(() => (flash[name] = flash[name]?.finish()))
+}
+
+function inputFilter(curChar, curString, e) {
+    if (!e.isTrusted) return ''
     return curString.trimStart().replace(/[\u4e00-\u9fa5]/g, '')
 }
 
 function onKeydown(event, name) {
-    if (event.ctrlKey) {
-        switch (event.key) {
-            case 'c':
-            case 'C':
-                if (!event.shiftKey) return
-                flash[name] = flash[name]?.finish()
-                // TODO: clear current input line
-                break
-            case 'l':
-            case 'L':
-                TerminalApi.clearLog(name)
-                break
-            default:
-                return
-        }
-        event.preventDefault()
+    if (!event.ctrlKey) return
+    switch (event.key) {
+        case 'l':
+            TerminalApi.clearLog(name)
+            break
+        case 'C':
+            flash[name] = flash[name]?.finish()
+            document
+                .querySelector('.fix-height .t-last-line input')
+                ?.dispatchEvent(new InputEvent('input'))
+            break
+        default:
+            return
     }
+    event.preventDefault()
 }
 
 function escape(str, ...code) {
@@ -158,6 +172,11 @@ function onCommand(key, cmdline, onSuccess, onFailed, name) {
                 class: 'success',
                 content: 'ok',
             })
+        case 'reload':
+            name += '-refresh'
+            flash[name] = new TerminalFlash()
+            refresh(name)
+            return onSuccess(flash[name])
         default:
             if (!toValue(commands).includes(key))
                 return onFailed(`Unknown command ${key}`)
@@ -170,8 +189,8 @@ function onCommand(key, cmdline, onSuccess, onFailed, name) {
         .then(({ data }) => {
             let dt = (new Date().getTime() - ts) / 1e3
             TerminalApi.pushMessage(name, {
-                type: 'html',
-                content: `<pre class="cmdrst">${data}\n\nDone in ${dt}s</pre>`,
+                type: 'ansi',
+                content: data + escape(`\n\nDone in ${dt}s`, 32),
             })
         })
         .catch(({ message }) => flash[name].flush(message))
@@ -179,17 +198,5 @@ function onCommand(key, cmdline, onSuccess, onFailed, name) {
     return onSuccess(flash[name])
 }
 
-onMounted(() => {
-    getConfig()
-        .then(({ data }) => {
-            if (data['app.prompt']) context.value = data['app.prompt']
-        })
-        .catch(({ message }) => notify(message))
-    getCommands()
-        .then(({ data }) => {
-            commandStore.value.push(...data)
-            forceUpdate.value++
-        })
-        .catch(({ message }) => notify(message))
-})
+onMounted(refresh)
 </script>
