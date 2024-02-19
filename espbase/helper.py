@@ -28,17 +28,24 @@ try:
 except Exception:
     bottle = None
 try:
-    import requests
+    from requests import get as request
 except Exception:
-    requests = None
+    request = None
 
 # these are default values
 __basedir__ = op.dirname(op.abspath(__file__))
-__distdir__ = op.join(__basedir__, 'webpage', 'dist')
 __cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
 __partcsv__ = op.join(__basedir__, 'partitions.csv')
 __nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
 __nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
+__distdir__ = tuple(filter(
+    lambda p: op.isdir(p) and os.listdir(p),
+    [
+        op.join(__basedir__, 'webpage', 'dist'),
+        op.join(__basedir__, 'files', 'www'),
+        op.join(__basedir__, 'files'),
+    ]
+))[0]
 
 
 def _random_id(len=8):
@@ -310,7 +317,7 @@ def webserver(args):
     if not args.static:
         api = bottle.Bottle()
         try:
-            assert requests.get('http://' + args.esphost, timeout=1).ok
+            assert request('http://' + args.esphost + '/alive', timeout=1).ok
             api.route('/cmd', 'POST', redirect_esp32)
             api.route('/update', 'POST', redirect_esp32)
             if not args.quiet:

@@ -83,6 +83,7 @@ function refresh(path, target, parent) {
                 ...node,
                 id: parent ? `${parent.id}-${idx}` : `${idx}`,
                 link: join(parent ? parent.link : '/', node.name),
+                name: node.name.replace(new RegExp(`^${path}`), ''),
             }))
             target.splice(0, target.length, ...nodes)
             target.forEach(refresh)

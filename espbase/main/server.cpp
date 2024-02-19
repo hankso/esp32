@@ -39,7 +39,7 @@ static const char
     "<title>Basic OTA Updation</title>"
 "</head>"
 "<body>"
-    "<h4>You should always try Advanced OTA Updation page first !</h4>"
+    "<h4>You should always try Advanced OTA Updation page first!</h4>"
     "<form action='/update' method='post' enctype='multipart/form-data'>"
         "<input type='file' name='update'>"
         "<input type='submit' value='Upload'>"
@@ -132,10 +132,10 @@ void onConfig(AsyncWebServerRequest *req) {
 
 void onUpdate(AsyncWebServerRequest *req) {
     log_msg(req);
-    if (req->hasParam("raw")) {
-        req->send(200, TYPE_HTML, UPDATE_HTML);
+    if (!req->hasParam("raw") && getWebpage().length()) {
+        req->redirect("/updation"); // hand to front-end router
     } else {
-        req->redirect("/update"); // TODO
+        req->send(200, TYPE_HTML, UPDATE_HTML); // fallback to simple one
     }
 }
 
@@ -219,7 +219,7 @@ void onEdit(AsyncWebServerRequest *req) {
             req->send(file, path, String(), req->hasParam("download"));
         }
     } else if (getWebpage().length()) { // redirect to editor page
-        req->redirect("/editor"); // TODO
+        req->redirect("/editor");
     } else {
         req->send(404, TYPE_HTML, ERROR_HTML);
     }
@@ -492,6 +492,7 @@ void WebServerClass::begin() {
 
 void WebServerClass::register_api_sta() {
     _server.on("/cmd", HTTP_POST, onCommand);
+    _server.on("/alive", HTTP_ANY, onSuccess);
 }
 
 void WebServerClass::register_api_ap() {

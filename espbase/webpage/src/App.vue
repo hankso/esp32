@@ -30,8 +30,8 @@ const aponly = [
     ...[
         ['File Manager', '/fileman', mdiFileTree],
         ['Online Editor', '/editor', mdiPencilBoxMultiple],
-        ['Configuration', '/config', mdiCog],
-        ['Upgradation', '/update', mdiUpdate],
+        ['Configuration', '/configs', mdiCog],
+        ['Firmware OTA', '/updation', mdiUpdate],
         ['About', '/about', mdiInformation],
     ].map(([t, l, i]) => ({
         title: t,

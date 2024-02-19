@@ -60,9 +60,11 @@ onMounted(getVersion)
                 <v-btn variant="text" @click="getVersion" :loading="loadver">
                     Version
                     <v-tooltip v-if="version" activator="parent">
-                        <h3 class="text-amber">Current Version</h3>
+                        <h3 class="text-amber">
+                            Current Version
+                            (click to reload)
+                        </h3>
                         <pre>{{ version }}</pre>
-                        <span class="text-amber">Click to reload</span>
                     </v-tooltip>
                 </v-btn>
                 <v-btn type="submit" variant="outlined">
