@@ -33,12 +33,16 @@ onMounted(() => {
 
 <template>
     <v-row class="align-start justify-center">
-        <v-col cols="auto" lg="5">
+        <v-col cols="6" lg="5">
             <template v-if="info">
-                <p v-for="[k, v] of info" :key="k">
-                    <strong>{{ k }}: </strong>
-                    <span>{{ v }}</span>
-                </p>
+                <v-row v-for="(val, key) of info" :key>
+                    <v-col cols="6" class="text-right">
+                        <strong>{{ key }}: </strong>
+                    </v-col>
+                    <v-col cols="6" class="text-left">
+                        <span>{{ val }}</span>
+                    </v-col>
+                </v-row>
             </template>
             <p v-else>
                 Running in {{ mode }} mode (

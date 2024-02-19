@@ -22,7 +22,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
         BUILD_INFO = {
             NODE_JS: process.versions.node,
             BUILD_OS: `${process.platform}-${process.arch}`,
-            BUILD_TIME: new Date().toString(),
+            BUILD_TIME: new Date().toLocaleString(),
         }
         try {
             SRC_VER = `${execSync('git describe --tags --always')}`
@@ -40,7 +40,6 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
             proxy: {
                 '/api': {
                     target: `http://localhost:5172`,
-                    rewrite: path => path.replace(/^\/api/, ''),
                     changeOrigin: true,
                     secure: false,
                 },

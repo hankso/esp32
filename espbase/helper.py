@@ -297,7 +297,8 @@ def webserver(args):
         print('WebServer running at `%s`' % _relpath(args.root, strip=True))
 
     def redirect_esp32():
-        target = 'http://' + args.esphost + bottle.request.path
+        path = bottle.request.path.replace('/api', '')
+        target = 'http://' + args.esphost + path
         print('Redirect to %s %s' % (target, dict(bottle.request.params)))
         return bottle.redirect(target, 308)
 
@@ -307,23 +308,25 @@ def webserver(args):
 
     app = bottle.Bottle()
     if not args.static:
+        api = bottle.Bottle()
         try:
             assert requests.get('http://' + args.esphost, timeout=1).ok
-            app.route('/cmd', 'POST', redirect_esp32)
-            app.route('/update', 'POST', redirect_esp32)
+            api.route('/cmd', 'POST', redirect_esp32)
+            api.route('/update', 'POST', redirect_esp32)
             if not args.quiet:
                 print('Redirect requests to alive ESP32 at', args.esphost)
         except Exception:
-            app.route('/cmd', 'POST', lambda: 'Unknown command')
-            app.route('/update', 'POST', edit_upload)
+            api.route('/cmd', 'POST', lambda: 'Unknown command')
+            api.route('/update', 'POST', edit_upload)
             if not args.quiet:
                 print('Will simulate ESP32 APIs: cmd/edit/config/update etc.')
-        app.route('/edit', 'GET', lambda: edit_get(args.root))
-        app.route('/editu', 'POST', edit_upload)
-        app.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
-        app.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
-        app.route('/config', ['GET', 'POST'], config)
-        app.route('/apmode', 'GET', lambda: print('/apmode'))
+        api.route('/edit', 'GET', lambda: edit_get(args.root))
+        api.route('/editu', 'POST', edit_upload)
+        api.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
+        api.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
+        api.route('/config', ['GET', 'POST'], config)
+        api.route('/apmode', 'GET', lambda: print('/apmode'))
+        app.mount('/api', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/<filename:path>', 'GET', static_assets)
     bottle.run(app, quiet=args.quiet, host=args.host, port=args.port)
