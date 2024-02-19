@@ -52,7 +52,7 @@ const data = defineModel({ type: Object })
 const props = defineProps({
     schema: {
         type: Object,
-        default: {},
+        default: () => ({}),
     },
 })
 

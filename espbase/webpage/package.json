@@ -6,8 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview",
-    "lint": "eslint . --ext .vue,.js,.jsx,.cjs,.mjs --fix --ignore-path ../gitignore",
+    "lint": "eslint src --ext .vue,.js,.jsx,.cjs,.mjs --fix",
     "format": "prettier --write src/ *.*js"
   },
   "dependencies": {
@@ -50,6 +49,9 @@
   },
   "eslintConfig": {
     "root": true,
+    "rules": {
+      "no-undef": "off"
+    },
     "extends": [
       "plugin:vue/vue3-strongly-recommended",
       "eslint:recommended",

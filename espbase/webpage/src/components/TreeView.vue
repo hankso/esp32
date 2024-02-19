@@ -7,7 +7,7 @@ const selection = defineModel('selection', { type: Array, default: [] })
 const props = defineProps({
     items: {
         type: Array,
-        default: [
+        default: () => [
             {
                 id: 'D0',
                 name: 'DEMO-Parent',
@@ -63,8 +63,8 @@ provide('TreeView', {
         @keyup.esc="selection = []"
     >
         <v-list-group v-if="debug" title="debug options" value="debug group">
-            <template #activator="{ props }">
-                <v-list-item v-bind="props"></v-list-item>
+            <template #activator="attrs">
+                <v-list-item v-bind="attrs.props"></v-list-item>
             </template>
             <v-list-item title="opened" :subtitle="opened.join('|')" />
             <v-list-item title="selection" :subtitle="selection.join('|')" />

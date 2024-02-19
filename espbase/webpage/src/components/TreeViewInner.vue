@@ -1,9 +1,14 @@
 <script setup>
 import { formatSize } from '@/utils'
 
-const props = defineProps({ items: Array })
+defineProps({
+    items: {
+        type: Array,
+        default: () => [],
+    },
+})
 
-const { useLink, autoIcon, isActive, guessIcon } = inject('TreeView')
+const { useLink, isActive, guessIcon } = inject('TreeView')
 
 function formatDate(uts) {
     return new Date(uts).toISOString().replace(/[TZ]|\.000/g, ' ')

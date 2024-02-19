@@ -14,7 +14,7 @@ import {
     mdiFileTreeOutline,
 } from '@mdi/js'
 
-import { basename, dirname, resolve, extname } from 'path-browserify'
+import { basename, resolve, extname } from 'path-browserify'
 
 const route = useRoute()
 const notify = inject('notify', console.log)
@@ -170,7 +170,7 @@ watch(
                 </v-btn-group>
 
                 <v-btn-toggle
-                    :modelValue="select"
+                    :model-value="select"
                     rounded="s-0 e-lg"
                     density="comfortable"
                     variant="outlined"
@@ -182,6 +182,7 @@ watch(
                     <v-btn
                         icon
                         v-for="(icon, prop) in propIcons"
+                        :key="prop"
                         @click="config[prop] = !config[prop]"
                     >
                         <v-icon :icon="icon"></v-icon>

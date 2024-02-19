@@ -232,13 +232,13 @@ export function debounce(func, timeout = 300) {
     }
 }
 
-export function gzip_compress(string) {
+export function gzipCompress(string) {
     return new Response(
         new Blob([string]).stream().pipeThrough(new CompressionStream('gzip'))
     ).arrayBuffer()
 }
 
-export function gzip_decompress(bytes) {
+export function gzipDecompress(bytes) {
     return new Response(
         new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
     ).text()
@@ -250,6 +250,14 @@ export function camelToSnake(s, sep = '_') {
 
 export function pause(msec) {
     return new Promise(resolve => setTimeout(resolve, msec))
+}
+
+export function escape(str = '', ...code) {
+    return `\x1b[${code.join(';')}m${str}\x1b[0m`
+}
+
+export function unescape(str) {
+    return String(str).replace(/\x1b\[[\d;]+m/g, '')
 }
 
 const htmlCodes = {
@@ -406,9 +414,9 @@ const ipreg = {
 }
 
 export var ipaddr = {
-    is_ip: (addr, find = false) => (find ? ipreg.v46 : ipreg.v46c).test(addr),
-    is_ipv4: (addr, find = false) => (find ? ipreg.v4 : ipreg.v4c).test(addr),
-    is_ipv6: (addr, find = false) => (find ? ipreg.v6 : ipreg.v6c).test(addr),
+    isIP: (addr, find = false) => (find ? ipreg.v46 : ipreg.v46c).test(addr),
+    isIPv4: (addr, find = false) => (find ? ipreg.v4 : ipreg.v4c).test(addr),
+    isIPv6: (addr, find = false) => (find ? ipreg.v6 : ipreg.v6c).test(addr),
     version: str => (ipreg.v4c.test(str) ? 4 : ipreg.v6c.test(str) ? 6 : -1),
     extract: str => str.match(ipreg.v46c),
     extract_int: str => {

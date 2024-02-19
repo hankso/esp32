@@ -35,7 +35,7 @@
 
 <script setup>
 import ajv from '@/plugins/ajv'
-import { type, isEmpty, debounce } from '@/utils'
+import { isEmpty, debounce } from '@/utils'
 import { getSchema, getConfig, setConfig } from '@/apis'
 
 const notify = inject('notify', console.log)
@@ -45,7 +45,8 @@ const schema = ref({})
 const schemaPlain = ref('')
 const schemaError = ref('')
 
-const validator = computed(() => ajv.compile(toValue(schema)))
+/* const validator = computed(() => ajv.compile(toValue(schema))) */
+// TODO validate before setConfig
 
 function submit() {
     setConfig(toValue(config))

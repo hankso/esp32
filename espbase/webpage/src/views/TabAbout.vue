@@ -12,7 +12,7 @@ const components = {
 </script>
 
 <template>
-    <v-tabs v-model="tab" align-tabs="center" class="mb-4">
+    <v-tabs v-model="tab" align-tabs="center">
         <v-tab
             v-for="name in Object.keys(components)"
             :key="name"
@@ -21,9 +21,11 @@ const components = {
             {{ name }}
         </v-tab>
     </v-tabs>
-    <transition appear mode="out-in">
-        <component :is="components[tab]" />
-    </transition>
+    <v-container>
+        <transition appear mode="out-in">
+            <component :is="components[tab]" />
+        </transition>
+    </v-container>
 </template>
 
 <style scoped>
@@ -35,5 +37,11 @@ const components = {
 .v-enter-from,
 .v-leave-to {
     opacity: 0;
+}
+
+.v-container:has(> .v-row) {
+    display: flex;
+    height: calc(100% - 48px);
+    max-height: 70vh;
 }
 </style>

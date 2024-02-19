@@ -1,5 +1,5 @@
 <template>
-    <v-row class="fill-height align-center justify-center">
+    <v-row class="align-center justify-center">
         <v-col cols="auto">
             <p class="text-h3 text-primary">Sorry! 404 Error.</p>
             <p class="text-h5 my-4" v-if="$route.query.reason">
@@ -18,7 +18,8 @@
                 not found!
             </p>
             <p class="text-body-1">
-                Go back to <a href="/home">Home</a> in {{ timeout }}s ...
+                Go back to <a href="/home">Home</a>
+                <template v-if="timeout > 0">in {{ timeout }}s ...</template>
             </p>
         </v-col>
     </v-row>
@@ -27,10 +28,10 @@
 <script setup>
 const route = useRoute()
 const router = useRouter()
-const timeout = ref(route.query.timeout ? route.query.timeout : 10)
+const timeout = ref(route.query.timeout ?? 10)
 
 onMounted(function redirect() {
-    if (timeout.value < 0) {
+    if (timeout.value <= 0) {
         return
     } else if (timeout.value > 1) {
         timeout.value--

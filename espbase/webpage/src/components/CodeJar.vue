@@ -23,7 +23,10 @@ const model = defineModel({
 })
 
 const props = defineProps({
-    language: String,
+    language: {
+        type: String,
+        default: '',
+    },
     readonly: Boolean,
     highlight: {
         type: [Function, String, Boolean],
@@ -92,10 +95,11 @@ watch(() => props.readonly, setReadonly)
 
 watch(model, val => {
     if (editor && editor.toString() !== val) {
+        let pos
         try {
-            var pos = editor.save()
+            pos = editor.save()
         } catch {
-            var pos = null
+            pos = null
         }
         editor.updateCode(val) // this will trigger editor.onUpdate
         pos && editor.restore(pos)

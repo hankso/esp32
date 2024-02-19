@@ -4,12 +4,12 @@
         clearable
         hide-details
         variant="outlined"
-        :modelValue="value"
-        @update:modelValue="update_lazy"
+        :model-value="value"
+        @update:model-value="updateLazy"
         :type="pass && !show ? 'password' : 'text'"
         :append-inner-icon="!pass ? '' : show ? mdiEyeOff : mdiEye"
-        @click:appendInner="show = !show"
-        @click:clear="update?.('')"
+        @click:append-inner="show = !show"
+        @click:clear="update('')"
     ></v-text-field>
 </template>
 
@@ -19,17 +19,25 @@ import { debounce } from '@/utils'
 import { mdiEye, mdiEyeOff } from '@mdi/js'
 
 const { name, update } = defineProps({
-    name: String,
-    value: String,
-    schema: Object,
-    update: Function,
+    name: {
+        type: String,
+        default: '',
+    },
+    value: {
+        type: String,
+        required: true,
+    },
+    update: {
+        type: Function,
+        default: () => {},
+    },
 })
 
 const show = ref(false)
 
 const pass = computed(() => name.endsWith('pass'))
 
-const update_lazy = debounce(update)
+const updateLazy = debounce(update)
 </script>
 
 <style scoped>

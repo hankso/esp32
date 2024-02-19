@@ -6,12 +6,12 @@
             :name="title"
             :title
             :context
-            :initLog
-            :inputFilter
-            :commandStore
-            contextSuffix=" "
-            @execCmd="onCommand"
-            @onKeydown="onKeydown"
+            :init-log
+            :input-filter
+            :command-store
+            context-suffix=" "
+            @exec-cmd="onCommand"
+            @on-keydown="onKeydown"
         />
     </v-sheet>
 </template>
@@ -43,6 +43,7 @@
 </style>
 
 <script setup>
+import { escape } from '@/utils'
 import { getConfig, getCommands, execCommand } from '@/apis'
 
 import { Terminal, TerminalApi, TerminalFlash } from 'vue-web-terminal'
@@ -120,10 +121,6 @@ function onKeydown(event, name) {
     event.preventDefault()
 }
 
-function escape(str, ...code) {
-    return `\x1b[${code.join(';')}m${str}\x1b[0m`
-}
-
 function onCommand(key, cmdline, onSuccess, onFailed, name) {
     switch (key) {
         case 'echo':
@@ -163,10 +160,7 @@ function onCommand(key, cmdline, onSuccess, onFailed, name) {
                 ].join('\n'),
             })
         case 'tgfs':
-            let old = TerminalApi.isFullscreen(name)
             TerminalApi.fullscreen(name)
-            let now = TerminalApi.isFullscreen(name)
-            if (now === old) return onFailed('Could not toggle fullscreen')
             return onSuccess({
                 type: 'normal',
                 class: 'success',

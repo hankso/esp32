@@ -22,11 +22,15 @@ import posixpath
 import os.path as op
 from io import StringIO
 
-# requirements.txt: bottle
+# requirements.txt: bottle, requests
 try:
     import bottle
 except Exception:
     bottle = None
+try:
+    import requests
+except Exception:
+    requests = None
 
 # these are default values
 __basedir__ = op.dirname(op.abspath(__file__))
@@ -119,7 +123,8 @@ def genid(args):
         filename = args.out.name
     else:
         filename = str(args.out).strip('<>')
-    print('Writing NVS information to `%s`' % filename)
+    if not args.quiet:
+        print('Writing NVS information to `%s`' % filename)
     if hasattr(args.out, 'write'):
         args.out.write(data)
     else:
@@ -143,6 +148,7 @@ def _absjoin(*a): return op.abspath(op.join(*a))
 
 
 def edit_get(root):
+    print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
     if 'list' in bottle.request.query:
@@ -172,16 +178,19 @@ def edit_get(root):
 
 
 def edit_create():
+    print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
 
 
 def edit_delete():
+    print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
 
 
 def edit_upload():
+    print(bottle.request.path)
     print('method', bottle.request.method)
     print('header', dict(bottle.request.headers))
     print('params', dict(bottle.request.params))
@@ -193,7 +202,7 @@ def edit_upload():
 def config_init():
     configs = []
     try:
-        args = make_parser().parse_args(['genid'])
+        args = make_parser().parse_args(['--quiet', 'genid'])
         args.out = StringIO()
         args.func(args)
         args.out.seek(0)
@@ -211,6 +220,7 @@ def config_init():
 
 
 def config():
+    print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
     if not hasattr(config, 'data'):
@@ -297,26 +307,33 @@ def webserver(args):
 
     app = bottle.Bottle()
     if not args.static:
-        if not args.quiet:
-            print('Will simulate ESP32 APIs: edit/config/assets etc.')
-        app.route('/cmd', 'POST', redirect_esp32)
+        try:
+            assert requests.get('http://' + args.esphost, timeout=1).ok
+            app.route('/cmd', 'POST', redirect_esp32)
+            app.route('/update', 'POST', redirect_esp32)
+            if not args.quiet:
+                print('Redirect requests to alive ESP32 at', args.esphost)
+        except Exception:
+            app.route('/cmd', 'POST', lambda: 'Unknown command')
+            app.route('/update', 'POST', edit_upload)
+            if not args.quiet:
+                print('Will simulate ESP32 APIs: cmd/edit/config/update etc.')
         app.route('/edit', 'GET', lambda: edit_get(args.root))
         app.route('/editu', 'POST', edit_upload)
         app.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
         app.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
-        app.route('/update', 'POST', edit_upload)
         app.route('/config', ['GET', 'POST'], config)
-        app.route('/apmode', 'GET', lambda: None)
+        app.route('/apmode', 'GET', lambda: print('/apmode'))
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/<filename:path>', 'GET', static_assets)
-    bottle.run(
-        app, reload=True, quiet=args.quiet, host=args.host, port=args.port
-    )
+    bottle.run(app, quiet=args.quiet, host=args.host, port=args.port)
 
 
 def make_parser():
     parser = argparse.ArgumentParser(epilog='see <command> -h for more')
     parser.set_defaults(func=lambda args: parser.print_help())
+    parser.add_argument(
+        '-q', '--quiet', action='store_true', help='be slient on CLI')
     subparsers = parser.add_subparsers(
         prog='', title='Supported Commands are', metavar='')
 
@@ -326,8 +343,6 @@ def make_parser():
         '-H', '--host', default='0.0.0.0', help='Host address to listen on')
     sparser.add_argument(
         '-P', '--port', type=int, default=8080, help='default port 8080')
-    sparser.add_argument(
-        '-q', '--quiet', action='store_true', help='be slient on CLI')
     sparser.add_argument(
         '--esphost', default='10.0.0.112', help='IP address of ESP chip')
     sparser.add_argument(

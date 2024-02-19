@@ -1,7 +1,7 @@
-import { type, html, notEmpty, gzip_compress } from '@/utils'
+import { type, html, notEmpty, gzipCompress } from '@/utils'
 
 import axios from 'axios'
-import { basename, resolve, join } from 'path-browserify'
+import { basename, resolve } from 'path-browserify'
 
 async function toFormData(data, name = 'data') {
     let filename
@@ -18,7 +18,7 @@ async function toFormData(data, name = 'data') {
         case 'string':
             filename = basename(name)
             if (filename.endsWith('.gz')) {
-                let bytes = await gzip_compress(tmp)
+                let bytes = await gzipCompress(tmp)
                 tmp = new Blob([bytes], { type: 'application/gzip' })
             } else {
                 tmp = new Blob([tmp], { type: 'text/plain' })

@@ -23,7 +23,6 @@ function AnsiSGR(start, end) {
 var bold = AnsiSGR(1, 22),
     dim = AnsiSGR(2, 22),
     green = AnsiSGR(32, 39),
-    yellow = AnsiSGR(33, 39),
     cyan = AnsiSGR(36, 39)
 
 let pserver
@@ -42,7 +41,7 @@ class PythonServer {
         this.verb = verbose
         this.addr = `${host.replace('0.0.0.0', 'localhost')}:${port}`
         this.args = [command, '-u', entry, 'serve', '-H', host, '-P', port]
-        if (!verbose) this.args.push('--quiet')
+        if (!verbose) this.args.splice(3, 0, '--quiet')
     }
     log() {
         // print timestamp and colorful string same like vite
@@ -54,7 +53,7 @@ class PythonServer {
         )
     }
     info() {
-        if (this.verb) this.log(...argument)
+        if (this.verb) this.log(...arguments)
     }
     start() {
         if (this.proc) return this

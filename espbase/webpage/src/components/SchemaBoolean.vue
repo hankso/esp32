@@ -10,8 +10,8 @@
         color="primary"
         true-value="1"
         false-value="0"
-        :modelValue="parseBool(value) ? '1' : '0'"
-        @update:modelValue="update"
+        :model-value="parseBool(value) ? '1' : '0'"
+        @update:model-value="update"
     ></v-switch>
 </template>
 
@@ -19,9 +19,13 @@
 import { parseBool } from '@/utils'
 
 defineProps({
-    name: String,
-    value: String,
-    schema: Object,
-    update: Function,
+    value: {
+        type: String,
+        required: true,
+    },
+    update: {
+        type: Function,
+        default: () => {},
+    },
 })
 </script>

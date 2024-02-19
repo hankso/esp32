@@ -2,16 +2,24 @@
     <v-select
         clearable
         :items="schema.enum"
-        :modelValue="value"
-        @update:modelValue="update"
+        :model-value="value"
+        @update:model-value="update"
     ></v-select>
 </template>
 
 <script setup>
 defineProps({
-    name: String,
-    value: String,
-    schema: Object,
-    update: Function,
+    value: {
+        type: String,
+        required: true,
+    },
+    schema: {
+        type: Object,
+        required: true,
+    },
+    update: {
+        type: Function,
+        default: () => {},
+    },
 })
 </script>

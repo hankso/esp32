@@ -158,9 +158,15 @@ onMounted(() => {
         </v-app-bar>
 
         <v-main id="main-content">
-            <v-container>
+            <v-container class="h-100">
                 <router-view></router-view>
             </v-container>
         </v-main>
     </v-app>
 </template>
+
+<style scoped>
+.v-container:has(> .v-row) {
+    display: flex;
+}
+</style>
