@@ -1,5 +1,5 @@
 <template>
-    <v-form ref="form">
+    <v-form>
         <template v-for="item in items" :key="item.name">
             <slot :name="item.name" v-bind="item">
                 <v-list-item
@@ -22,7 +22,13 @@
             <div class="d-flex align-center border-t pa-2 mt-4">
                 <small class="me-auto ps-2">* indicates required field</small>
                 <v-btn variant="text" @click="overlay = true">Schema</v-btn>
-                <v-btn variant="text" @click="$refs.form.reset()">Reset</v-btn>
+                <v-btn
+                    v-if="backup"
+                    variant="text"
+                    @click="Object.assign(data, backup)"
+                >
+                    Reset
+                </v-btn>
                 <v-btn variant="text" color="blue" type="submit">Submit</v-btn>
             </div>
         </slot>
@@ -54,6 +60,10 @@ const props = defineProps({
         type: Object,
         default: () => ({}),
     },
+    backup: {
+        type: Object,
+        default: undefined,
+    },
 })
 
 const overlay = ref(false)
@@ -82,6 +92,9 @@ function inputType(schema) {
             return SchemaNumber
         case 'number':
             return SchemaNumber
+        case 'string':
+            if (schema?.pattern?.includes('01yn')) return SchemaBoolean
+        // fall through
         default:
             return SchemaText
     }

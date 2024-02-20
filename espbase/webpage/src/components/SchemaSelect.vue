@@ -1,6 +1,7 @@
 <template>
     <v-select
         clearable
+        hide-details
         :items="schema.enum"
         :model-value="value"
         @update:model-value="update"

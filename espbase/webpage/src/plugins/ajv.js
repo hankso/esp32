@@ -1,6 +1,11 @@
 import Ajv from 'ajv'
+import addFormats from 'ajv-formats'
 
 // https://ajv.js.org/options.html
-export default new Ajv({
+const ajv = new Ajv({
     allErrors: true,
 })
+
+addFormats(ajv)
+
+export default ajv

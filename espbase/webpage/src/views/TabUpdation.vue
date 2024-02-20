@@ -61,8 +61,7 @@ onMounted(getVersion)
                     Version
                     <v-tooltip v-if="version" activator="parent">
                         <h3 class="text-amber">
-                            Current Version
-                            (click to reload)
+                            Current Version (click to reload)
                         </h3>
                         <pre>{{ version }}</pre>
                     </v-tooltip>

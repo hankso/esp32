@@ -33,7 +33,7 @@ onMounted(() => {
 
 <template>
     <v-row class="align-start justify-center">
-        <v-col cols="6" lg="5">
+        <v-col cols="12" lg="5">
             <template v-if="info">
                 <v-row v-for="(val, key) of info" :key>
                     <v-col cols="6" class="text-right">
@@ -44,7 +44,7 @@ onMounted(() => {
                     </v-col>
                 </v-row>
             </template>
-            <p v-else>
+            <p v-else class="text-center">
                 Running in {{ mode }} mode (
                 <span class="text-primary">npm run dev</span>
                 ).

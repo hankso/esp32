@@ -113,7 +113,7 @@ function remove(arr) {
 }
 
 async function create(e) {
-    if (!(await e).valid) return
+    if (e && !(await e).valid) return
     let data = toValue(form)
     loading.value = true
     createPath(resolve(data.folderRoot, data.folderName))
@@ -127,7 +127,7 @@ async function create(e) {
 }
 
 async function upload(e) {
-    if (!(await e).valid) return
+    if (e && !(await e).valid) return
     let data = toValue(form)
     let len = data.fileList.length
     loading.value = true

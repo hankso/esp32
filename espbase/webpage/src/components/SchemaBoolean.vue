@@ -10,6 +10,7 @@
         color="primary"
         true-value="1"
         false-value="0"
+        hide-details
         :model-value="parseBool(value) ? '1' : '0'"
         @update:model-value="update"
     ></v-switch>

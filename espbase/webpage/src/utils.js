@@ -257,7 +257,7 @@ export function escape(str = '', ...code) {
 }
 
 export function unescape(str) {
-    return String(str).replace(/\x1b\[[\d;]+m/g, '')
+    return String(str).replace(/\x1b\[[\d;]*m/g, '') // eslint-disable-line
 }
 
 const htmlCodes = {

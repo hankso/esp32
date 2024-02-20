@@ -11,6 +11,6 @@ net.sta.pass,   data,       string,     tbcbstxp
 web.http.name,  data,       string,     hankso
 web.http.pass,  data,       string,     16011106
 app.dns.run,    data,       string,     1
-app.dns.host,   data,       string,     hankso@esp32.local
+app.dns.host,   data,       string,     {NAME}
 app.ota.run,    data,       string,     1
 app.ota.url,    data,       string,     {URL}
