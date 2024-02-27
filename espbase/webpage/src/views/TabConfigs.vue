@@ -1,7 +1,14 @@
 <template>
     <SchemaEditor v-model="schema" />
     <v-sheet border rounded="lg">
-        <SchemaForm v-model="config" :schema :backup @submit.prevent="submit" />
+        <SchemaForm
+            v-model="config"
+            :schema
+            :backup
+            null-val=""
+            show-schema
+            @submit.prevent="submit"
+        />
     </v-sheet>
 </template>
 

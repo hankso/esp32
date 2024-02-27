@@ -1,32 +1,45 @@
 <template>
-    <!--
-    <v-checkbox
-        :modelValue="parseBool(value)"
-        @update:modelValue="val => update?.(val ? '1' : '0')"
-    ></v-checkbox>
-    -->
     <v-switch
         inset
         color="primary"
         true-value="1"
         false-value="0"
         hide-details
-        :model-value="parseBool(value) ? '1' : '0'"
-        @update:model-value="update"
+        v-model="proxy"
+        class="fix-schema-boolean-align"
     ></v-switch>
 </template>
 
 <script setup>
-import { parseBool } from '@/utils'
+import { type, parseBool } from '@/utils'
 
-defineProps({
+const props = defineProps({
     value: {
-        type: String,
+        type: [String, Boolean],
         required: true,
+    },
+    schema: {
+        type: Object,
+        default: undefined,
     },
     update: {
         type: Function,
         default: () => {},
     },
 })
+
+const isBoolean = computed(() =>
+    props.schema?.type ?? type(props.value) === 'boolean'
+)
+
+const proxy = computed({
+    get: () => parseBool(props.value) ? '1' : '0',
+    set: val => props.update(toValue(isBoolean) ? parseBool(val) : val),
+})
 </script>
+
+<style>
+.fix-schema-boolean-align .v-selection-control {
+    justify-content: end;
+}
+</style>

@@ -3,14 +3,13 @@
         :name
         :type="pass && !show ? 'password' : 'text'"
         :rules="[validator]"
-        clearable
         variant="outlined"
         hide-details="auto"
+        :clearable="!required"
         :model-value="value"
         @update:model-value="updateLazy"
         :append-inner-icon="!pass ? '' : show ? mdiEyeOff : mdiEye"
         @click:append-inner="show = !show"
-        @click:clear="updateLazy('')"
     ></v-text-field>
 </template>
 
@@ -37,6 +36,10 @@ const props = defineProps({
         type: Function,
         default: () => {},
     },
+    required: {
+        type: Boolean,
+        default: false,
+    },
 })
 
 const show = ref(false)
@@ -47,13 +50,7 @@ const updateLazy = computed(() => debounce(props.update))
 
 function validator() {
     if (props.schema && !ajv.validate(props.schema, props.value))
-        return ajv.errorsText().split(',')[0]
+        return ajv.errorsText().split(', ')[0]
     return true
 }
 </script>
-
-<style scoped>
-.v-text-field {
-    min-width: 30vw;
-}
-</style>

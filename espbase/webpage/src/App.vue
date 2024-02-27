@@ -1,9 +1,12 @@
 <script setup>
+import { name, version } from '@/../package.json'
+
 import { isApmode } from '@/apis'
 
 import { useTheme, useDisplay } from 'vuetify'
 import {
-    mdiHome,
+    mdiConsole,
+    mdiUsbPort,
     mdiFileTree,
     mdiPencilBoxMultiple,
     mdiCog,
@@ -20,7 +23,7 @@ if (process.env.SRC_VER) {
 const theme = useTheme()
 const { lg } = useDisplay()
 
-const title = 'ESP Base WebUI'
+const title = `${name} WebUI`
 const apmode = ref(true)
 const drawer = ref(false)
 
@@ -47,10 +50,17 @@ const items = computed(() => [
     { type: 'divider' },
     { type: 'subheader', title: 'STA mode' },
     {
-        title: 'Dashboard',
+        title: 'Web Console',
         props: {
-            prependIcon: mdiHome,
+            prependIcon: mdiConsole,
             to: '/home',
+        },
+    },
+    {
+        title: 'Web Serial',
+        props: {
+            prependIcon: mdiUsbPort,
+            to: '/serial',
         },
     },
     ...(toValue(apmode) ? aponly : []),
@@ -133,9 +143,9 @@ onMounted(() => {
     </v-dialog>
 
     <v-app>
-        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-lg'">
+        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-xl'">
             <v-list nav class="mt-n1 mb-n3">
-                <v-list-item :title :subtitle="desc">
+                <v-list-item :title :subtitle="`${desc} v${version}`">
                     <template #append v-if="!lg">
                         <v-icon
                             size="small"
@@ -152,7 +162,12 @@ onMounted(() => {
             <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
             {{ title }}
             <template #append>
-                <v-btn :icon="mdiCompare" @click="toggleTheme"></v-btn>
+                <v-btn icon @click="toggleTheme">
+                    <v-icon :icon="mdiCompare"></v-icon>
+                    <v-tooltip activator="parent">
+                        Toggle theme
+                    </v-tooltip>
+                </v-btn>
             </template>
             <ProgressBar :loading="progbar" style="position: absolute" />
         </v-app-bar>

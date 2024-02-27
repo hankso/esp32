@@ -1,3 +1,37 @@
+<template>
+    <v-sheet border rounded="lg">
+        <v-form class="ma-4" @submit.prevent="upgrade">
+            <v-file-input
+                accept=".bin"
+                label="Firmware *"
+                v-model="firmware"
+                :rules="[rules.length]"
+                prepend-icon=""
+                variant="outlined"
+                show-size
+            >
+                <template #loader>
+                    <ProgressBar :loading />
+                </template>
+            </v-file-input>
+            <div class="d-flex align-center justify-space-between">
+                <v-btn variant="text" @click="getVersion" :loading="loadver">
+                    Version
+                    <v-tooltip v-if="version" activator="parent">
+                        <h3 class="text-amber">
+                            Current Version (click to reload)
+                        </h3>
+                        <pre>{{ version }}</pre>
+                    </v-tooltip>
+                </v-btn>
+                <v-btn type="submit" variant="outlined">
+                    {{ loading === false ? 'Upgrade' : 'Cancel' }}
+                </v-btn>
+            </div>
+        </v-form>
+    </v-sheet>
+</template>
+
 <script setup>
 import { rules } from '@/utils'
 import { updateOTA, execCommand } from '@/apis'
@@ -34,42 +68,9 @@ function getVersion() {
     version.value = ''
     execCommand('version')
         .then(({ data }) => (version.value = data))
+        .catch(({ message }) => notify(message))
         .finally(() => (loadver.value = false))
 }
 
 onMounted(getVersion)
 </script>
-
-<template>
-    <v-sheet border rounded="lg">
-        <v-form class="ma-4" @submit.prevent="upgrade">
-            <v-file-input
-                accept=".bin"
-                label="Firmware *"
-                v-model="firmware"
-                :rules="[rules.length]"
-                prepend-icon=""
-                variant="outlined"
-                show-size
-            >
-                <template #loader>
-                    <ProgressBar :loading />
-                </template>
-            </v-file-input>
-            <div class="d-flex align-center justify-space-between">
-                <v-btn variant="text" @click="getVersion" :loading="loadver">
-                    Version
-                    <v-tooltip v-if="version" activator="parent">
-                        <h3 class="text-amber">
-                            Current Version (click to reload)
-                        </h3>
-                        <pre>{{ version }}</pre>
-                    </v-tooltip>
-                </v-btn>
-                <v-btn type="submit" variant="outlined">
-                    {{ loading === false ? 'Upgrade' : 'Cancel' }}
-                </v-btn>
-            </div>
-        </v-form>
-    </v-sheet>
-</template>

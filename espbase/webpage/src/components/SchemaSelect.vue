@@ -1,8 +1,9 @@
 <template>
     <v-select
-        clearable
         hide-details
+        variant="outlined"
         :items="schema.enum"
+        :clearable="!required"
         :model-value="value"
         @update:model-value="update"
     ></v-select>
@@ -11,7 +12,6 @@
 <script setup>
 defineProps({
     value: {
-        type: String,
         required: true,
     },
     schema: {
@@ -21,6 +21,10 @@ defineProps({
     update: {
         type: Function,
         default: () => {},
+    },
+    required: {
+        type: Boolean,
+        default: false,
     },
 })
 </script>

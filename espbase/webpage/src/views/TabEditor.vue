@@ -4,7 +4,6 @@ import { copyToClipboard, downloadAsFile, camelToSnake } from '@/utils'
 import TabFileman from '@/views/TabFileman.vue'
 
 import {
-    mdiUpload,
     mdiDownload,
     mdiLockOutline,
     mdiClipboardTextOutline,
@@ -127,17 +126,13 @@ watch(
 
         <v-sheet border rounded="lg" class="flex-grow-1 overflow-hidden">
             <v-toolbar density="comfortable" class="border-b">
-                <v-tooltip location="bottom">
-                    <template #activator="{ props }">
-                        <v-btn
-                            class="ms-0 me-n4"
-                            :icon="loading === false ? mdiUpload : '$close'"
-                            @click="upload"
-                            v-bind="props"
-                        ></v-btn>
-                    </template>
-                    {{ loading === false ? `Upload as ${path}` : 'Cancel' }}
-                </v-tooltip>
+                <v-btn icon class="ms-0 me-n4" @click="upload">
+                    <v-icon :icon="loading === false ? '$complete' : '$close'">
+                    </v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        {{ loading === false ? `Save as ${path}` : 'Cancel' }}
+                    </v-tooltip>
+                </v-btn>
 
                 <v-breadcrumbs :items="links"></v-breadcrumbs>
 

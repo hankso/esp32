@@ -8,7 +8,7 @@
                 </span>
             </v-expansion-panel-title>
             <v-expansion-panel-text>
-                <div class="fix-margin">
+                <div class="fix-schema-editor-margin">
                     <!--
                     <v-textarea
                         v-model="plain"
@@ -58,9 +58,8 @@ watch(
 </script>
 
 <style scoped>
-/* hotfix for v-expansion-panel-text__wrapper */
-.fix-margin {
-    margin: -8px -24px -16px;
+.fix-schema-editor-margin {
+    margin: -8px -24px -16px; /* hotfix for v-expansion-panel-text__wrapper */
 }
 
 .codejar {

@@ -16,7 +16,10 @@
     "net.sta.pass": {
       "description": "Password of the AP to connect",
       "type": "string",
-      "pattern": "^[0-9a-zA-Z]{8,}?$"
+      "anyOf": [
+        { "pattern": "^[0-9a-zA-Z]{8,}$" },
+        { "maxLength": 0 }
+      ]
     },
     "net.sta.host": {
       "description": "Static IP address (ignore DHCP)",
@@ -37,7 +40,10 @@
     "net.ap.pass": {
       "description": "Password of the AP to serve",
       "type": "string",
-      "pattern": "^[0-9a-zA-Z]{8,}?$"
+      "anyOf": [
+        { "pattern": "^[0-9a-zA-Z]{8,}$" },
+        { "maxLength": 0 }
+      ]
     },
     "net.ap.host": {
       "description": "IP address of Gateway",
@@ -64,7 +70,10 @@
     "web.ws.pass": {
       "description": "Password to auth websocket connection",
       "type": "string",
-      "pattern": "^[0-9a-zA-Z]{8,}?$"
+      "anyOf": [
+        { "pattern": "^[0-9a-zA-Z]{8,}$" },
+        { "maxLength": 0 }
+      ]
     },
     "web.http.name": {
       "description": "Username to auth webserver (HTTP)",
@@ -73,7 +82,10 @@
     "web.http.pass": {
       "description": "Password to auth webserver (HTTP)",
       "type": "string",
-      "pattern": "^[0-9a-zA-Z]{8,}?$"
+      "anyOf": [
+        { "pattern": "^[0-9a-zA-Z]{8,}$" },
+        { "maxLength": 0 }
+      ]
     },
     "app.dns.run": {
       "description": "Enable mDNS server",

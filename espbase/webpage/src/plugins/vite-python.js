@@ -68,8 +68,7 @@ class PythonServer {
         })
         this.proc.on('error', err => console.log(`Error: ${err}`))
 
-        let logger = line => this.log(line)
-        let print = m => m.toString().trim().split('\n').forEach(logger)
+        let print = b => String(b).trim().split('\n').forEach(l => this.log(l))
         this.proc.stdout.on('data', print)
         this.proc.stderr.on('data', print)
 

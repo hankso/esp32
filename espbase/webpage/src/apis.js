@@ -141,7 +141,7 @@ export function execCommand(cmd, opt = {}) {
     return merge(opt, {
         url: 'cmd',
         method: 'POST',
-        data: `exec=${cmd.trim().replace('helpESP', 'help')}`,
+        data: `exec=${cmd.trim().replace('helpe', 'help')}`,
     })
 }
 
@@ -153,7 +153,7 @@ function parseCommand(str) {
     //          [...]
     let lines = str.trim().split('\n')
     let cmd = {
-        key: lines[0].split(' ')[0].replace('help', 'helpESP'),
+        key: lines[0].split(' ')[0].replace('help', 'helpe'),
         group: 'server',
         usage: lines[0].trim(),
         description: lines[1].trim(),

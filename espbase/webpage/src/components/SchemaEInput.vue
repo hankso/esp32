@@ -1,16 +1,18 @@
 <template>
-    <v-text-field
-        type="number"
+    <v-combobox
+        :type="isNumber ? 'number' : 'text'"
         :rules="[validator]"
         :clearable="!required"
         variant="outlined"
         hide-details="auto"
-        v-model="proxy"
-    ></v-text-field>
+        :items="schema.enum"
+        :model-value="value"
+        @update:model-value="updateLazy"
+    ></v-combobox>
 </template>
 
 <script setup>
-import { type, parseNum } from '@/utils'
+import { type, debounce, parseNum } from '@/utils'
 import ajv from '@/plugins/ajv'
 
 const props = defineProps({
@@ -20,7 +22,7 @@ const props = defineProps({
     },
     schema: {
         type: Object,
-        default: undefined,
+        required: true,
     },
     update: {
         type: Function,
@@ -36,9 +38,8 @@ const isNumber = computed(() =>
     ['number', 'integer'].includes(props.schema?.type ?? type(props.value))
 )
 
-const proxy = computed({
-    get: () => parseNum(props.value),
-    set: val => props.update(toValue(isNumber) ? parseNum(val) : val),
+const updateLazy = debounce(val => {
+    props.update(toValue(isNumber) ? parseNum(val) : val)
 })
 
 function validator() {
