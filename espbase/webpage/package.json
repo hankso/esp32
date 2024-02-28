@@ -6,8 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "lint": "eslint src --ext .vue,.js,.jsx,.cjs,.mjs --fix",
-    "format": "prettier --write src/ *.*js"
+    "lint": "eslint src/ --ext .vue,.js,.jsx,.cjs,.mjs --fix",
+    "format": "prettier --write src/ *.js"
   },
   "dependencies": {
     "ajv": "^8.12.0",

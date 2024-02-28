@@ -28,12 +28,12 @@ const props = defineProps({
     },
 })
 
-const isBoolean = computed(() =>
-    props.schema?.type ?? type(props.value) === 'boolean'
+const isBoolean = computed(
+    () => props.schema?.type ?? type(props.value) === 'boolean'
 )
 
 const proxy = computed({
-    get: () => parseBool(props.value) ? '1' : '0',
+    get: () => (parseBool(props.value) ? '1' : '0'),
     set: val => props.update(toValue(isBoolean) ? parseBool(val) : val),
 })
 </script>

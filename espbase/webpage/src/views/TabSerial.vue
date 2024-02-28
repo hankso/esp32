@@ -1,7 +1,7 @@
 <script setup>
 import { name } from '@/../package.json'
 import { strftime } from '@/utils'
-import SerialController from '@/plugins/serial'
+import SerialController from '@/utils/serial'
 
 import { mdiCog, mdiOctagon, mdiCloseOctagon } from '@mdi/js'
 
@@ -22,7 +22,8 @@ const info = computed(() => {
 })
 
 function request() {
-    serial.request()
+    serial
+        .request()
         .catch(notify)
         .finally(() => {
             if (!toValue(filter) && serial.portIds.length)
@@ -42,10 +43,12 @@ function print(msg, timestamp = true) {
 
 function toggle(val) {
     if (val ?? !toValue(opened)) {
-        return serial.open(serial.options, toValue(filter))
+        return serial
+            .open(serial.options, toValue(filter))
             .catch(notify)
             .then(function readloop() {
-                serial.read()
+                serial
+                    .read()
                     .then(msg => print(msg) || readloop())
                     .catch(console.log)
             })
@@ -60,13 +63,14 @@ onBeforeUnmount(() => toggle(false))
 
 <template>
     <v-sheet border rounded="lg" class="overflow-hidden">
-        <Terminal
+        <CommandLine
             ref="terminal"
             :title
             prompt=""
             :welcome
             :callback="(k, c) => serial.write(c + '\n')"
-            :defaultCommands="false"
+            :used-time="false"
+            :default-commands="false"
         >
             <template #header>
                 <div class="t-header">
@@ -96,14 +100,14 @@ onBeforeUnmount(() => toggle(false))
                     </ul>
                 </div>
             </template>
-        </Terminal>
+        </CommandLine>
     </v-sheet>
     <v-dialog v-model="dialog" width="auto">
         <v-card>
             <SchemaForm
                 v-model="serial.options"
                 :schema="serial.schema"
-                @submit.prevent="toggle(true).then(() => dialog = false)"
+                @submit.prevent="toggle(true).then(() => (dialog = false))"
             >
                 <v-list-item title="USB Filter" subtitle="Vendor:Product ID">
                     <template #append>
@@ -116,7 +120,7 @@ onBeforeUnmount(() => toggle(false))
                             class="form-values"
                             no-data-text="Click AUTH to add"
                             :value="filter"
-                            :schema="{enum: serial.portIds}"
+                            :schema="{ enum: serial.portIds }"
                             :update="val => (filter = val ?? '')"
                         />
                     </template>

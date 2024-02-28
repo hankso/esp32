@@ -52,6 +52,9 @@ class PythonServer {
             ...arguments
         )
     }
+    logln(str) {
+        str.split('\n').forEach(line => this.log(line))
+    }
     info() {
         if (this.verb) this.log(...arguments)
     }
@@ -67,10 +70,8 @@ class PythonServer {
             this.proc = this.pid = null
         })
         this.proc.on('error', err => console.log(`Error: ${err}`))
-
-        let print = b => String(b).trim().split('\n').forEach(l => this.log(l))
-        this.proc.stdout.on('data', print)
-        this.proc.stderr.on('data', print)
+        this.proc.stdout.on('data', b => this.logln(String(b).trim()))
+        this.proc.stderr.on('data', b => this.logln(String(b).trim()))
 
         this.info('Python Server start')
         return this

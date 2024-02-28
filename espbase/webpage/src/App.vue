@@ -164,9 +164,7 @@ onMounted(() => {
             <template #append>
                 <v-btn icon @click="toggleTheme">
                     <v-icon :icon="mdiCompare"></v-icon>
-                    <v-tooltip activator="parent">
-                        Toggle theme
-                    </v-tooltip>
+                    <v-tooltip activator="parent">Toggle theme</v-tooltip>
                 </v-btn>
             </template>
             <ProgressBar :loading="progbar" style="position: absolute" />

@@ -47,11 +47,11 @@ watch(
     debounce(val => {
         try {
             let obj = JSON.parse(val)
-            if (!ajv.validateSchema(obj)) throw new Error(ajv.errorsText())
+            if (!ajv.validateSchema(obj)) throw ajv.errorsText()
             schema.value = obj
             error.value = ''
-        } catch (e) {
-            error.value = e.toString()
+        } catch (err) {
+            error.value = err + ''
         }
     })
 )

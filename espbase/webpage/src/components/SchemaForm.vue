@@ -81,6 +81,7 @@ const props = defineProps({
     },
     nullVal: {
         default: null,
+        validator: () => true,
     },
     showSchema: {
         type: Boolean,
@@ -135,7 +136,7 @@ function genItem(obj) {
             update(val) {
                 if (!toValue(data)) return
                 if (val?.trim) val = val.trim()
-                data.value[key] = val ?? props.nullval
+                data.value[key] = val ?? props.nullVal
             },
             required: props.schema?.required?.includes(key) ?? false,
         }

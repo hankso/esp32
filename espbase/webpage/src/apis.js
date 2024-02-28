@@ -151,7 +151,8 @@ function parseCommand(str) {
     //      <desc>
     //          [<args desc>]
     //          [...]
-    let lines = str.trim().split('\n')
+    let lines = (str + '').trim().split('\n')
+    if (lines.length < 2) return
     let cmd = {
         key: lines[0].split(' ')[0].replace('help', 'helpe'),
         group: 'server',
@@ -165,7 +166,7 @@ function parseCommand(str) {
 
 export function getCommands(opt = {}) {
     return execCommand('help', opt).then(resp => {
-        resp.data = resp.data.split('\n\n').filter(notEmpty).map(parseCommand)
+        resp.data = resp.data.split('\n\n').map(parseCommand).filter(notEmpty)
         return resp
     })
 }

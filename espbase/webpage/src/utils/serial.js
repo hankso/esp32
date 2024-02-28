@@ -1,4 +1,4 @@
-import { type, isEmpty } from '@/utils'
+import { type, deepcopy } from '@/utils'
 
 export const WebSerial = navigator.serial !== undefined
 
@@ -38,15 +38,14 @@ if (WebSerial) {
     refresh()
 }
 
-export const OptionSchema = {
+const OptionSchema = {
     type: 'object',
     properties: {
         baudRate: {
             title: 'Baudrate',
-            description: (
+            description:
                 'A positive, non-zero value indicating the baud rate ' +
-                'at which serial communication should be established.'
-            ),
+                'at which serial communication should be established.',
             type: 'integer',
             exclusiveMinimum: 0,
             enum: [9600, 19200, 38400, 57600, 115200, 921600],
@@ -54,10 +53,9 @@ export const OptionSchema = {
         },
         dataBits: {
             title: 'Data bits',
-            description: (
+            description:
                 'An integer value of 7 or 8 indicating the number of ' +
-                'data bits per frame.'
-            ),
+                'data bits per frame.',
             enum: [7, 8],
             default: 8,
         },
@@ -69,10 +67,9 @@ export const OptionSchema = {
         },
         stopBits: {
             title: 'Stop bits',
-            description: (
+            description:
                 'An integer value of 1 or 2 indicating the number of ' +
-                'stop bits at the end of the frame.'
-            ),
+                'stop bits at the end of the frame.',
             enum: [1, 2],
             default: 1,
         },
@@ -84,13 +81,12 @@ export const OptionSchema = {
         },
         bufferSize: {
             title: 'Buffer size',
-            description: (
+            description:
                 'An unsigned long integer indicating the size of the ' +
-                'read and write buffers that are to be established.'
-            ),
+                'read and write buffers that are to be established.',
             type: 'integer',
             minimum: 0,
-            default: 255,
+            default: 4096,
         },
     },
     required: [
@@ -103,6 +99,10 @@ export const OptionSchema = {
     ],
 }
 
+const OptionDefault = Object.fromEntries(
+    Object.entries(OptionSchema.properties).map(([k, v]) => [k, v.default])
+)
+
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
@@ -110,11 +110,8 @@ export default class SerialController {
     constructor() {
         this.portIds = portIds
         this.opened = ref(false)
-        this.schema = reactive(OptionSchema)
-        this.options = reactive(Object.fromEntries(
-            Object.entries(OptionSchema.properties)
-                .map(([k, v]) => [k, v.default])
-        ))
+        this.schema = reactive(deepcopy(OptionSchema))
+        this.options = reactive(deepcopy(OptionDefault))
     }
 
     async request(filters = []) {

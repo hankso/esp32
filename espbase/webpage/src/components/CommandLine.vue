@@ -1,5 +1,5 @@
 <template>
-    <T
+    <Terminal
         ref="instance"
         class="fix-terminal"
         :key="forceUpdate"
@@ -18,13 +18,13 @@
         <template #header>
             <slot name="header"></slot>
         </template>
-    </T>
+    </Terminal>
 </template>
 
 <script setup>
-import { type, escape } from '@/utils'
+import { type, escape, strftime, get_monotonic } from '@/utils'
 
-import { Terminal as T, TerminalApi, TerminalFlash } from 'vue-web-terminal'
+import { Terminal, TerminalApi, TerminalFlash } from 'vue-web-terminal'
 import 'vue-web-terminal/lib/theme/dark.css'
 
 const emits = defineEmits(['keydown', 'click'])
@@ -47,9 +47,13 @@ const props = defineProps({
     },
     commands: {
         type: Array,
-        default: []
+        default: () => [],
     },
     defaultCommands: {
+        type: Boolean,
+        default: true,
+    },
+    usedTime: {
         type: Boolean,
         default: true,
     },
@@ -60,16 +64,16 @@ const instance = ref(null)
 const forceUpdate = ref(0)
 const commandStore = ref([])
 
-const context = computed(() => (
-    props.prompt ?? (props.title.split(' ')[0].toLowerCase() + ' > ')
-))
+const context = computed(
+    () => props.prompt ?? props.title.split(' ')[0].toLowerCase() + ' > '
+)
 
 const initLog = computed(() => {
     if (type(props.welcome) === 'boolean' && !props.welcome) return []
     if (type(props.welcome) === 'array') return props.welcome
     let logs = [
         `Welcome to ${props.title}!`,
-        `Current login time: ${new Date().toLocaleString()}`,
+        strftime('Current login time: %F %T'),
         `Type <span class="t-cmd-key">Ctrl + C</span> to interrupt command.
         Use <span class="t-cmd-key">help</span> command to show more info.`,
     ].map(content => ({ content }))
@@ -124,8 +128,8 @@ function onKeydown(event, name) {
         TerminalApi.clearLog(name)
     } else if (event.key === 'C') {
         flash[name] = flash[name]?.finish()
-        toValue(instance).$el
-            ?.querySelector('.t-last-line input.t-cmd-input')
+        toValue(instance)
+            .$el?.querySelector('.t-last-line input.t-cmd-input')
             ?.dispatchEvent(new InputEvent('input'))
     } else return
     event.preventDefault()
@@ -176,21 +180,16 @@ function onCommand(key, cmdline, success, failed, name) {
                 class: 'success',
                 content: 'ok',
             })
-        default:
-            let cmds = toValue(allCommands)
-            if (cmds.length && !cmds.includes(key))
-                return failed(`Unknown command ${key}`)
-            if (!props.callback)
-                return failed(`Unhandled command ${key}`)
     }
-    if (flash[name])
-        return failed('Command is still running (this should not happen)!')
+    if (toValue(allCommands).length && !toValue(allCommands).includes(key))
+        return failed(`Unknown command ${key}`)
+    if (!props.callback) return failed(`Unhandled command ${key}`)
+    if (flash[name]) return failed('Command running (this should not happen)!')
     flash[name] = new TerminalFlash()
-    let ts = new Date().getTime()
+    let ts = get_monotonic()
     let rst = props.callback(key, cmdline, success, failed, name)
     if (type(rst) === 'promise') {
-        rst
-            .then(onSuccess(ts, name))
+        rst.then(onSuccess(ts, name))
             .catch(err => flash[name].flush(err))
             .finally(() => (flash[name] = flash[name].finish()))
         return success(flash[name])
@@ -206,15 +205,16 @@ function onCommand(key, cmdline, success, failed, name) {
 
 function onSuccess(ts, name) {
     return data => {
-        let dt = (new Date().getTime() - ts) / 1e3
-        if (type(data) === 'object' && data.hasOwnProperty('type')) {
+        if (type(data) === 'object' && 'content' in data) {
             TerminalApi.pushMessage(name, data)
-        } else {
-            TerminalApi.pushMessage(name, {
-                type: 'ansi',
-                content: data.toString() + escape(`\n\nDone in ${dt}s`, 32),
-            })
+        } else if (data) {
+            TerminalApi.pushMessage(name, { type: 'ansi', content: data })
         }
+        if (!props.usedTime) return
+        TerminalApi.pushMessage(name, {
+            type: 'ansi',
+            content: escape(`Used ${(get_monotonic() - ts).toFixed(0)}ms`, 32),
+        })
     }
 }
 

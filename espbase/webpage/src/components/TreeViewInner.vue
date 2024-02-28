@@ -1,5 +1,5 @@
 <script setup>
-import { formatSize } from '@/utils'
+import { strftime, formatSize } from '@/utils'
 
 defineProps({
     items: {
@@ -9,10 +9,6 @@ defineProps({
 })
 
 const { useLink, isActive, guessIcon } = inject('TreeView')
-
-function formatDate(uts) {
-    return new Date(uts).toISOString().replace(/[TZ]|\.000/g, ' ')
-}
 </script>
 
 <template>
@@ -33,7 +29,7 @@ function formatDate(uts) {
             :prepend-icon="guessIcon(item)"
         >
             <template #subtitle>
-                {{ item.date ? formatDate(item.date) : '' }} -
+                {{ item.date ? strftime('%F %T', item.date) : '' }} -
                 {{ item.size ? formatSize(item.size) : '' }}
             </template>
         </v-list-item>

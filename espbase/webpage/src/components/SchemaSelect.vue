@@ -13,6 +13,7 @@
 defineProps({
     value: {
         required: true,
+        validator: () => true,
     },
     schema: {
         type: Object,

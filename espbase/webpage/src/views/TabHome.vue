@@ -1,12 +1,6 @@
 <template>
     <v-sheet border rounded="lg" class="overflow-hidden">
-        <Terminal
-            :title
-            :prompt
-            :welcome
-            :commands
-            :callback
-        />
+        <CommandLine :title :prompt :welcome :commands :callback />
     </v-sheet>
 </template>
 
@@ -26,19 +20,23 @@ Any commands typed here will be sent to backend and parsed by
 `
 
 const prompt = ref()
-const commands = ref([{
-    key: 'reload',
-    group: 'web',
-    usage: 'reload',
-    description: 'Reload configuration of current terminal',
-}])
+const commands = ref([
+    {
+        key: 'reload',
+        group: 'web',
+        usage: 'reload',
+        description: 'Reload configuration of current terminal',
+    },
+])
 
 function refresh() {
     return Promise.all([getConfig(), getCommands()])
         .then(([cfg, cmds]) => {
             if (cfg.data['app.prompt']) prompt.value = cfg.data['app.prompt']
             cmds.data.forEach(cmd => {
-                let idx = toValue(commands).map(_ => _.key).indexOf(cmd.key)
+                let idx = toValue(commands)
+                    .map(_ => _.key)
+                    .indexOf(cmd.key)
                 if (idx < 0) {
                     commands.value.push(cmd)
                 } else {
@@ -53,7 +51,9 @@ function callback(key, cmdline) {
     if (key === 'reload') return refresh()
     return execCommand(cmdline)
         .then(({ data }) => data)
-        .catch(({ message }) => { throw new Error(message) })
+        .catch(({ message }) => {
+            throw new Error(message)
+        })
 }
 
 onMounted(refresh)
