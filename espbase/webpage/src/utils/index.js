@@ -208,10 +208,7 @@ export var rules = {
     },
 }
 
-export function camelToSnake(s, sep = '_') {
-    return s.replace(/([a-z])([A-Z])/g, `$1${sep}$2`).toLowerCase()
-}
-
+import cvtcase from './cvtcase'
 import strftime from './strftime'
 
-export { strftime }
+export { cvtcase, strftime }

@@ -1,6 +1,7 @@
 <script setup>
 import { readFile, uploadFile } from '@/apis'
-import { copyToClipboard, downloadAsFile, camelToSnake } from '@/utils'
+import { cvtcase, copyToClipboard, downloadAsFile } from '@/utils'
+
 import TabFileman from '@/views/TabFileman.vue'
 
 import {
@@ -183,7 +184,7 @@ watch(
                         <v-icon :icon="icon"></v-icon>
                         <v-tooltip activator="parent" location="bottom">
                             Turn {{ config[prop] ? 'off' : 'on' }}
-                            {{ camelToSnake(prop, ' ') }}
+                            {{ cvtcase(prop, 'snake') }}
                         </v-tooltip>
                     </v-btn>
                 </v-btn-toggle>
