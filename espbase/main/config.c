@@ -33,7 +33,7 @@ config_t Config = {
         .STA_SSID  = "",
         .STA_PASS  = "",
         .STA_HOST  = "",
-        .AP_SSID   = "EspBase",
+        .AP_SSID   = "espbase",
         .AP_PASS   = "16011106",
         .AP_HOST   = "10.0.2.1",
         .AP_AUTO   = "1",
@@ -49,9 +49,9 @@ config_t Config = {
         .DIR_ROOT  = "/www/",
     },
     .app = {
-        .DNS_RUN   = "",
-        .DNS_HOST  = "",
-        .OTA_RUN   = "",
+        .MDNS_RUN  = "1",
+        .MDNS_HOST = "",
+        .OTA_RUN   = "1",
         .OTA_URL   = "",
         .PROMPT    = "esp32> ",
     },
@@ -105,11 +105,11 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.path.docs",   &Config.web.DIR_DOCS,   NULL},
     {"web.path.root",   &Config.web.DIR_ROOT,   NULL},
 
-    {"app.dns.run",     &Config.app.DNS_RUN,    NULL},
-    {"app.dns.host",    &Config.app.DNS_HOST,   NULL},
+    {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
+    {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.ota.run",     &Config.app.OTA_RUN,    NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
-    {"app.cmd.prompt",  &Config.app.PROMPT,     NULL},
+    {"app.prompt",      &Config.app.PROMPT,     NULL},
 };
 
 static config_entry_t rolst[] = {       // readonly entries

@@ -106,8 +106,6 @@ char * cast_away_const_force(const char*);
 
 const char * format_sha256(const uint8_t*, size_t);
 const char * format_size(size_t, bool);
-const char * format_mac(const uint8_t*, size_t);
-const char * format_ip(uint32_t, size_t);
 
 void task_info();
 void memory_info();

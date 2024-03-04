@@ -3,7 +3,6 @@
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  */
-
 #include "globals.h"
 #include "drivers.h"
 #include "console.h"
@@ -58,18 +57,18 @@ static bool log_request = true;
 
 void log_msg(AsyncWebServerRequest *req, const char *msg = "") {
     if (!log_request) return;
-    printf("%4s %s %s\n", req->methodToString(), req->url().c_str(), msg);
+    ESP_LOGI(TAG, "%4s %s %s", req->methodToString(), req->url().c_str(), msg);
 }
 
 void log_param(AsyncWebServerRequest *req) {
     if (!log_request) return;
     size_t len = req->params();
-    if (!len) printf("No params to log\n");
+    if (!len) return;
     AsyncWebParameter *p;
-    for (uint8_t i = 0; (p = req->getParam(i)) && (i < len); i++) {
-        printf("Param[%d] key:%s, post:%d, file:%d[%d] `%s`\n",
-               i, p->name().c_str(), p->isPost(), p->isFile(), p->size(),
-               p->isFile() ? "[skip file content]" : p->value().c_str());
+    for (uint8_t i = 0; (i < len) && (p = req->getParam(i)); i++) {
+        ESP_LOGI(TAG, "Param[%d] key:%s, post:%d, file:%d[%d] `%s`",
+                i, p->name().c_str(), p->isPost(), p->isFile(), p->size(),
+                p->isFile() ? "[skip file content]" : p->value().c_str());
     }
 }
 
@@ -104,7 +103,7 @@ void onCommand(AsyncWebServerRequest *req) {
         TRYFREE(ret);
     } else if (req->hasParam("gcode", true)) {
         const char *gcode = req->getParam("gcode", true)->value().c_str();
-        printf("GCode parser: `%s`\n", gcode);
+        ESP_LOGW(TAG, "GCode parser: `%s`", gcode);
         req->send(500, TYPE_TEXT, "GCode parser not implemented yet");
     } else {
         req->send(400, TYPE_TEXT, "Invalid parameter");
@@ -176,18 +175,18 @@ void onUpdatePost(
             res->addHeader("Connection", "close");
             return req->send(res);
         }
-        ESP_LOGW(TAG, "Update file: %s\n", filename.c_str());
+        printf("Update file: %s\n", filename.c_str());
     }
     if (!ota_updation_error()) {
         led_set_light(0, 1);
         ota_updation_write(data, len);
         led_set_light(0, 0);
-        ESP_LOGI(TAG, "\rProgress: %s", format_size(index, false));
+        printf("\rProgress: %s", format_size(index, false));
     }
     if (isFinal) {
         if (!ota_updation_end())
             return req->send(400, TYPE_TEXT, ota_updation_error());
-        ESP_LOGW(TAG, "Update success: %s\n", format_size(index + len, false));
+        printf("Update success: %s\n", format_size(index + len, false));
     }
 }
 
@@ -290,19 +289,19 @@ void onUpload(
         if (FFS.exists(filename) && !req->hasParam("overwrite")) {
             return req->send(403, TYPE_TEXT, "File already exists.");
         }
-        ESP_LOGW(TAG, "Upload file: %s\n", filename.c_str());
+        printf("Upload file: %s\n", filename.c_str());
         file = FFS.open(filename, "w");
     }
     if (file) {
         led_set_light(0, 1);
         file.write(data, len);
         led_set_light(0, 0);
-        ESP_LOGI(TAG, "\rProgress: %s", format_size(index, false));
+        printf("\rProgress: %s", format_size(index, false));
     }
     if (isFinal && file) {
         file.flush();
         file.close();
-        ESP_LOGW(TAG, "Upload success: %s\n", format_size(index + len, false));
+        printf("Upload success: %s\n", format_size(index + len, false));
     }
 }
 
@@ -329,10 +328,24 @@ void onError(AsyncWebServerRequest *req) {
  * WebSocket message parser and callbacks
  */
 
-void handle_websocket_message(AsyncWebSocketClient *client, char *data) {
-    char *ret = console_handle_rpc(data);
+typedef struct {
+    AsyncWebSocketClient *client;
+    char name[32];
+    char *buf;
+    size_t idx;
+    size_t len;
+} wsdata_ctx_t;
+
+void handle_websocket_message(wsdata_ctx_t *ctx) {
+    if (!ctx->buf || !ctx->len) return;
+    char *ret;
+    if (ctx->buf[0] == '{') {
+        ret = console_handle_rpc(ctx->buf); // handle JSON-RPC
+    } else {
+        ret = console_handle_command(ctx->buf, false); // handle ASCII commands
+    }
     if (ret) {
-        client->text(ret);
+        ctx->client->text(ret);
         TRYFREE(ret);
     }
 }
@@ -359,104 +372,106 @@ void handle_websocket_message(AsyncWebSocketClient *client, char *data) {
  * D: num=2, final=true,  opcode=WS_CONTINUATION, index=0, len=10, size=3
  * E: num=2, final=true,  opcode=WS_CONTINUATION, index=3, len=10, size=7
  */
-void onWebSocketData(
-    AsyncWebSocketClient *client, AwsFrameInfo *info, char *data, size_t size
+static void onWebSocketData(
+    wsdata_ctx_t *ctx, AwsFrameInfo *info, uint8_t *data, size_t size
 ) {
-    // NOTE! Only one websocket client is allowed at a time.
-    static char * msg = NULL;
-    static uint32_t wsid = -1;
-    static size_t idx = 0, buflen = 0;
-    uint32_t cid = client->id();
-    if (wsid != cid) {
-        if (wsid != -1) {
-            ESP_LOGW(TAG, "ws#%d error: message buffer busy. Skip\n", cid);
-            return; // TODO: trigger client error to stop its messaging
-        }
-        wsid = cid;
-    }
     if (info->final && info->num == 0) {
         // Message is not fragmented so there's only one frame
-        ESP_LOGI(TAG, "ws#%d message[%llu]\n", wsid, info->len);
+        ESP_LOGD(TAG, "%s msg[%llu]", ctx->name, info->len);
         if (info->index == 0) {
             // We are starting this only frame
-            buflen = ((info->opcode == WS_TEXT) ? 1 : 2) * info->len + 1;
-            msg = (char *)malloc(buflen);
-            if (msg == NULL) goto clean;
-            else idx = 0;
-        } else if (msg == NULL) {
-            ESP_LOGW(TAG, "ws#%d error: lost first packets. Skip\n", wsid);
+            ctx->len = ((info->opcode == WS_TEXT) ? 1 : 2) * info->len + 1;
+            if (!( ctx->buf = (char *)malloc(ctx->len) )) goto clean;
+            ctx->idx = 0;
+        } else if (!ctx->buf) {
+            ESP_LOGW(TAG, "%s error: lost first packets. Skip", ctx->name);
             goto clean;
         } else {
             // This frame is splitted into packets
         }
     } else if (info->index == 0) {
         // Message is fragmented. Starting a new frame
-        ESP_LOGI(TAG, "ws#%d frame%d[%llu]\n", wsid, info->num, info->len);
-        size_t l = ((info->message_opcode == WS_TEXT) ? 1 : 2) * info->len;
+        ESP_LOGD(TAG, "%s msg frame%d[%llu]", ctx->name, info->num, info->len);
+        size_t len = ((info->message_opcode == WS_TEXT) ? 1 : 2) * info->len;
         if (info->num == 0) {
             // Starting the first frame
-            msg = (char *)malloc(l + 1);
-            if (msg == NULL) goto clean;
-            idx = 0; buflen = l + 1;
-        } else if (msg == NULL) {
-            ESP_LOGW(TAG, "ws#%d error: lost first frame. Skip\n", wsid);
+            if (!( ctx->buf = (char *)malloc(ctx->len = len + 1) )) goto clean;
+            ctx->idx = 0;
+        } else if (!ctx->buf) {
+            ESP_LOGW(TAG, "%s error: lost first frame. Skip", ctx->name);
             goto clean;
         } else {
             // Extend buffer for the coming frame
-            char *tmp = (char *)realloc(msg, buflen + l);
+            char *tmp = (char *)realloc(ctx->buf, ctx->len + len);
             if (tmp == NULL) goto clean;
-            msg = tmp; buflen += l;
+            ctx->buf = tmp;
+            ctx->len += len;
         }
-    } else if (msg == NULL) {
-        ESP_LOGW(TAG, "ws#%d error: lost message head. Skip", wsid);
+    } else if (!ctx->buf) {
+        ESP_LOGW(TAG, "%s error: lost message head. Skip", ctx->name);
         goto clean;
     } else {
         // Message is fragmented. Current frame is splitted
+        ESP_LOGD(TAG, "%s msg frame%d[%llu] packet[%llu-%llu]",
+                 ctx->name, info->num, info->len,
+                 info->index, info->index + size);
     }
     // Save/append packets to message buffer
     if (info->opcode == WS_TEXT) {
-        idx += snprintf(msg + idx, buflen - idx, (char *)data);
+        ctx->idx += snprintf(
+            ctx->buf + ctx->idx, ctx->len - ctx->idx, (char *)data);
     } else {
         for (size_t i = 0; i < size; i++) {
-            idx += snprintf(msg + idx, buflen - idx, "%02X", data[i]);
+            ctx->idx += snprintf(
+                ctx->buf + ctx->idx, ctx->len - ctx->idx, "%02X", data[i]);
         }
     }
-    ESP_LOGD(TAG, "ws#%d >packets[%llu-%llu]\n",
-             wsid, info->index, info->index + size);
-    if (info->index + size == info->len && info->final) {
-        // Current frame end and all message buffered
-        handle_websocket_message(client, msg);
-    } else {
-        return; // Waiting for next frame
-    }
+    if (!info->final || info->index + size != info->len) return;
+    // Current message end and all frames buffered
+    handle_websocket_message(ctx);
 clean:
-    wsid = -1;
-    idx = buflen = 0;
-    TRYFREE(msg);
+    ctx->idx = ctx->len = 0;
+    TRYFREE(ctx->buf);
     return;
 }
 
-void onWebSocket(AsyncWebSocket *server, AsyncWebSocketClient *client, AwsEventType type, void *arg, uint8_t *data, size_t datalen) {
-    static char header[32];
-    snprintf(header, 32, "ws#%u %s:%d", client->id(),
-             client->remoteIP().toString().c_str(), client->remotePort());
+static void onWebSocket(
+    AsyncWebSocket *server, AsyncWebSocketClient *client,
+    AwsEventType type, void *arg, uint8_t *data, size_t datalen
+) {
+    wsdata_ctx_t *ctx;
+    server->cleanupClients();
+    if (!( ctx = (wsdata_ctx_t *)client->_tempObject )) {
+        if (!( ctx = (wsdata_ctx_t *)calloc(1, sizeof(wsdata_ctx_t)) )) {
+            ESP_LOGE(TAG, "Could not allocate context for websocket");
+            return client->close();
+        }
+        ctx->client = client;
+        snprintf(ctx->name, sizeof(ctx->name), "ws#%u %s:%d",
+                 client->id(), client->remoteIP().toString().c_str(),
+                 client->remotePort());
+        client->_tempObject = ctx;
+    }
     switch (type) {
-    case WS_EVT_CONNECT:
-        ESP_LOGD(TAG, "%s connected", header);
-        client->ping();
-        server->cleanupClients();
-        break;
-    case WS_EVT_DISCONNECT:
-        ESP_LOGD(TAG, "%s disconnected", header);
-        break;
-    case WS_EVT_ERROR:
-        ESP_LOGW(TAG, "%s error(%u)", header, *((uint16_t *)arg));
-        break;
-    case WS_EVT_DATA:
-        ESP_LOGD(TAG, "%s message(%u)", header, datalen);
-        onWebSocketData(client, (AwsFrameInfo *)arg, (char *)data, datalen);
-        break;
-    default:;
+        case WS_EVT_CONNECT:
+            ESP_LOGI(TAG, "%s connected", ctx->name);
+            client->ping();
+            break;
+        case WS_EVT_DISCONNECT:
+            ESP_LOGI(TAG, "%s disconnected", ctx->name);
+            TRYFREE(client->_tempObject);
+            break;
+        case WS_EVT_PONG:
+            break;
+        case WS_EVT_ERROR:
+            ESP_LOGW(TAG, "%s error(%u)", ctx->name, *((uint16_t *)arg));
+            break;
+        case WS_EVT_DATA:
+            onWebSocketData(ctx, (AwsFrameInfo *)arg, data, datalen);
+            break;
+        default:
+            ESP_LOGD(TAG, "%s event %d datalen %u", ctx->name, type, datalen);
+            break;
     }
 }
 

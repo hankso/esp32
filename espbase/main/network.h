@@ -36,13 +36,16 @@ esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel, uint16_t timeout_ms);
 esp_err_t wifi_sta_wait(uint16_t timeout_ms);
 esp_err_t wifi_sta_list_ap();
 
-esp_err_t iperf_command(const char *host, uint16_t port, uint16_t length,
-                        uint32_t interval_sec, uint32_t timeout_sec,
-                        bool abort, bool udp);
-esp_err_t ping_command(const char *host, uint16_t timeout_ms,
-                       uint16_t data_size, uint16_t count);
 esp_err_t ftm_initiator(const char *ssid, uint16_t timeout_ms, uint8_t *count);
 esp_err_t ftm_responder(const char *ctrl, int16_t *offset_cm);
+esp_err_t mdns_command(const char *action, const char *hostname,
+                       const char *service, const char *proto,
+                       uint16_t timeout_ms);
+esp_err_t ping_command(const char *host, uint16_t timeout_ms,
+                       uint16_t data_size, uint16_t count);
+esp_err_t iperf_command(const char *host, uint16_t port, uint16_t length,
+                        uint32_t interval_sec, uint16_t timeout_sec,
+                        bool abort, bool udp);
 
 #ifdef __cplusplus
 }

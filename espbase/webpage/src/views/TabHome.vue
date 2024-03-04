@@ -1,5 +1,5 @@
 <template>
-    <v-sheet border rounded="lg" class="overflow-hidden">
+    <v-sheet border rounded="lg" class="overflow-hidden h-100">
         <CommandLine :title :prompt :welcome :commands :callback />
     </v-sheet>
 </template>

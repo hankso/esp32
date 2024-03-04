@@ -83,7 +83,6 @@ function refresh(path, target, parent) {
                 ...node,
                 id: parent ? `${parent.id}-${idx}` : `${idx}`,
                 link: join(parent ? parent.link : '/', node.name),
-                name: node.name.replace(new RegExp(`^${path}`), ''),
             }))
             target.splice(0, target.length, ...nodes)
             target.forEach(refresh)
@@ -165,109 +164,96 @@ onMounted(refresh)
                 <v-card-title class="d-flex align-center">
                     Create new folder
                     <v-btn
-                        color="grey"
+                        text="ESC"
                         size="x-small"
+                        color="grey"
                         class="ms-auto"
                         variant="outlined"
                         @click="form.create = false"
-                    >
-                        ESC
-                    </v-btn>
+                    ></v-btn>
                 </v-card-title>
-                <v-card-text>
-                    <v-form @submit.prevent="create">
-                        <v-select
-                            label="Under *"
-                            v-model="form.folderRoot"
-                            :rules="[rules.required]"
-                            :items="folders"
-                            variant="outlined"
-                            required
-                        ></v-select>
-                        <v-text-field
-                            label="Folder name *"
-                            v-model="form.folderName"
-                            :rules="[rules.required]"
-                            variant="outlined"
-                            required
-                        ></v-text-field>
-                        <div class="d-flex align-center justify-space-between">
-                            <small>* indicates required field</small>
-                            <v-btn
-                                :loading
-                                size="small"
-                                type="submit"
-                                variant="outlined"
-                            >
-                                Create
-                            </v-btn>
-                        </div>
-                    </v-form>
-                </v-card-text>
+                <v-form @submit.prevent="create" class="pa-4">
+                    <v-select
+                        label="Under *"
+                        v-model="form.folderRoot"
+                        :rules="[rules.required]"
+                        :items="folders"
+                        variant="outlined"
+                        required
+                    ></v-select>
+                    <v-text-field
+                        label="Folder name *"
+                        v-model="form.folderName"
+                        :rules="[rules.required]"
+                        variant="outlined"
+                        required
+                    ></v-text-field>
+                    <div class="d-flex align-center justify-space-between">
+                        <small>* indicates required field</small>
+                        <v-btn :loading type="submit" variant="outlined">
+                            Create
+                        </v-btn>
+                    </div>
+                </v-form>
             </v-card>
         </v-dialog>
 
-        <v-dialog
-            v-model="form.upload"
-            min-width="350"
-            max-width="80vw"
-            width="auto"
-        >
+        <v-dialog v-model="form.upload" min-width="350" width="auto">
             <v-card>
                 <v-card-title class="d-flex align-center">
                     Upload files
                     <v-btn
-                        color="grey"
+                        text="ESC"
                         size="x-small"
+                        color="grey"
                         class="ms-auto"
                         variant="outlined"
                         @click="form.upload = false"
-                    >
-                        ESC
-                    </v-btn>
+                    ></v-btn>
                 </v-card-title>
-                <v-card-text>
-                    <v-form @submit.prevent="upload">
-                        <v-select
-                            label="Under *"
-                            v-model="form.folderRoot"
-                            :rules="[rules.required]"
-                            :items="folders"
-                            variant="outlined"
-                            required
-                        >
-                        </v-select>
-                        <v-file-input
-                            label="Files *"
-                            v-model="form.fileList"
-                            :show-size="form.fileList.length > 1"
-                            :counter="form.fileList.length > 1"
-                            :rules="[rules.length]"
-                            variant="outlined"
-                            multiple
-                            required
-                        >
-                        </v-file-input>
-                        <v-text-field
-                            label="Rename to"
-                            :disabled="form.fileList.length !== 1"
-                            v-model="form.fileName"
-                            variant="outlined"
-                        >
-                        </v-text-field>
-                        <div class="d-flex align-center justify-space-between">
-                            <small>* indicates required field</small>
-                            <v-btn
-                                :loading
-                                size="small"
-                                type="submit"
-                                variant="outlined"
-                            >
-                                Upload
-                            </v-btn>
-                        </div>
-                    </v-form>
-                </v-card-text>
+                <v-form @submit.prevent="upload" class="pa-4">
+                    <v-select
+                        label="Under *"
+                        v-model="form.folderRoot"
+                        :rules="[rules.required]"
+                        :items="folders"
+                        variant="outlined"
+                        required
+                    ></v-select>
+                    <v-file-input
+                        label="Files *"
+                        v-model="form.fileList"
+                        show-size
+                        :counter="form.fileList.length > 1"
+                        :rules="[rules.length]"
+                        prepend-icon=""
+                        variant="outlined"
+                        multiple
+                        required
+                    >
+                        <template #selection="{ fileNames }">
+                            <template v-for="(key, idx) in fileNames" :key>
+                                <v-chip color="primary">{{ key }}</v-chip>
+                                <v-spacer
+                                    v-if="idx !== form.fileList.length - 1"
+                                    class="flex-1-1-100"
+                                ></v-spacer>
+                            </template>
+                        </template>
+                    </v-file-input>
+                    <v-text-field
+                        label="Rename to"
+                        :disabled="form.fileList.length !== 1"
+                        v-model="form.fileName"
+                        variant="outlined"
+                    ></v-text-field>
+                    <div class="d-flex align-center justify-space-between">
+                        <small>* indicates required field</small>
+                        <v-btn :loading type="submit" variant="outlined">
+                            Upload
+                        </v-btn>
+                    </div>
+                </v-form>
             </v-card>
         </v-dialog>
 

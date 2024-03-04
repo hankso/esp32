@@ -102,7 +102,7 @@ function cmap(char, date) {
 
 export default function strftime(fmt, date) {
     if (type(fmt) !== 'string') return ''
-    return fmt.replace(/%[a-z]\b/gi, m => {
-        return cmap(m.slice(1), new Date(date ?? get_timestamp())) + '' || m
-    })
+    if (date < 1e11) date *= 1e3
+    date = new Date(date ?? get_timestamp())
+    return fmt.replace(/%[a-z]\b/gi, m => cmap(m.slice(1), date) + '' || m)
 }

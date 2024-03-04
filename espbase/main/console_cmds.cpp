@@ -67,7 +67,7 @@ static int system_restart(int c, char **v) { esp_restart(); return ESP_OK; }
 #endif
 
 #ifdef CONSOLE_SYSTEM_SLEEP
-const char* const wakeup_reason_list[] = {
+static const char * const wakeup_reason_list[] = {
     "Undefined", "Undefined", "EXT0", "EXT1",
     "Timer", "Touchpad", "ULP", "GPIO", "UART",
 };
@@ -249,72 +249,6 @@ static void register_system() {
             .hint = NULL,
             .func = &system_update,
             .argtable = &system_update_args
-        },
-#endif
-    };
-    register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
-}
-
-/******************************************************************************
- * Configuration commands
- */
-
-#ifdef CONSOLE_CONFIG_IO
-static struct {
-    struct arg_str *key;
-    struct arg_str *val;
-    struct arg_lit *load;
-    struct arg_lit *save;
-    struct arg_lit *stat;
-    struct arg_lit *list;
-    struct arg_end *end;
-} config_io_args = {
-    .key = arg_str0(NULL, NULL, "key", "specify config by key"),
-    .val = arg_str0(NULL, NULL, "value", "set config value"),
-    .load = arg_lit0(NULL, "load", "load from NVS flash"),
-    .save = arg_lit0(NULL, "save", "save to NVS flash"),
-    .stat = arg_lit0(NULL, "stat", "summary NVS status"),
-    .list = arg_lit0(NULL, "list", "list NVS entries"),
-    .end = arg_end(6)
-};
-
-static int config_io(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &config_io_args))
-        return ESP_ERR_INVALID_ARG;
-    bool ret = true;
-    const char *key = ARG_STR(config_io_args.key, NULL);
-    const char *val = ARG_STR(config_io_args.val, NULL);
-    if (key) {
-        if (val) {
-            printf("Set `%s` to `%s` %s\n", key, val,
-                   (ret = config_set(key, val)) ? "done" : "fail");
-        } else {
-            printf("Get `%s` value `%s`\n", key, config_get(key));
-        }
-    } else if (config_io_args.load->count) {
-        ret = config_nvs_load();
-    } else if (config_io_args.save->count) {
-        ret = config_nvs_dump();
-    } else if (config_io_args.list->count) {
-        config_nvs_list();
-    } else if (config_io_args.stat->count) {
-        config_nvs_stats();
-    } else {
-        config_list();
-    }
-    return ret ? ESP_OK : ESP_FAIL;
-}
-#endif // CONSOLE_CONFIG_IO
-
-static void register_config() {
-    const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_CONFIG_IO
-        {
-            .command = "config",
-            .help = "Set / get / load / save / list configurations",
-            .hint = NULL,
-            .func = &config_io,
-            .argtable = &config_io_args
         },
 #endif
     };
@@ -510,36 +444,31 @@ static struct {
     struct arg_end *end;
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
-    .rlt = arg_str0(NULL, "track", "<0123HVEOA>", "run light tracking"),
+    .rlt = arg_str0(NULL, "track", "<0|1|2|3|H|V|A>", "run light tracking"),
     .end = arg_end(2)
 };
 
 static int driver_als(int argc, char **argv) {
-    static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
     if (!arg_noerror(argc, argv, (void **) &driver_als_args))
         return ESP_ERR_INVALID_ARG;
+    static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
+    static const char *choices = "0123HVA", *c;
+    const char *method = ARG_STR(driver_als_args.rlt, "");
+    int index = ARG_INT(driver_als_args.idx, -1);
     esp_err_t err = ESP_OK;
     if (driver_als_args.rlt->count) {
-        static const char *methods = "0123HVEOA";
-        char *c = strchr(methods, driver_als_args.rlt->sval[0][0]);
-        if (!c) {
-            printf("Invalid tracking method: %s, select from <%s>\n",
-                   driver_als_args.rlt->sval[0], methods);
+        if (!( c = strchr(choices, method[0]) )) {
+            printf("Invalid tracking method: %s\n", method);
             return ESP_ERR_INVALID_ARG;
         }
         int hdeg = -1, vdeg = -1;
-        als_track_t method = (als_track_t)(c - methods);
-        if (!( err = als_tracking(method, &hdeg, &vdeg) ))
+        if (!( err = als_tracking((als_track_t)(c - choices), &hdeg, &vdeg) ))
             printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
-        return err;
-    }
-    if (!driver_als_args.idx->count) {
-        for (int idx = 0; idx < 4; idx++) {
+    } else if (idx < 4) {
+        LOOPN(i, 4) {
+            if (idx >= 0 && i != idx) continue;
             printf(tpl, idx, als_brightness(idx));
         }
-    } else if (driver_als_args.idx->ival[0] < 3) {
-        int idx = driver_als_args.idx->ival[0];
-        printf(tpl, idx, als_brightness(idx));
     } else {
         gy39_data_t dat;
         if (!( err = gy39_measure(NUM_I2C, &dat) ))
@@ -682,8 +611,103 @@ static void register_driver() {
  * Utilities commands
  */
 
-#ifdef CONSOLE_UTILS_LSHW
-static int utils_hardware(int c, char **v) { hardware_info(); return ESP_OK; }
+#ifdef CONSOLE_UTILS_CONFIG
+static struct {
+    struct arg_str *key;
+    struct arg_str *val;
+    struct arg_lit *load;
+    struct arg_lit *save;
+    struct arg_lit *stat;
+    struct arg_lit *list;
+    struct arg_end *end;
+} utils_config_args = {
+    .key = arg_str0(NULL, NULL, "key", "specify config by key"),
+    .val = arg_str0(NULL, NULL, "value", "set config value"),
+    .load = arg_lit0(NULL, "load", "load from NVS flash"),
+    .save = arg_lit0(NULL, "save", "save to NVS flash"),
+    .stat = arg_lit0(NULL, "stat", "summary NVS status"),
+    .list = arg_lit0(NULL, "list", "list NVS entries"),
+    .end = arg_end(6)
+};
+
+static int utils_config(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &utils_config_args))
+        return ESP_ERR_INVALID_ARG;
+    bool ret = true;
+    const char *key = ARG_STR(utils_config_args.key, NULL);
+    const char *val = ARG_STR(utils_config_args.val, NULL);
+    if (key) {
+        if (val) {
+            printf("Set `%s` to `%s` %s\n", key, val,
+                   (ret = config_set(key, val)) ? "done" : "fail");
+        } else {
+            printf("Get `%s` value `%s`\n", key, config_get(key));
+        }
+    } else if (utils_config_args.load->count) {
+        ret = config_nvs_load();
+    } else if (utils_config_args.save->count) {
+        ret = config_nvs_dump();
+    } else if (utils_config_args.list->count) {
+        config_nvs_list();
+    } else if (utils_config_args.stat->count) {
+        config_nvs_stats();
+    } else {
+        config_list();
+    }
+    return ret ? ESP_OK : ESP_FAIL;
+}
+#endif // CONSOLE_UTILS_CONFIG
+
+#ifdef CONSOLE_UTILS_LOGGING
+static const char * const log_level_str[] = {
+    "NONE", "ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"
+};
+
+static struct {
+    struct arg_str *tag;
+    struct arg_str *lvl;
+    struct arg_lit *log;
+    struct arg_end *end;
+} utils_logging_args = {
+    .tag = arg_str0(NULL, NULL, "TAG", "specify tag of the log entries"),
+    .lvl = arg_str0(NULL, NULL, "<0-5|N|E|W|I|D|V>", "set logging level"),
+    .log = arg_lit0(NULL, "test", "test logging with specified tag"),
+    .end = arg_end(3)
+};
+
+static int utils_logging(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &utils_logging_args))
+        return ESP_ERR_INVALID_ARG;
+    static const char *choices = "NEWIDV", *c;
+    const char *tag = ARG_STR(utils_logging_args.tag, "*");
+    const char *lvl = ARG_STR(utils_logging_args.lvl, "");
+    if (utils_logging_args.lvl->count) {
+        if (!strcmp(tag, "*")) {
+            printf("Invalid tag to set: `%s`\n", tag);
+            return ESP_ERR_INVALID_ARG;
+        }
+        if ('0' <= lvl[0] && lvl[0] <= '5') {
+            esp_log_level_set(tag, (esp_log_level_t)(lvl[0] - '0'));
+        } else if (( c = strchr(choices, lvl[0]) )) {
+            esp_log_level_set(tag, (esp_log_level_t)(c - choices));
+        } else {
+            printf("Invalid level to set: `%s`\n", lvl);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    printf("Logging level of %s is %s\n",
+            tag, log_level_str[esp_log_level_get(tag)]);
+    if (utils_logging_args.log->count && strcmp(tag, "*")) {
+        for (int i = 1; i < LEN(log_level_str); i++) {
+            ESP_LOG_LEVEL(i, tag, "Logging at %s", log_level_str[i]);
+        }
+    }
+    return ESP_OK;
+}
+#endif // CONSOLE_UTILS_LOGGING
+
+#ifdef CONSOLE_UTILS_VERSION
+static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
 #endif
 
 #ifdef CONSOLE_UTILS_LSPART
@@ -694,39 +718,9 @@ static int utils_partinfo(int c, char **v) { partition_info(); return ESP_OK; }
 static int utils_taskinfo(int c, char **v) { task_info(); return ESP_OK; }
 #endif
 
-#ifdef CONSOLE_UTILS_VER
-static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
+#ifdef CONSOLE_UTILS_LSHW
+static int utils_hardware(int c, char **v) { hardware_info(); return ESP_OK; }
 #endif
-
-#ifdef CONSOLE_UTILS_LSMEM
-static struct {
-    struct arg_lit *verbose;
-    struct arg_end *end;
-} utils_memory_args = {
-    .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
-    .end = arg_end(1)
-};
-
-static int utils_memory(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &utils_memory_args))
-        return ESP_ERR_INVALID_ARG;
-    switch (utils_memory_args.verbose->count) {
-    case 0:
-        memory_info(); break;
-    case 2:
-        // Too much infomation
-        // heap_caps_dump_all(); break;
-        heap_caps_print_heap_info(MALLOC_CAP_DMA);
-        heap_caps_print_heap_info(MALLOC_CAP_EXEC);
-        __attribute__((fallthrough)); // for GCC -Wimplicit-fallthrough
-    case 1:
-        heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
-        heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
-        break;
-    }
-    return ESP_OK;
-}
-#endif // CONSOLE_UTILS_LSMEM
 
 #ifdef CONSOLE_UTILS_LSFS
 static struct {
@@ -763,6 +757,35 @@ static int utils_listdir(int argc, char **argv) {
     return ESP_OK;
 }
 #endif // CONSOLE_UTILS_LSFS
+
+#ifdef CONSOLE_UTILS_LSMEM
+static struct {
+    struct arg_lit *verbose;
+    struct arg_end *end;
+} utils_memory_args = {
+    .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
+    .end = arg_end(1)
+};
+
+static int utils_memory(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &utils_memory_args))
+        return ESP_ERR_INVALID_ARG;
+    switch (utils_memory_args.verbose->count) {
+        case 0:
+            memory_info(); break;
+        case 2:
+            // heap_caps_dump_all(); break; // Too much infomation
+            heap_caps_print_heap_info(MALLOC_CAP_DMA);
+            heap_caps_print_heap_info(MALLOC_CAP_EXEC);
+            __attribute__((fallthrough));
+        case 1:
+            heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
+            heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
+            break;
+    }
+    return ESP_OK;
+}
+#endif // CONSOLE_UTILS_LSMEM
 
 #ifdef CONSOLE_UTILS_HIST
 static struct {
@@ -826,21 +849,30 @@ static int utils_history(int argc, char **argv) {
 
 static void register_utils() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_UTILS_VER
+#ifdef CONSOLE_UTILS_CONFIG
+        {
+            .command = "config",
+            .help = "Set / get / load / save / list configurations",
+            .hint = NULL,
+            .func = &utils_config,
+            .argtable = &utils_config_args
+        },
+#endif
+#ifdef CONSOLE_UTILS_LOGGING
+        {
+            .command = "logging",
+            .help = "Set / get ESP logging level",
+            .hint = NULL,
+            .func = &utils_logging,
+            .argtable = &utils_logging_args
+        },
+#endif
+#ifdef CONSOLE_UTILS_VERSION
         {
             .command = "version",
             .help = "Get version of firmware and SDK",
             .hint = NULL,
             .func = &utils_version,
-            .argtable = NULL
-        },
-#endif
-#ifdef CONSOLE_UTILS_LSHW
-        {
-            .command = "lshw",
-            .help = "Display hardware information",
-            .hint = NULL,
-            .func = &utils_hardware,
             .argtable = NULL
         },
 #endif
@@ -862,13 +894,13 @@ static void register_utils() {
             .argtable = NULL
         },
 #endif
-#ifdef CONSOLE_UTILS_LSMEM
+#ifdef CONSOLE_UTILS_LSHW
         {
-            .command = "lsmem",
-            .help = "List avaiable memory blocks with their status",
+            .command = "lshw",
+            .help = "Display hardware information",
             .hint = NULL,
-            .func = utils_memory,
-            .argtable = &utils_memory_args
+            .func = &utils_hardware,
+            .argtable = NULL
         },
 #endif
 #ifdef CONSOLE_UTILS_LSFS
@@ -878,6 +910,15 @@ static void register_utils() {
             .hint = NULL,
             .func = &utils_listdir,
             .argtable = &utils_listdir_args
+        },
+#endif
+#ifdef CONSOLE_UTILS_LSMEM
+        {
+            .command = "lsmem",
+            .help = "List avaiable memory blocks with their status",
+            .hint = NULL,
+            .func = utils_memory,
+            .argtable = &utils_memory_args
         },
 #endif
 #ifdef CONSOLE_UTILS_HIST
@@ -961,65 +1002,7 @@ static int net_ap(int argc, char **argv) {
     return wifi_ap_list_sta();
 }
 #endif // CONSOLE_NET_AP
-
-#ifdef CONSOLE_NET_IPERF
-static struct {
-    struct arg_str *host;
-    struct arg_int *port;
-    struct arg_int *size;
-    struct arg_int *intv;
-    struct arg_int *tout;
-    struct arg_lit *stop;
-    struct arg_lit *udp;
-    struct arg_end *end;
-} net_iperf_args = {
-    .host = arg_str0("c", NULL, "<host>", "run in client mode"),
-    .port = arg_int0("p", NULL, "<port>", "specify port number"),
-    .size = arg_int0("l", NULL, "<bytes>", "read/write buffer size"),
-    .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
-    .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
-    .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
-    .udp = arg_lit0("u", "udp", "use UDP rather than TCP"),
-    .end = arg_end(7)
-};
-
-static int net_iperf(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &net_iperf_args))
-        return ESP_ERR_INVALID_ARG;
-    return iperf_command(
-        ARG_STR(net_iperf_args.host, NULL),
-        ARG_INT(net_iperf_args.port, 0), ARG_INT(net_iperf_args.size, 0),
-        ARG_INT(net_iperf_args.intv, 0), ARG_INT(net_iperf_args.tout, 0),
-        net_iperf_args.stop->count, net_iperf_args.udp->count
-    );
-}
-#endif
-
-#ifdef CONSOLE_NET_PING
-static struct {
-    struct arg_str *host;
-    struct arg_int *tout;
-    struct arg_int *size;
-    struct arg_int *npkt;
-    struct arg_end *end;
-} net_ping_args = {
-    .host = arg_str1(NULL, NULL, "<host>", "target IP address"),
-    .tout = arg_int0("t", NULL, "<msec>", "time to wait for a response"),
-    .size = arg_int0("s", NULL, "<byte>", "number of data bytes to be sent"),
-    .npkt = arg_int0("c", NULL, "<num>", "stop after sending num packets"),
-    .end = arg_end(4)
-};
-
-static int net_ping(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &net_ping_args))
-        return ESP_ERR_INVALID_ARG;
-    return ping_command(
-        net_ping_args.host->sval[0], ARG_INT(net_ping_args.tout, 0),
-        ARG_INT(net_ping_args.size, 0), ARG_INT(net_ping_args.npkt, 0)
-    );
-}
-#endif
-
+       //
 #ifdef CONSOLE_NET_FTM
 static struct {
     struct arg_str *cmd;
@@ -1061,6 +1044,94 @@ static int net_ftm(int argc, char **argv) {
 }
 #endif
 
+#ifdef CONSOLE_NET_MDNS
+static struct {
+    struct arg_str *ctrl;
+    struct arg_str *host;
+    struct arg_str *serv;
+    struct arg_str *proto;
+    struct arg_int *tout;
+    struct arg_end *end;
+} net_mdns_args = {
+    .ctrl = arg_str0("a", NULL, "<on|off>", "for responder: enable / disable"),
+    .host = arg_str0("h", NULL, "<hostname>", "mDNS hostname to query"),
+    .serv = arg_str0("s", NULL, "<_http|_ftp|etc>", "mDNS service to query"),
+    .proto = arg_str0("p", NULL, "<_tcp|_udp|etc>", "mDNS protocol to query"),
+    .tout = arg_int0("t", NULL, "<msec>", "time to wait for querying record"),
+    .end = arg_end(4)
+};
+
+static int net_mdns(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_mdns_args))
+        return ESP_ERR_INVALID_ARG;
+    return mdns_command(
+        ARG_STR(net_mdns_args.ctrl, NULL),
+        ARG_STR(net_mdns_args.host, NULL),
+        ARG_STR(net_mdns_args.serv, NULL),
+        ARG_STR(net_mdns_args.proto, NULL),
+        ARG_INT(net_mdns_args.tout, 0)
+    );
+}
+#endif
+
+#ifdef CONSOLE_NET_PING
+static struct {
+    struct arg_str *host;
+    struct arg_int *tout;
+    struct arg_int *size;
+    struct arg_int *npkt;
+    struct arg_end *end;
+} net_ping_args = {
+    .host = arg_str1(NULL, NULL, "<host>", "target IP address"),
+    .tout = arg_int0("t", NULL, "<msec>", "time to wait for a response"),
+    .size = arg_int0("s", NULL, "<byte>", "number of data bytes to be sent"),
+    .npkt = arg_int0("c", NULL, "<num>", "stop after sending num packets"),
+    .end = arg_end(4)
+};
+
+static int net_ping(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_ping_args))
+        return ESP_ERR_INVALID_ARG;
+    return ping_command(
+        net_ping_args.host->sval[0], ARG_INT(net_ping_args.tout, 0),
+        ARG_INT(net_ping_args.size, 0), ARG_INT(net_ping_args.npkt, 0)
+    );
+}
+#endif
+
+#ifdef CONSOLE_NET_IPERF
+static struct {
+    struct arg_str *host;
+    struct arg_int *port;
+    struct arg_int *size;
+    struct arg_int *intv;
+    struct arg_int *tout;
+    struct arg_lit *stop;
+    struct arg_lit *udp;
+    struct arg_end *end;
+} net_iperf_args = {
+    .host = arg_str0("c", NULL, "<host>", "run in client mode"),
+    .port = arg_int0("p", NULL, "<port>", "specify port number"),
+    .size = arg_int0("l", NULL, "<bytes>", "read/write buffer size"),
+    .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
+    .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
+    .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
+    .udp = arg_lit0("u", "udp", "use UDP rather than TCP"),
+    .end = arg_end(7)
+};
+
+static int net_iperf(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &net_iperf_args))
+        return ESP_ERR_INVALID_ARG;
+    return iperf_command(
+        ARG_STR(net_iperf_args.host, NULL),
+        ARG_INT(net_iperf_args.port, 0), ARG_INT(net_iperf_args.size, 0),
+        ARG_INT(net_iperf_args.intv, 0), ARG_INT(net_iperf_args.tout, 0),
+        net_iperf_args.stop->count, net_iperf_args.udp->count
+    );
+}
+#endif
+
 static void register_network() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_NET_STA
@@ -1081,13 +1152,22 @@ static void register_network() {
             .argtable = &net_ap_args
         },
 #endif
-#ifdef CONSOLE_NET_IPERF
+#ifdef CONSOLE_NET_FTM
         {
-            .command = "iperf",
-            .help = "Bandwidth test on IP networks",
+            .command = "ftm",
+            .help = "Fine Timing Measurement between STA and AP using RTT",
             .hint = NULL,
-            .func = &net_iperf,
-            .argtable = &net_iperf_args
+            .func = &net_ftm,
+            .argtable = &net_ftm_args
+        },
+#endif
+#ifdef CONSOLE_NET_MDNS
+        {
+            .command = "mdns",
+            .help = "Query / Get mDNS hostname and service info",
+            .hint = NULL,
+            .func = &net_mdns,
+            .argtable = &net_mdns_args
         },
 #endif
 #ifdef CONSOLE_NET_PING
@@ -1099,13 +1179,13 @@ static void register_network() {
             .argtable = &net_ping_args
         },
 #endif
-#ifdef CONSOLE_NET_FTM
+#ifdef CONSOLE_NET_IPERF
         {
-            .command = "ftm",
-            .help = "Fine Timing Measurement between STA and AP using RTT",
+            .command = "iperf",
+            .help = "Bandwidth test on IP networks",
             .hint = NULL,
-            .func = &net_ftm,
-            .argtable = &net_ftm_args
+            .func = &net_iperf,
+            .argtable = &net_iperf_args
         },
 #endif
     };
@@ -1119,9 +1199,8 @@ static void register_network() {
 extern "C" void console_register_commands() {
     esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_ERROR_CHECK( esp_console_register_help_command() );
-    register_system();
-    register_config();
-    register_driver();
-    register_utils();
     register_network();
+    register_driver();
+    register_system();
+    register_utils();
 }

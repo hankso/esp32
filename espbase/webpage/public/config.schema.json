@@ -87,13 +87,25 @@
         { "maxLength": 0 }
       ]
     },
-    "app.dns.run": {
+    "web.path.data": {
+      "description": "Directory to storage user uploaded files",
+      "type": "string"
+    },
+    "web.path.docs": {
+      "description": "Directory to generated documentation",
+      "type": "string"
+    },
+    "web.path.root": {
+      "description": "Directory to static webpage files",
+      "type": "string"
+    },
+    "app.mdns.run": {
       "description": "Enable mDNS server",
       "type": "string",
       "pattern": "^[01yn]?$"
     },
-    "app.dns.host": {
-      "description": "Redirect http://{DNS_HOST} to http://{AP_HOST}",
+    "app.mdns.host": {
+      "description": "Register mDNS hostname",
       "type": "string",
       "anyOf": [
         { "format": "hostname" },

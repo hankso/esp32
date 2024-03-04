@@ -92,9 +92,8 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
                 deleteOriginFile: true,
             }),
             visualizer({
-                filename: 'resources.html',
                 template: 'treemap', // sunburst|treemap|network|raw-data|list
-                emitFile: true,
+                emitFile: dist === './dist',
                 gzipSize: true,
                 brotliSize: true,
             }),

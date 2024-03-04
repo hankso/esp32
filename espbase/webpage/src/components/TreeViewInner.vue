@@ -29,7 +29,7 @@ const { useLink, isActive, guessIcon } = inject('TreeView')
             :prepend-icon="guessIcon(item)"
         >
             <template #subtitle>
-                {{ item.date ? strftime('%F %T', item.date) : '' }} -
+                {{ item.date ? strftime('%F %T - ', item.date) : '' }}
                 {{ item.size ? formatSize(item.size) : '' }}
             </template>
         </v-list-item>

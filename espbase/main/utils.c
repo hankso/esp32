@@ -46,30 +46,6 @@ const char * format_sha256(const uint8_t *src, size_t len) {
     return buf;
 }
 
-const char * format_mac(const uint8_t *src, size_t len) {
-    static char buf[17 + 1]; // XX:XX:XX:XX:XX:XX
-    if (!src || !len) { buf[0] = '\0'; return buf; }
-    LOOPN(i, 6) {
-        buf[3 * i] = hexdigits(src[i] >> 4);
-        buf[3 * i + 1] = hexdigits(src[i] & 0xF);
-        buf[3 * i + 2] = (i == 5) ? '\0' : ':';
-    }
-    buf[MIN(len, 17)] = '\0';
-    return buf;
-}
-
-const char * format_ip(uint32_t addr, size_t len) {
-    static char buf[15 + 1]; // XXX.XXX.XXX.XXX
-    if (!len) { buf[0] = '\0'; return buf; }
-    uint8_t idx = 0;
-    LOOPN(i, 4) {
-        idx += snprintf(buf + idx, 16 - idx, "%d", (addr >> (i * 8)) & 0xFF);
-        buf[idx++] = (i == 3) ? '\0' : '.';
-    }
-    buf[MIN(len, 15)] = '\0';
-    return buf;
-}
-
 // Note: format_size format string into static buffer. Therefore you don't
 // need to free the buffer after logging/strcpy etc. But you must save the
 // result before calling format_size once again, because the buffer will be
@@ -201,71 +177,68 @@ void hardware_info() {
     printf("AP  MAC address: " MACSTR "\n", MAC2STR(ap));
 }
 
-static esp_partition_type_t partition_types[] = {
-    ESP_PARTITION_TYPE_DATA, ESP_PARTITION_TYPE_APP
-};
-
-static void partition_type_str(
-    esp_partition_type_t type, esp_partition_subtype_t subtype,
-    const char **type_str, const char **subtype_str
+static const char * partition_subtype_str(
+    esp_partition_type_t type, esp_partition_subtype_t subtype
 ) {
-    static char type_buf[16], subtype_buf[16];
-    snprintf(type_buf, sizeof(type_buf), "0x%02X", type);
-    snprintf(subtype_buf, sizeof(subtype_buf), "0x%02X", subtype);
-    *type_str = type_buf; *subtype_str = subtype_buf;
+    static char buf[8];
+    snprintf(buf, sizeof(buf), "0x%02X", subtype);
     if (type == ESP_PARTITION_TYPE_DATA) {
-        *type_str = "data";
         switch (subtype) {
-        case ESP_PARTITION_SUBTYPE_DATA_OTA: *subtype_str = "ota"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_PHY: *subtype_str = "phy"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_NVS: *subtype_str = "nvs"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_COREDUMP: *subtype_str = "coredump"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS: *subtype_str = "nvs_keys"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM: *subtype_str = "efuse_em"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD: *subtype_str = "esphttpd"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_FAT: *subtype_str = "fat"; break;
-        case ESP_PARTITION_SUBTYPE_DATA_SPIFFS: *subtype_str = "spiffs"; break;
-        default: break;
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_OTA, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_PHY, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_NVS, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_COREDUMP, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_UNDEFINED, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_FAT, 27);
+            CASESTR(ESP_PARTITION_SUBTYPE_DATA_SPIFFS, 27);
+            default: break;
         }
     } else if (type == ESP_PARTITION_TYPE_APP) {
-        *type_str = "app";
         switch (subtype) {
-        case ESP_PARTITION_SUBTYPE_APP_FACTORY: *subtype_str = "factory"; break;
-        case ESP_PARTITION_SUBTYPE_APP_TEST:    *subtype_str = "test"; break;
-        default:
-            if (
-                subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
-                subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX
-            ) {
-                snprintf(subtype_buf, sizeof(subtype_buf), "ota_%d",
-                        subtype - ESP_PARTITION_SUBTYPE_APP_OTA_MIN);
-            }
-            break;
+            CASESTR(ESP_PARTITION_SUBTYPE_APP_FACTORY, 26);
+            CASESTR(ESP_PARTITION_SUBTYPE_APP_TEST, 26);
+            default:
+                if (
+                    subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
+                    subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX
+                ) {
+                    subtype -= ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
+                    snprintf(buf, sizeof(buf), "ota_%d", subtype);
+                }
+                break;
         }
+    }
+    return buf;
+}
+
+static const char * partition_type_str(esp_partition_type_t type) {
+    static char buf[8];
+    switch (type) {
+        CASESTR(ESP_PARTITION_TYPE_DATA, 19);
+        CASESTR(ESP_PARTITION_TYPE_APP, 19);
+        default: snprintf(buf, sizeof(buf), "0x%02X", type); return buf;
     }
 }
 
 void partition_info() {
     uint8_t num = 0;
-    const char *tstr, *ststr;
     const esp_partition_t * parts[16], *part, *tmp;
-    esp_partition_iterator_t iter;
-    LOOPN(i, LEN(partition_types)) {
-        iter = esp_partition_find(
-            partition_types[i],
-            ESP_PARTITION_SUBTYPE_ANY, NULL);
-        while (iter != NULL && num < 16) {
-            part = esp_partition_get(iter);
-            LOOPN(j, num) {
-                if (parts[j]->address < part->address) {
-                    tmp = parts[j]; parts[j] = part; part = tmp;
-                }
+    esp_partition_iterator_t iter = esp_partition_find(
+        ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
+    while (iter != NULL && num < LEN(parts)) {
+        part = esp_partition_get(iter);
+        LOOPN(j, num) {
+            if (parts[j]->address < part->address) {
+                tmp = parts[j]; parts[j] = part; part = tmp;
             }
-            parts[num++] = part;
-            iter = esp_partition_next(iter);
         }
-        esp_partition_iterator_release(iter);
+        parts[num++] = part;
+        iter = esp_partition_next(iter);
     }
+    esp_partition_iterator_release(iter);
     if (!num) {
         printf("No partitons found in flash. Skip");
         return;
@@ -273,9 +246,9 @@ void partition_info() {
     printf("LabelName    Type SubType  Offset   Size     Secure\n");
     while (num--) {
         part = parts[num];
-        partition_type_str(part->type, part->subtype, &tstr, &ststr);
         printf("%-12s %-4s %-8s 0x%06X 0x%06X %s\n",
-               part->label, tstr, ststr, part->address, part->size,
-               part->encrypted ? "true" : "false");
+               part->label, partition_type_str(part->type),
+               partition_subtype_str(part->type, part->subtype),
+               part->address, part->size, part->encrypted ? "true" : "false");
     }
 }

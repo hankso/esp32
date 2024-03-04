@@ -64,34 +64,42 @@ bool CFSImpl::mkdir(const char *path) {
 bool CFSImpl::rmdir(const char *path) { return remove(path); }
 
 void _jsonify_file(File file, void *arg) {
-    cJSON *obj = cJSON_CreateObject();
-    cJSON_AddStringToObject(obj, "name", file.path());
-    cJSON_AddNumberToObject(obj, "size", file.size());
-    cJSON_AddNumberToObject(obj, "date", file.getLastWrite());
-    cJSON_AddStringToObject(obj, "type", file.isDirectory() ? "folder":"file");
-    cJSON_AddItemToArray((cJSON *)arg, obj);
+    cJSON *n = cJSON_CreateObject();
+    cJSON_AddStringToObject(n, "name", file.name());
+    cJSON_AddNumberToObject(n, "size", file.size());
+    cJSON_AddNumberToObject(n, "date", file.getLastWrite());
+    cJSON_AddStringToObject(n, "type", file.isDirectory() ? "folder" : "file");
+    cJSON_AddItemToArray((cJSON *)arg, n);
 }
 
 typedef struct {
     FILE *stream;
+    size_t align;
     bool header;
-} loginfo_file_t;
+} loginfo_ctx_t;
 
-void _loginfo_file(File file, void *arg) {
-    loginfo_file_t *ptr = (loginfo_file_t *)arg;
+void _loginfo_count(File file, void *arg) {
+    loginfo_ctx_t *ptr = (loginfo_ctx_t *)arg;
+    if (!ptr->header) ptr->align = MAX(ptr->align, strlen(file.name()));
+}
+
+void _loginfo_print(File file, void *arg) {
+    loginfo_ctx_t *ptr = (loginfo_ctx_t *)arg;
     if (!ptr->header) {
-        fprintf(ptr->stream, "Type   Size  Last-Modify Filename\n");
+        fprintf(ptr->stream, "Type     Size %-*s (Last Modified)\n",
+                ptr->align, "Filename");
         ptr->header = true;
     }
-    fprintf(ptr->stream, "%-4s %6s %12lu %s\n",
+    fprintf(ptr->stream, "%-4s %8s %-*s (%lu)\n",
         file.isDirectory() ? "DIR" : "FILE",
         format_size(file.size(), false),
-        file.getLastWrite(), file.path());
+        ptr->align, file.name(), file.getLastWrite());
 }
 
 void CFS::list(const char *path, FILE *stream) {
-    loginfo_file_t tmp = { stream, false };
-    walk(path, &_loginfo_file, &tmp);
+    loginfo_ctx_t tmp = { stream, strlen("Filename"), false };
+    walk(path, &_loginfo_count, &tmp);
+    walk(path, &_loginfo_print, &tmp);
 }
 
 char * CFS::list(const char *path) {
@@ -186,6 +194,14 @@ void CFSFileImpl::close() {
     if (_dir)  { closedir(_dir); _dir = NULL; }
     if (_file) { fclose(_file);  _file = NULL; }
     _badfile = _baddir = true;
+}
+
+const char * CFSFileImpl::name() const {
+    size_t len = strlen(_path);
+    if (len < 2) return _path;
+    char *ptr = (char *)_path + len - 2;
+    while (ptr > _path && *ptr != '/' && *ptr != '\\') ptr--;
+    return ptr + 1;
 }
 
 boolean CFSFileImpl::seekDir(long pos) {

@@ -35,10 +35,6 @@ static const char * const ota_img_states[] = {
     "Running", "OTANext"
 };
 
-static bool UNUSED check_valid() {
-    return true; // TODO: validate app with secure key and signature
-}
-
 void ota_initialize() {
     esp_log_level_set(TAG, ESP_LOG_WARN);
     const esp_partition_t
@@ -57,7 +53,7 @@ void ota_initialize() {
     esp_ota_img_states_t state;
     if (esp_ota_get_state_partition(running, &state)) return;
     if (state != ESP_OTA_IMG_PENDING_VERIFY) return;
-    if (check_valid()) {
+    if (true) { // how to validate app with secure key and signature?
         ESP_LOGW(TAG, "App validation success!");
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         if (!err) err = esp_ota_erase_last_boot_app_partition();
@@ -69,10 +65,10 @@ void ota_initialize() {
     } else if (esp_ota_check_rollback_is_possible()) {
         esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
         if (err) {
-            ESP_LOGE(TAG, "Cannot rollback: %s", esp_err_to_name(err));
+            ESP_LOGE(TAG, "Could not rollback: %s", esp_err_to_name(err));
             // esp_restart();  // still running with error
         }
-    } else ESP_LOGE(TAG, "App validation fail!");
+    } else ESP_LOGE(TAG, "App validation failed!");
 #endif // CONFIG_APP_ROLLBACK_ENABLE
 }
 

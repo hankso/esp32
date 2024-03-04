@@ -108,8 +108,9 @@ const decoder = new TextDecoder()
 
 export default class SerialController {
     constructor() {
-        this.portIds = portIds
+        this.buffer = ''
         this.opened = ref(false)
+        this.portIds = portIds
         this.schema = reactive(deepcopy(OptionSchema))
         this.options = reactive(deepcopy(OptionDefault))
     }
@@ -148,9 +149,9 @@ export default class SerialController {
 
     async close() {
         if (!toValue(this.opened)) return
-        await this.reader.cancel()
+        await this.reader.cancel().catch(() => {})
         await this.reader.releaseLock()
-        await this.writer.close()
+        await this.writer.close().catch(() => {})
         await this.writer.releaseLock()
         await this.port.close()
         this.opened.value = false
@@ -160,12 +161,18 @@ export default class SerialController {
         return await this?.writer.write(encoder.encode(data))
     }
 
-    async read() {
+    async read(until = '\n') {
         if (!toValue(this.opened)) throw new TypeError('Port is closed')
         let { value, done } = await this.reader.read()
-        if (value) return decoder.decode(value)
         if (done) await this.reader.releaseLock()
-        throw new TypeError('Stream reader is released')
+        if (!value) throw new TypeError('Stream reader is released')
+        this.buffer += decoder.decode(value).replace(/\r\n?/g, '\n')
+        let idx = this.buffer.lastIndexOf(until) + 1
+        if (idx > 0) {
+            let msg = this.buffer.slice(0, idx)
+            this.buffer = this.buffer.slice(idx)
+            return msg
+        }
     }
 
     async setSignals(opt = {}) {

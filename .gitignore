@@ -7,16 +7,20 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
-dist/
-build/
-coverage/
-www/
 *.old
 *.lock
 *.local
 
+dist/
+build/
+cache/
+coverage/
+**/files/www/
+**/files/docs/
+
+stats.html
 node_modules
-managed_components/
+managed_components
 
 # Editor directories and files
 .vscode/*

@@ -104,10 +104,10 @@ public:
     size_t      tell() const;
     void        flush() override;
     void        close() override;
+    const char* name() const override;
 
     operator    bool()                  { return !_badfile || !_baddir; }
     const char* path() const override   { return (const char *)_path; }
-    const char* name() const override   { return pathToFileName(_path); }
     size_t      size() const override   { _getstat(); return _stat.st_size; }
     time_t      getLastWrite() override { _getstat(); return _stat.st_mtime; }
     size_t      position() const override { return tell(); }

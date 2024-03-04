@@ -1,6 +1,6 @@
 <script setup>
 import { name } from '@/../package.json'
-import { strftime } from '@/utils'
+import { escape, strftime } from '@/utils'
 import SerialController from '@/utils/serial'
 
 import { mdiCog, mdiOctagon, mdiCloseOctagon } from '@mdi/js'
@@ -32,12 +32,11 @@ function request() {
 }
 
 function print(msg, timestamp = true) {
-    let term = toValue(terminal)
-    if (!term) return
-    msg.split('\n').forEach((line, idx) => {
-        if (line && !idx) return term.appendMessage(line)
+    msg = msg.trimEnd()
+    if (!msg || !toValue(terminal)) return
+    msg.split('\n').forEach(line => {
         if (timestamp) line = strftime('%T ') + line
-        term.pushMessage({ type: 'ansi', content: line })
+        toValue(terminal).pushMessage({ type: 'ansi', content: line })
     })
 }
 
@@ -45,24 +44,23 @@ function toggle(val) {
     if (val ?? !toValue(opened)) {
         return serial
             .open(serial.options, toValue(filter))
-            .catch(notify)
             .then(function readloop() {
                 serial
                     .read()
-                    .then(msg => print(msg) || readloop())
-                    .catch(console.log)
+                    .then(msg => print(msg ?? '') || readloop())
+                    .catch(e => print(escape(e, 31)))
             })
+            .catch(notify)
     } else {
         return serial.close()
     }
 }
 
-onMounted(() => print('', false))
 onBeforeUnmount(() => toggle(false))
 </script>
 
 <template>
-    <v-sheet border rounded="lg" class="overflow-hidden">
+    <v-sheet border rounded="lg" class="overflow-hidden h-100">
         <CommandLine
             ref="terminal"
             :title

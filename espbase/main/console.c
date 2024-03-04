@@ -207,7 +207,6 @@ static char * rpc_error(double code, const char *errstr) {
     cJSON_AddStringToObject(error, "message", errstr);
     char *ret = cJSON_PrintUnformatted(rep);
     cJSON_Delete(rep);
-    cJSON_Delete(error);
     return ret;
 }
 

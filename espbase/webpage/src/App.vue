@@ -143,7 +143,11 @@ onMounted(() => {
     </v-dialog>
 
     <v-app>
-        <v-navigation-drawer v-model="drawer" :rounded="lg ? 0 : 'e-xl'">
+        <v-navigation-drawer
+            v-model="drawer"
+            :rounded="lg ? 0 : 'e-lg'"
+            @keyup.esc="drawer = false"
+        >
             <v-list nav class="mt-n1 mb-n3">
                 <v-list-item :title :subtitle="`${desc} v${version}`">
                     <template #append v-if="!lg">
@@ -158,21 +162,30 @@ onMounted(() => {
             <v-list nav :items></v-list>
         </v-navigation-drawer>
 
-        <v-app-bar scroll-behavior="hide" density="comfortable">
-            <v-app-bar-nav-icon @click="drawer = !drawer"></v-app-bar-nav-icon>
-            {{ title }}
+        <v-app-bar border="b" elevation="0" density="comfortable" :title>
+            <ProgressBar :loading="progbar" style="position: absolute" />
+            <template #prepend>
+                <v-app-bar-nav-icon
+                    @click="drawer = !drawer"
+                    @keyup.esc="drawer = false"
+                ></v-app-bar-nav-icon>
+            </template>
             <template #append>
+                <v-btn variant="text">STA mode</v-btn>
+                <v-btn variant="text" v-if="apmode">AP mode</v-btn>
+                <v-divider vertical class="mx-2"></v-divider>
                 <v-btn icon @click="toggleTheme">
                     <v-icon :icon="mdiCompare"></v-icon>
-                    <v-tooltip activator="parent">Toggle theme</v-tooltip>
+                    <v-tooltip activator="parent" location="bottom">
+                        Toggle theme
+                    </v-tooltip>
                 </v-btn>
             </template>
-            <ProgressBar :loading="progbar" style="position: absolute" />
         </v-app-bar>
 
         <v-main id="main-content">
             <v-container class="h-100">
-                <router-view></router-view>
+                <RouterView />
             </v-container>
         </v-main>
     </v-app>

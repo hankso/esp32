@@ -33,15 +33,15 @@ typedef struct config_webserver_t {
     const char * WS_PASS;   // Password to auth websocket connection
     const char * HTTP_NAME; // Username to auth webserver (HTTP)
     const char * HTTP_PASS; // Password to auth webserver (HTTP)
-    const char * DIR_DATA;  // Directory to storage data (gcode etc)
+    const char * DIR_DATA;  // Directory to storage user uploaded files
     const char * DIR_DOCS;  // Directory to generated documentation
     const char * DIR_ROOT;  // Directory to static webpage files
 } config_web_t;
 
 // For easier managing, Boolean values are stored as "0" or "1" (string)
 typedef struct config_application_t {
-    const char * DNS_RUN;   // Enable mDNS service
-    const char * DNS_HOST;  // Redirect http://{DNS_HOST} to http://{AP_HOST}
+    const char * MDNS_RUN;  // Enable mDNS service
+    const char * MDNS_HOST; // Register mDNS hostname
     const char * OTA_RUN;   // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
     const char * PROMPT;    // Console promption string

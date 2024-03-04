@@ -611,12 +611,12 @@ void i2c_detect(int bus) {
             continue;
         }
         switch (smbus_probe(bus, addr)) {
-        case ESP_OK:
-            printf(" %02X", addr); break;
-        case ESP_ERR_TIMEOUT:
-            printf(" UU"); break;
-        default:
-            printf(" --");
+            case ESP_OK:
+                printf(" %02X", addr); break;
+            case ESP_ERR_TIMEOUT:
+                printf(" UU"); break;
+            default:
+                printf(" --");
         }
     }
 }
@@ -849,54 +849,53 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     esp_err_t err;
     float bmax = 0, bmin = 1e10, btmp[4];
     switch (idx) {
-    case ALS_TRACK_0: case ALS_TRACK_1:     // maximize brightness
-    case ALS_TRACK_2: case ALS_TRACK_3:
-        for (int i = 0, v = 0; v < 90; i++, v += 6) {
-            for (int h = 0; h < 180; h += 5) {
-                int htmp = i % 2 ? (180 - h) : h; // S line scanning
-                if (( err = pwm_set_degree(htmp, v) )) return err;
-                msleep(50);
-                btmp[0] = als_brightness(idx);
-                ESP_LOGD(TAG, "ALS: H %3d V %3d %8.2f lux\n", htmp, v, btmp[0]);
-                if (btmp[0] > bmax) {
-                    bmax = btmp[0];
-                    *hdeg = htmp;
+        case ALS_TRACK_0: case ALS_TRACK_1:     // maximize brightness
+        case ALS_TRACK_2: case ALS_TRACK_3:
+            for (int i = 0, v = 0; v < 90; i++, v += 6) {
+                for (int h = 0; h < 180; h += 5) {
+                    int htmp = i % 2 ? (180 - h) : h; // S line scanning
+                    if (( err = pwm_set_degree(htmp, v) )) return err;
+                    msleep(50);
+                    btmp[0] = als_brightness(idx);
+                    printf("ALS: H %3d V %3d %8.2f lux\n", htmp, v, btmp[0]);
+                    if (btmp[0] > bmax) {
+                        bmax = btmp[0];
+                        *hdeg = htmp;
+                        *vdeg = v;
+                    }
+                }
+            }
+            break;
+        case ALS_TRACK_H:           // minimize difference of east and west
+            for (int h = 0; h < 180; h += 15) {
+                if (( err = pwm_set_degree(h, -1) )) return err;
+                msleep(200);
+                if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
+                if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
+                if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
+                    bmin = btmp[2];
+                    *hdeg = h;
+                }
+            }
+            break;
+        case ALS_TRACK_V:           // minimize difference of north and south
+            for (int v = 0; v < 90; v += 9) {
+                if (( err = pwm_set_degree(-1, v) )) return err;
+                msleep(200);
+                if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
+                if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
+                if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
+                    bmin = btmp[2];
                     *vdeg = v;
                 }
             }
-        }
-        break;
-    case ALS_TRACK_H:           // minimize difference of east and west
-        for (int h = 0; h < 180; h += 15) {
-            if (( err = pwm_set_degree(h, -1) )) return err;
-            msleep(200);
-            if (( btmp[0] = als_brightness(0) ) > bmax) bmax = btmp[0];
-            if (( btmp[1] = als_brightness(1) ) > bmax) bmax = btmp[1];
-            if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
-                bmin = btmp[2];
-                *hdeg = h;
-            }
-        }
-        break;
-    case ALS_TRACK_V:           // minimize difference of north and south
-        for (int v = 0; v < 90; v += 9) {
-            if (( err = pwm_set_degree(-1, v) )) return err;
-            msleep(200);
-            if (( btmp[0] = als_brightness(2) ) > bmax) bmax = btmp[0];
-            if (( btmp[1] = als_brightness(3) ) > bmax) bmax = btmp[1];
-            if (( btmp[2] = ABSDIFF(btmp[0], btmp[1]) ) < bmin) {
-                bmin = btmp[2];
-                *vdeg = v;
-            }
-        }
-        break;
-    case ALS_TRACK_A:
-        puts("TODO: PID Light Tracking"); break;
-    default: return ESP_ERR_INVALID_ARG;
+            break;
+        case ALS_TRACK_A:
+            puts("TODO: PID Light Tracking"); break;
+        default: return ESP_ERR_INVALID_ARG;
     }
-    if (bmax != 0 || bmin != 1e10) {
+    if (bmax != 0 || bmin != 1e10)
         return pwm_set_degree(*hdeg, *vdeg);
-    }
 #endif // CONFIG_ALS_TRACK
     return ESP_ERR_NOT_FOUND;
 }

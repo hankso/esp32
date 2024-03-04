@@ -4,20 +4,18 @@ import axios from 'axios'
 import { basename, resolve } from 'path-browserify'
 
 async function toFormData(data, name = 'data') {
-    let filename
+    let fn = name
     let tmp = data
     let dtype = type(data)
     switch (dtype) {
-        case 'file':
-            break
         case 'blob':
             break
-        case 'object':
-            tmp = new Blob([JSON.stringify(tmp)], { type: 'application/json' })
+        case 'file':
+            fn = basename(data.name)
             break
         case 'string':
-            filename = basename(name)
-            if (filename.endsWith('.gz')) {
+            fn = basename(name)
+            if (fn.endsWith('.gz')) {
                 let bytes = await gzipCompress(tmp)
                 tmp = new Blob([bytes], { type: 'application/gzip' })
             } else {
@@ -26,8 +24,11 @@ async function toFormData(data, name = 'data') {
             break
         case 'uint8array':
         case 'arraybuffer':
-            filename = basename(name)
+            fn = basename(name)
             tmp = new Blob([tmp], { type: 'application/octet-stream' })
+            break
+        case 'object':
+            tmp = new Blob([JSON.stringify(tmp)], { type: 'application/json' })
             break
         case 'formdata':
             return Promise.resolve(data)
@@ -35,13 +36,13 @@ async function toFormData(data, name = 'data') {
             return Promise.reject({ message: `Invalid type ${dtype}` })
     }
     data = new FormData()
-    data.append(name, tmp, ...(filename ? [filename] : []))
+    data.append(fn, tmp, name)
     return Promise.resolve(data)
 }
 
 const api = axios.create({
     baseURL: '/api/',
-    timeout: 3000,
+    timeout: 5000,
 })
 
 function merge(opt1, opt2, instance = api) {
@@ -72,6 +73,11 @@ export function listDir(path = '', opt = {}) {
     return merge(opt, {
         url: 'edit',
         params: { list: path },
+    }).then(resp => {
+        resp.data.forEach(node => {
+            node.name = node.name.replace(new RegExp(`^${path}`), '')
+        })
+        return resp
     })
 }
 

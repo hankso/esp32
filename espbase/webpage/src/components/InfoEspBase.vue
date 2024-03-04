@@ -32,7 +32,7 @@ onMounted(() => {
 </script>
 
 <template>
-    <v-row class="align-start justify-center">
+    <v-row class="align-center justify-center">
         <v-col cols="12" lg="5">
             <template v-if="info">
                 <v-row v-for="(val, key) of info" :key>
@@ -51,7 +51,7 @@ onMounted(() => {
             </p>
         </v-col>
         <v-col cols="12" lg="7">
-            <v-expansion-panels>
+            <v-expansion-panels variant="popout">
                 <template v-for="(rst, cmd) in runtime" :key="cmd">
                     <v-expansion-panel v-if="rst.length" :title="cmd">
                         <v-expansion-panel-text>

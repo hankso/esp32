@@ -16,7 +16,7 @@
         @on-click="(event, name) => emits('click', event, name)"
     >
         <template #header>
-            <slot name="header"></slot>
+            <slot name="header" />
         </template>
     </Terminal>
 </template>
@@ -229,7 +229,6 @@ defineExpose({
 <style>
 .fix-terminal {
     min-height: 400px;
-    max-height: 800px;
 }
 
 .fix-terminal .t-last-line {

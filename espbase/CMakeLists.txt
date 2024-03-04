@@ -6,7 +6,7 @@ set(EXTRA_COMPONENT_DIRS
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
-project(espbase)
+project(espbase VERSION 1.0.0)
 
 spiffs_create_partition_image(
     storage ${CMAKE_CURRENT_LIST_DIR}/files

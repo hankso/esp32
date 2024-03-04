@@ -1,10 +1,13 @@
 <template>
     <v-form class="fix-schema-form-content rounded-lg overflow-x-hidden">
-        <slot></slot>
+        <slot />
 
         <template v-for="item in items" :key="item.name">
             <slot :name="item.name" v-bind="item">
-                <v-list-item :subtitle="item.schema?.description">
+                <v-list-item
+                    v-if="!hideUnknown || item.schema"
+                    :subtitle="item.schema?.description"
+                >
                     <template #title>
                         {{ item.schema?.title ?? item.name }}
                         {{ item.required ? '*' : '' }}
@@ -31,7 +34,7 @@
                     * indicates required field
                 </small>
                 <v-spacer></v-spacer>
-                <slot name="buttons"></slot>
+                <slot name="buttons" />
                 <v-btn
                     v-if="schema && showSchema"
                     text="Schema"
@@ -44,7 +47,14 @@
                     variant="text"
                     @click="Object.assign(data, backup)"
                 ></v-btn>
-                <v-btn variant="text" color="blue" type="submit">Submit</v-btn>
+                <slot name="submit">
+                    <v-btn
+                        color="blue"
+                        type="submit"
+                        text="Submit"
+                        variant="text"
+                    ></v-btn>
+                </slot>
             </div>
         </slot>
 
@@ -84,6 +94,10 @@ const props = defineProps({
         validator: () => true,
     },
     showSchema: {
+        type: Boolean,
+        default: false,
+    },
+    hideUnknown: {
         type: Boolean,
         default: false,
     },
