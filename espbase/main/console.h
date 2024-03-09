@@ -4,10 +4,9 @@
  * Create: 2020-03-12 15:57:35
  */
 
-#ifndef _CONSOLE_H_
-#define _CONSOLE_H_
+#pragma once
 
-#include <stdbool.h>
+#include "globals.h"
 
 #define CONSOLE_SYSTEM_RESTART      // 102 Bytes
 // #define CONSOLE_SYSTEM_SLEEP        // 12292 Bytes
@@ -44,7 +43,10 @@ extern "C" {
 // Config and init console. commands are registered at the end.
 void console_initialize();
 
-char * console_handle_command(const char *cmd, bool history);
+// Implemented in console_cmds.cpp
+void console_register_commands();
+
+char * console_handle_command(const char *cmd, int history);
 
 /* (R) Read from console stream (wait until command input).
  * (E) parse and Execute the command by `console_handle_command`.
@@ -64,5 +66,3 @@ char * console_handle_rpc(const char *json);
 #ifdef __cplusplus
 }
 #endif
-
-#endif // _CONSOLE_H

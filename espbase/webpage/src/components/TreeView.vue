@@ -55,7 +55,7 @@ provide('TreeView', {
 
 <template>
     <v-list
-        class="pa-0"
+        class="tree-view pa-0"
         v-model:opened="opened"
         v-model:selected="selection"
         open-strategy="multiple"

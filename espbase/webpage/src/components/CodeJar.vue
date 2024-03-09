@@ -1,5 +1,5 @@
 <template>
-    <div class="codejar">
+    <div class="code-jar">
         <div ref="elem" :class="`codejar-editor lang-${language}`"></div>
     </div>
 </template>
@@ -137,7 +137,6 @@ onBeforeUnmount(destroy)
 }
 
 .codejar-linenumbers {
-    /* rgba(128, 128, 128, 0.15) => rgb(235, 235, 235) */
     background-color: rgb(var(--v-theme-surface-light)) !important;
 }
 

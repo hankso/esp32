@@ -3,16 +3,13 @@
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  */
-#include "globals.h"
+#include "server.h"
+
+#include "config.h"
+#include "update.h"
 #include "drivers.h"
 #include "console.h"
 #include "filesys.h"
-#include "config.h"
-#include "update.h"
-#include "server.h"
-
-#include "esp_log.h"
-#include "esp_system.h"
 
 static const char
 *TAG = "Server",

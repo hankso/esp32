@@ -7,15 +7,10 @@
 #include "update.h"
 #include "config.h"
 
-#include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
 #include "esp_http_client.h"
-#include "sys/param.h"
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+#include "esp_image_format.h"
 
 static const char *TAG = "ota";
 
@@ -35,7 +30,7 @@ static const char * const ota_img_states[] = {
     "Running", "OTANext"
 };
 
-void ota_initialize() {
+void update_initialize() {
     esp_log_level_set(TAG, ESP_LOG_WARN);
     const esp_partition_t
         *running = esp_ota_get_running_partition(),
@@ -50,10 +45,14 @@ void ota_initialize() {
     }
     ota_updation_st.running = running;
 #if defined(CONFIG_APP_ROLLBACK_ENABLE) && !defined(CONFIG_AUTOSTART_ARDUINO)
+    esp_image_metadata_t data;
     esp_ota_img_states_t state;
+    const esp_partition_pos_t running_pos;
     if (esp_ota_get_state_partition(running, &state)) return;
     if (state != ESP_OTA_IMG_PENDING_VERIFY) return;
-    if (true) { // how to validate app with secure key and signature?
+    running_pos.offset = data.start_addr = running->address;
+    running_pos.size = running->size;
+    if (!esp_image_verify(ESP_IMAGE_VERIFY, &running_pos, &data)) {
         ESP_LOGW(TAG, "App validation success!");
         esp_err_t err = esp_ota_mark_app_valid_cancel_rollback();
         if (!err) err = esp_ota_erase_last_boot_app_partition();
@@ -277,7 +276,3 @@ void ota_partition_info() {
     }
     esp_partition_iterator_release(iter);
 }
-
-#ifdef __cplusplus
-}
-#endif

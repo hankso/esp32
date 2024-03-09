@@ -5,18 +5,24 @@
 */
 
 #include "console.h"
-#include "globals.h"
 #include "drivers.h"
 #include "config.h"
 
 #include "cJSON.h"
-#include "esp_err.h"
-#include "esp_log.h"
 #include "esp_console.h"
+#include "esp_vfs_dev.h"
+#include "esp_vfs_usb_serial_jtag.h"
+#include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "linenoise/linenoise.h"
+
+#ifdef CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
+#   ifndef CONFIG_ESP_CONSOLE_SECONDARY_NONE
+#       warning "A secondary serial console is not useful."
+#   endif
+#endif
 
 static const char *TAG = "Console";
 
@@ -24,24 +30,45 @@ static const char *prompt = "$ ";
 
 static SemaphoreHandle_t xSemaphore = NULL;
 
-void console_register_commands();  // implemented in `console_cmds.cpp`
-
 void console_initialize() {
+#if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT)
+    esp_vfs_dev_uart_use_driver(UART_NUM_0);
+    esp_vfs_dev_uart_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_uart_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
+#elif defined(CONFIG_ESP_CONSOLE_UART_CUSTOM) && defined(CONFIG_USE_UART)
+    // Set VFS to use /dev/uart{NUM_UART} for STDIN, STDOUT and STDERR
+    esp_vfs_dev_uart_use_driver(NUM_UART);
+    esp_vfs_dev_uart_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
+#elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
+    setvbuf(stdin, NULL, _IONBF, 0); // disable buffering on stdin
+    esp_vfs_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    esp_vfs_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    // Enable non-blocking mode on stdin and stdout
+    fcntl(fileno(stdout), F_SETFL, 0);
+    fcntl(fileno(stdin), F_SETFL, 0);
+    usb_serial_jtag_driver_config_t conf = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( usb_serial_jtag_driver_install(&conf) );
+    // Set VFS to use /dev/usb_jtag for STDIN, STDOUT and STDERR
+    esp_vfs_usb_serial_jtag_use_driver();
+#endif
+
     esp_log_level_set(TAG, ESP_LOG_WARN);
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
     linenoiseSetMultiLine(1);
+    linenoiseAllowEmpty(false);
     linenoiseSetCompletionCallback(&esp_console_get_completion);
     linenoiseSetHintsCallback((linenoiseHintsCallback *)&esp_console_get_hint);
     linenoiseHistorySetMaxLen(100);
     prompt = Config.app.PROMPT;
-    if (linenoiseProbe() != 0) {
+    if (linenoiseProbe()) {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
         ESP_LOGW(TAG, "Try use PuTTY/Miniterm.py/idf_monitor.py.");
-    } else {
 #if CONFIG_LOG_COLORS
+    } else {
         int l = strlen(prompt) + strlen(LOG_COLOR_W) + strlen(LOG_RESET_COLOR);
         char *tmp = (char *)malloc(l + 1);
         if (tmp != NULL) {
@@ -80,6 +107,7 @@ void console_initialize() {
  *      printf("test string\n");
  *      setvbuf(stdout, NULL, _IONBF, 1024);
  *      printf("Get string from STDOUT %lu: `%s`", strlen(buf), buf);
+ *      free(buf);
  *
  * Method 2. <stdio.h> memstream - open memory as stream
  *  2.1 fmemopen(void *buf, size_t size, const char *mode)
@@ -95,16 +123,16 @@ void console_initialize() {
  *      stdout = open_memstream(&buf, &size);
  *      printf("hello\n");
  *      fclose(stdout); stdout = stdout_bak;
- *      printf("In buffer: size %d, msg %s\n", size, buf);
+ *      printf("Get string from STDOUT %lu: `%s`", size, buf);
  *      free(buf);
  *
  * Method 3. <unistd.h> pipe & dup: this is not what we want
  *
  * Method 4. Pipe STDOUT to a disk file on flash or memory block using VFS
+ *  pos: We can do memory mapping.
+ *  neg: Writing & reading from a file is slow and consume too much resources.
  *  e.g.:
- *      stdout = fopen("/spiffs/runtime.log", "w");
- *    But writing & reading from a file is slow and consume too much resources.
- *    A better way is memory mapping.
+ *      stdout = fopen("/spiffs/runtime.log", "w");         // this is slow
  *  e.g.:
  *      esp_vfs_t vfs_buffer = {
  *          .open = &my_malloc,
@@ -115,16 +143,15 @@ void console_initialize() {
  *          .flags = ESP_VFS_FLAG_DEFAULT,
  *      }
  *      esp_vfs_register("/dev/ram", &vfs_buffer, NULL);
- *      stdout = fopen("/dev/ram/blk0", "w");
+ *      stdout = fopen("/dev/ram/blk0", "w");               // much faster
  *
  * Currently method 2 is in use. Try method 4 if necessary in the future.
  */
 
-char * console_handle_command(const char *cmd, bool history) {
-    // Semaphore is better than task notification here
-    // if (ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(200)) != 1)
+char * console_handle_command(const char *cmd, int history) {
+    // Semaphore is better than task notification
     if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(200)) == pdFALSE)
-        return cast_away_const("Console task is executing command");
+        return strdup("Console task is executing command");
     if (history) linenoiseHistoryAdd(cmd);
 
     FILE *bak = stdout; char *buf; size_t size = 0;
@@ -158,16 +185,14 @@ char * console_handle_command(const char *cmd, bool history) {
 
 void console_handle_one() {
     char *ret, *cmd = linenoise(prompt);
-    if (!cmd) return;
     putchar('\n'); fflush(stdout);
-    if (strlen(cmd)) {
-        if (( ret = console_handle_command(cmd, true) )) {
-            printf("%s\n", ret);
-            TRYFREE(ret);
-        }
-        putchar('\n');                      // one more blank line
+    if (!cmd) return;
+    if (( ret = console_handle_command(cmd, true) )) {
+        printf("%s\n", ret);
+        TRYFREE(ret);
     }
     linenoiseFree(cmd);
+    putchar('\n'); fflush(stdout);      // one more blank line
 }
 
 void console_handle_loop(void *argv) {

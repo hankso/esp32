@@ -4,9 +4,9 @@ import { listDir, uploadFile, createPath, deletePath } from '@/apis'
 
 import {
     mdiUpload,
-    mdiFolderPlus,
-    mdiDelete,
-    mdiPencilBoxMultiple,
+    mdiDeleteOutline as mdiDelete,
+    mdiPencilBoxOutline as mdiPencilBox,
+    mdiFolderPlusOutline as mdiFolderPlus,
 } from '@mdi/js'
 import { join, resolve, basename } from 'path-browserify'
 
@@ -258,11 +258,12 @@ onMounted(refresh)
         </v-dialog>
 
         <v-toolbar
+            height="36"
             class="border-b"
-            density="comfortable"
             :color="select.length ? 'primary' : ''"
-            :title
         >
+            <span class="px-3 me-auto">{{ title }}</span>
+
             <v-scale-transition :group="true" leave-absolute>
                 <v-btn icon v-if="!select.length" @click="form.create = true">
                     <v-icon :icon="mdiFolderPlus"></v-icon>
@@ -277,6 +278,7 @@ onMounted(refresh)
                     </v-tooltip>
                 </v-btn>
             </v-scale-transition>
+
             <v-scale-transition :group="true">
                 <v-btn
                     icon
@@ -284,7 +286,7 @@ onMounted(refresh)
                     :target="useLink ? '_blank' : ''"
                     :href="`${useLink ? 'editor' : ''}#${select[0]}`"
                 >
-                    <v-icon :icon="mdiPencilBoxMultiple"></v-icon>
+                    <v-icon :icon="mdiPencilBox"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Edit {{ basename(select[0]) }}
                     </v-tooltip>
@@ -308,3 +310,18 @@ onMounted(refresh)
         <TreeView v-model:selection="select" :items auto-icon />
     </v-sheet>
 </template>
+
+<style scoped>
+.tree-view {
+    height: calc(100% - 36px - 1px);
+}
+
+.v-btn {
+    width: 36px;
+    height: inherit;
+    border-radius: 0;
+    margin-inline-end: 0 !important;
+    border-inline-start: thin solid
+        rgba(var(--v-border-color), var(--v-border-opacity)) !important;
+}
+</style>

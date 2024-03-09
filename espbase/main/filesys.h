@@ -40,27 +40,32 @@
  * Note: File system adds about 108 KB to the final firmware.
  */
 
-#ifndef _FILESYS_H_
-#define _FILESYS_H_
+#pragma once
 
 #include "globals.h"
 
+#include "dirent.h"
 #include "sdmmc_cmd.h"
 #include "wear_levelling.h"
+#include "sys/stat.h"
 #include "driver/sdmmc_types.h"
 
-#include "dirent.h"
-#include "sys/stat.h"
-#include "sys/unistd.h"
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-void fs_initialize();
+void filesys_initialize();
+void filesys_ffs_info(size_t *used, size_t *total);
+void filesys_sdfs_info(size_t *used, size_t *total);
+
+#ifdef __cplusplus
+}
+#endif
 
 #ifdef __cplusplus
 
 #include <FS.h>
 #include <FSImpl.h>
-
-extern "C" {
 
 namespace fs {
 
@@ -138,57 +143,57 @@ public:
     size_t usedBytes() { return _used; }
 
     void printInfo() {
-        fprintf(stdout, "File System use: %d/%d KB\n", _used/1024, _total/1024);
+        fprintf(stdout, "File System used %d/%d KB (%d%%)\n",
+                _used / 1024, _total / 1024, 100 * _used / _total);
     }
 };
 
-#ifdef CONFIG_FFS_MP
+#ifdef CONFIG_USE_FFS
 class FLASHFS : public CFS {
 private:
-    void _getsize();
     const char *_label;
     wl_handle_t _wlhdl = WL_INVALID_HANDLE;
 public:
     // can specify partition label name
     FLASHFS(const char *label=NULL) : _label(label) {}
 
-    bool begin(bool format=false, const char *base=CONFIG_FFS_MP, uint8_t max=10);
+    bool begin(bool fmt=false, const char *base=CONFIG_FFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
 };
 #endif
 
-#ifdef CONFIG_SDFS_MP
+#ifdef CONFIG_USE_SDFS
 class SDMMCFS : public CFS {
 private:
-    void _getsize();
     sdmmc_card_t *_card = NULL;
 public:
     SDMMCFS() {}
 
-    bool begin(bool format=false, const char *base=CONFIG_SDFS_MP, uint8_t max=10);
+    bool begin(bool fmt=false, const char *base=CONFIG_SDFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
 
     void printInfo() {
-        if (_card) sdmmc_card_print_info(stdout, _card);
-        else fprintf(stdout, "SD Card not detected\n");
+        if (!_card) {
+            fprintf(stdout, "SD Card not detected\n");
+            return;
+        }
+        CFS::printInfo();
+        sdmmc_card_print_info(stdout, _card);
     }
 };
 #endif
 
-}
+} // namespace fs
 
-#ifdef CONFIG_FFS_MP
+#ifdef CONFIG_USE_FFS
 extern fs::FLASHFS FFS;
 #endif
-#ifdef CONFIG_SDFS_MP
+#ifdef CONFIG_USE_SDFS
 extern fs::SDMMCFS SDFS;
 #endif
 
-}
 #endif // __cplusplus
-
-#endif // _FILESYS_H_

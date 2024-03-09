@@ -4,11 +4,9 @@
  * Create: 2020-03-21 13:33:54
  */
 
-#include "config.h"
-#include "globals.h"
 #include "network.h"
+#include "config.h"
 
-#include "esp_log.h"
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "freertos/FreeRTOS.h"
@@ -575,7 +573,7 @@ esp_err_t wifi_ap_list_sta() {
 
 // Applications based on network
 
-esp_err_t ftm_responder(const char *ctrl, int16_t *offset_cm) {
+esp_err_t ftm_respond(const char *ctrl, int16_t *offset_cm) {
     if (offset_cm && !esp_wifi_ftm_resp_set_offset(*offset_cm)) {
         ESP_LOGI(TAG, "AP set FTM responder offset to %dcm", *offset_cm);
     }
@@ -590,7 +588,7 @@ esp_err_t ftm_responder(const char *ctrl, int16_t *offset_cm) {
     return err;
 }
 
-esp_err_t ftm_initiator(const char *ssid, uint16_t timeout_ms, uint8_t *count)
+esp_err_t ftm_request(const char *ssid, uint16_t timeout_ms, uint8_t *count)
 {
     esp_err_t err = wifi_mode_check(WIFI_IF_STA);
     if (err) return err;

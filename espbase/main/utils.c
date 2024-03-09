@@ -5,30 +5,39 @@
  */
 
 #include "globals.h"
+#include "filesys.h"
 #include "config.h"
 
-#include "sys/param.h"
+#include "nvs.h"
 #include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "esp_image_format.h"
+#include "soc/efuse_periph.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
 
 char * cast_away_const(const char *str) {
-    return strdup(str);
-}
-
-char * cast_away_const_force(const char *str) {
     return (char *)(void *)(const void *)str;
 }
 
 bool strbool(const char *str) {
     if (!str) return false;
     return !strcmp(str, "1") || !strcmp(str, "y") || !strcmp(str, "on");
+}
+
+bool endswith(const char *str, const char *tail) {
+    if (!str || !tail) return false;
+    size_t len = MAX(strlen(str) - strlen(tail), 0);
+    return !strcmp(str + len, tail);
+}
+
+bool startswith(const char *str, const char *head) {
+    if (!str || !head || strlen(str) < strlen(head)) return false;
+    return !strncmp(str, head, strlen(head));
 }
 
 char hexdigits(uint8_t v) {
@@ -98,14 +107,14 @@ void task_info() {
 #   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     LOOPN(i, num) { ulTotalRunTime += tasks[i].ulRunTimeCounter; }
 #   endif
-    printf("TID State Name            Pri CPU Usage%% StackHW\n");
+    printf("TID State Name            Pri CPU Used StackHW\n");
     LOOPN(i, num) {
         if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
             taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
-        printf("%3d  (%c)  %-15s %2d  %3d %5.1f  %7s\n",
+        printf("%3d  (%c)  %-15s %2d  %3d %3d%% %7s\n",
                tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
                taskname, tasks[i].uxCurrentPriority, tasks[i].xCoreID,
-               100.0 * tasks[i].ulRunTimeCounter / ulTotalRunTime,
+               100 * tasks[i].ulRunTimeCounter / ulTotalRunTime,
                format_size(tasks[i].usStackHighWaterMark, false));
     }
     vPortFree(tasks);
@@ -137,18 +146,45 @@ void memory_info() {
     uint16_t mem_type = 0;
     size_t total_size;
     multi_heap_info_t info;
-    printf("Type        Size     Used    Avail Used%%\n");
+    printf("Type        Size     Used    Avail Used\n");
     LOOPND(i, LEN(memory_types)) {
         heap_caps_get_info(&info, i ? memory_types[i] : mem_type);
         total_size = info.total_free_bytes + info.total_allocated_bytes;
-        printf("%-7s %8s %8s %8s %5.1f\n",
+        printf("%-7s %8s %8s %8s %3d%%\n",
             memory_names[i], format_size(total_size, false),
             format_size(info.total_allocated_bytes, false),
             format_size(info.total_free_bytes, false),
-            100.0 * info.total_allocated_bytes / total_size);
+            100 * info.total_allocated_bytes / total_size);
         if (total_size)
             mem_type |= memory_types[i];
     }
+}
+
+static const char * chip_model_str(esp_chip_model_t model) {
+    switch (model) {
+        CASESTR(CHIP_ESP32S2, 5);
+        CASESTR(CHIP_ESP32S3, 5);
+        CASESTR(CHIP_ESP32C3, 5);
+        CASESTR(CHIP_ESP32H2, 5);
+        case CHIP_ESP32:
+#ifndef CONFIG_IDF_TARGET_ESP32
+            return "ESP32";
+#else
+            break;
+#endif
+        default: return "Unknown";
+    }
+#ifdef CONFIG_IDF_TARGET_ESP32
+    switch (REG_GET_FIELD(EFUSE_BLK0_RDATA3_REG, EFUSE_RD_CHIP_VER_PKG)) {
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ6: return "ESP32-D0WD-Q6";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ5: return "ESP32-D0WD-Q5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5: return "ESP32-D2WD-Q5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4: return "ESP32-PICO-D4";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOV302: return "ESP32-PICO-V3-02";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDR2V3: return "ESP32-D2WD-R2-V3";
+        default: return "Unknown";
+    }
+#endif
 }
 
 void hardware_info() {
@@ -156,15 +192,15 @@ void hardware_info() {
     esp_chip_info(&info);
     printf(
         "Chip UID: %s-%s\n"
-        "  Model: %s\n"
-        "  Cores: %d\n"
+        "   Model: %s\n"
+        "   Cores: %d\n"
         "Revision: %d\n"
-        "  Feature: %s %s flash%s%s%s\n",
+        "Features: %s %s flash%s%s%s%s\n",
         Config.info.NAME, Config.info.UID,
-        info.model == CHIP_ESP32 ? "ESP32" : "???",
-        info.cores, info.revision,
+        chip_model_str(info.model), info.cores, info.revision,
         format_size(spi_flash_get_chip_size(), false),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
+        info.features & CHIP_FEATURE_EMB_PSRAM ? " | Embedded PSRAM" : "",
         info.features & CHIP_FEATURE_WIFI_BGN ? " | WiFi 802.11bgn" : "",
         info.features & CHIP_FEATURE_BLE ? " | BLE" : "",
         info.features & CHIP_FEATURE_BT ? " | BT" : ""
@@ -173,8 +209,8 @@ void hardware_info() {
     uint8_t sta[6], ap[6];
     esp_read_mac(sta, ESP_MAC_WIFI_STA);
     esp_read_mac(ap, ESP_MAC_WIFI_SOFTAP);
-    printf("STA MAC address: " MACSTR "\n", MAC2STR(sta));
-    printf("AP  MAC address: " MACSTR "\n", MAC2STR(ap));
+    printf(" STA MAC: " MACSTR "\n", MAC2STR(sta));
+    printf(" AP  MAC: " MACSTR "\n", MAC2STR(ap));
 }
 
 static const char * partition_subtype_str(
@@ -223,6 +259,34 @@ static const char * partition_type_str(esp_partition_type_t type) {
     }
 }
 
+static uint8_t partition_used(const esp_partition_t *part) {
+    if (part->type == ESP_PARTITION_TYPE_APP) {
+        esp_image_metadata_t data = { .start_addr = part->address };
+        const esp_partition_pos_t pos = {
+            .offset = part->address,
+            .size = part->size
+        };
+        const char *tag = "esp_image";
+        esp_log_level_t backup = esp_log_level_get(tag);
+        esp_log_level_set(tag, ESP_LOG_NONE);
+        esp_err_t err = esp_image_verify(ESP_IMAGE_VERIFY, &pos, &data);
+        esp_log_level_set(tag, backup);
+        if (!err) return 100 * data.image_len / part->size;
+    } else if (part->subtype == ESP_PARTITION_SUBTYPE_DATA_NVS) {
+        nvs_stats_t nvs_stats;
+        if (!nvs_get_stats(part->label, &nvs_stats))
+            return 100 * nvs_stats.used_entries / nvs_stats.total_entries;
+    } else if (
+        part->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT ||
+        part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS
+    ) {
+        size_t used, total;
+        filesys_ffs_info(&used, &total);
+        if (total) return 100 * used / total;
+    }
+    return 0;
+}
+
 void partition_info() {
     uint8_t num = 0;
     const esp_partition_t * parts[16], *part, *tmp;
@@ -243,12 +307,13 @@ void partition_info() {
         printf("No partitons found in flash. Skip");
         return;
     }
-    printf("LabelName    Type SubType  Offset   Size     Secure\n");
+    printf("LabelName    Type SubType  Offset   Size     Used Secure\n");
     while (num--) {
         part = parts[num];
-        printf("%-12s %-4s %-8s 0x%06X 0x%06X %s\n",
+        printf("%-12s %-4s %-8s 0x%06X 0x%06X %3d%% %s\n",
                part->label, partition_type_str(part->type),
                partition_subtype_str(part->type, part->subtype),
-               part->address, part->size, part->encrypted ? "true" : "false");
+               part->address, part->size, partition_used(part),
+               part->encrypted ? "true" : "false");
     }
 }

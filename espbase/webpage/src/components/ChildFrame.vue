@@ -12,7 +12,7 @@ const { src, hidebar } = defineProps({
 </script>
 
 <template>
-    <div :class="{ hidebar }">
+    <div class="child-frame" :class="{ hidebar }">
         <iframe :src></iframe>
     </div>
 </template>

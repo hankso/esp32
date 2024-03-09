@@ -4,28 +4,20 @@
  * Create: 2020-05-06 19:54:28
  */
 
-#include "sdkconfig.h"
 #include "drivers.h"
 
-#include "esp_log.h"
 #include "esp_attr.h"
-#include "esp_vfs_dev.h"
 #include "esp_adc_cal.h"
 #include "esp_task_wdt.h"
 #include "esp_intr_alloc.h"
 #include "soc/soc.h"
 #include "sys/param.h"
 #include "driver/adc.h"
-#include "driver/i2c.h"
 #include "driver/ledc.h"
-#include "driver/gpio.h"
-#include "driver/uart.h"
-#include "driver/spi_common.h"
-#include "driver/spi_master.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if defined(CONFIG_I2C_SCREEN) && __has_include("u8g2_esp32_hal.h")
+#if defined(CONFIG_USE_SCREEN) && __has_include("u8g2_esp32_hal.h")
 #   include "u8g2.h"
 #   include "u8g2_esp32_hal.h"
 #   define WITH_U8G2
@@ -34,8 +26,12 @@
 #    include "vl53l0x.h"
 #    define WITH_VLX
 #endif
-#include "iot_knob.h"
+#ifdef CONFIG_USE_BTN
 #include "iot_button.h"
+#endif
+#ifdef CONFIG_USE_KNOB
+#include "iot_knob.h"
+#endif
 
 static const char *TAG = "Driver";
 
@@ -302,50 +298,66 @@ esp_err_t led_set_blink(int blink_type) {
 
 // ADC analog in
 
-#ifdef CONFIG_ADC_INPUT
+#ifdef CONFIG_USE_ADC
 static esp_adc_cal_characteristics_t adc_chars;
 static const adc_unit_t adc_unit = ADC_UNIT_1;              // ADC 1
 static const adc_atten_t adc_atten = ADC_ATTEN_DB_11;       // 0.15-2.45V
 static const adc_bits_width_t adc_width = ADC_WIDTH_BIT_12; // Dmax=4095
-static const adc1_channel_t adc_chan = ADC1_CHANNEL_6;      // Pin 34
+static adc_channel_t adc_chan = ADC_CHANNEL_MAX;
+static const int adc1_channel_pins[] = {
+#   if defined(TARGET_ESP32)
+    36, 37, 38, 39, 32, 33, 34, 35
+#   elif defined(TARGET_ESP32S)
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+#   else
+    0
+#   endif
+};
 #endif
 
 static void adc_initialize() {
-#ifdef CONFIG_ADC_INPUT
-#if CONFIG_IDF_TARGET_ESP32
+#ifdef CONFIG_USE_ADC
+    LOOPN(i, LEN(adc1_channel_pins)) {
+        if (PIN_ADC == adc1_channel_pins[i]) adc_chan = i;
+    }
+    if (adc_chan == ADC_CHANNEL_MAX) {
+        ESP_LOGE(TAG, "ADC: invalid pin %d", PIN_ADC);
+        return;
+    }
+#   ifdef TARGET_ESP32
     if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF)) {
         ESP_LOGI(TAG, "ADC: eFuse VRef not supported");
     } else {
         ESP_LOGD(TAG, "ADC: eFuse VRef supported");
     }
-#endif // CONFIG_IDF_TARGET_ESP32
-#if CONFIG_IDF_TARGET_ESP32 || CONFIG_IDF_TARGET_ESP32S2
+#   endif
+#   if defined(TARGET_ESP32) || defined(TARGET_ESP32S3)
     if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP)) {
         ESP_LOGI(TAG, "ADC: eFuse Two Point not supported");
     } else {
         ESP_LOGD(TAG, "ADC: eFuse Two Point supported");
     }
-#else
-    ESP_LOGE(TAG, "ADC: Unknown ESP chip target");
+#   else
+    ESP_LOGE(TAG, "ADC: unknown ESP chip target");
     return;
-#endif // CONFIG_IDF_TARGET_ESP32
+#   endif
     adc1_config_width(adc_width);
     adc1_config_channel_atten(adc_chan, adc_atten);
     memset(&adc_chars, 0, sizeof(adc_chars));
     esp_adc_cal_value_t vtype = esp_adc_cal_characterize(
         adc_unit, adc_atten, adc_width, 1100, &adc_chars);
     if (vtype == ESP_ADC_CAL_VAL_EFUSE_TP) {
-        ESP_LOGI(TAG, "ADC: characterized using Two Point Value");
+        ESP_LOGD(TAG, "ADC: characterized using Two Point Value");
     } else if (vtype == ESP_ADC_CAL_VAL_EFUSE_VREF) {
-        ESP_LOGI(TAG, "ADC: characterized using eFuse VRef");
+        ESP_LOGD(TAG, "ADC: characterized using eFuse VRef");
     } else {
-        ESP_LOGI(TAG, "ADC: characterized using Default VRef");
+        ESP_LOGD(TAG, "ADC: characterized using Default VRef");
     }
-#endif // CONFIG_ADC_INPUT
+#endif // CONFIG_USE_ADC
 }
 
 uint32_t adc_read() {
-#ifndef CONFIG_ADC_INPUT
+#ifndef CONFIG_USE_ADC
     return 0;
 #elif defined(ADC_MULTISAMPLING)
     uint32_t raw;
@@ -366,7 +378,7 @@ uint32_t adc_read() {
 #define RES_BUZZER  LEDC_TIMER_10_BIT
 
 static void pwm_initialize() {
-#ifdef CONFIG_PWM_SERVO
+#ifdef CONFIG_USE_SERVO
     ledc_timer_config_t servo_conf = {
         .speed_mode         = SPEED_MODE,
         .timer_num          = LEDC_TIMER_1,
@@ -394,7 +406,7 @@ static void pwm_initialize() {
     ESP_ERROR_CHECK(ledc_channel_config(&channel0_conf));
     ESP_ERROR_CHECK(ledc_channel_config(&channel1_conf));
 #endif
-#ifdef CONFIG_PWM_BUZZER
+#ifdef CONFIG_USE_BUZZER
     ledc_timer_config_t buzzer_conf = {
         .speed_mode         = SPEED_MODE,
         .timer_num          = LEDC_TIMER_2,
@@ -421,7 +433,7 @@ static esp_err_t pwm_set_duty(int channel, int duty) {
     return err;
 }
 
-#ifdef CONFIG_PWM_SERVO
+#ifdef CONFIG_USE_SERVO
 // mapping 0-180 deg to 0.5-2.5 ms
 static float servo_offset = 0.5 / 20 * ((1 << RES_SERVO) - 1);
 static float servo_scale  = 2.0 / 20 * ((1 << RES_SERVO) - 1) / 180;
@@ -462,7 +474,7 @@ esp_err_t pwm_get_degree(int *h, int *v) {
 }
 #endif
 
-#ifdef CONFIG_PWM_BUZZER
+#ifdef CONFIG_USE_BUZZER
 // mapping 0-100 percent to 0%-50% of duty
 static float buzzer_scale = ((1 << RES_BUZZER) - 1) / 200;
 
@@ -507,8 +519,10 @@ static esp_err_t i2c_master_config(int bus, int sda, int scl, int speed) {
 }
 
 static void i2c_initialize() {
+#ifdef CONFIG_USE_I2C
     ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, I2C_MODE_MASTER, 0, 0, 0) );
-    ESP_ERROR_CHECK( i2c_master_config(NUM_I2C, PIN_SDA0, PIN_SCL0, 50000) );
+    ESP_ERROR_CHECK( i2c_master_config(NUM_I2C, PIN_SDA, PIN_SCL, 50000) );
+#endif
 }
 
 esp_err_t smbus_probe(int bus, uint8_t addr) {
@@ -571,7 +585,7 @@ esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val) {
     uint8_t buf[2] = { 0, 0 };
     esp_err_t err = smbus_rregs(bus, addr, reg, buf, 2);
     if (!err) *val = buf[0] << 8 | buf[1];
-    return err; // FIXME: check_endian and skip this tedious conversion
+    return err;
 }
 
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
@@ -621,9 +635,13 @@ void i2c_detect(int bus) {
     }
 }
 
-static esp_err_t UNUSED i2c_trans(int bus, uint8_t addr,
-                                        uint8_t rw, uint8_t *data, size_t size)
-{
+#ifdef CONFIG_USE_I2C_GPIOEXP
+static uint8_t i2c_pin_data[3] = { 0, 0, 0 };
+static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
+
+static esp_err_t i2c_trans(
+    int bus, uint8_t addr, uint8_t rw, uint8_t *data, size_t size
+) {
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | rw, true);
@@ -646,14 +664,10 @@ static esp_err_t UNUSED i2c_trans(int bus, uint8_t addr,
     i2c_cmd_link_delete(cmd);
     return err;
 }
-
-#ifdef CONFIG_I2C_GPIOEXP
-static uint8_t i2c_pin_data[3] = { 0, 0, 0 };
-static uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
 #endif
 
 esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
-#ifdef CONFIG_I2C_GPIOEXP
+#ifdef CONFIG_USE_I2C_GPIOEXP
     if (!PIN_IS_I2CEXP(pin_num)) return ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_I2C_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = i2c_pin_data + idx;
@@ -661,11 +675,11 @@ esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
     return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, datp, 1);
 #else
     return ESP_ERR_NOT_FOUND;
-#endif // CONFIG_I2C_GPIOEXP
+#endif // CONFIG_USE_I2C_GPIOEXP
 }
 
 esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
-#ifdef CONFIG_I2C_GPIOEXP
+#ifdef CONFIG_USE_I2C_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
     if (!PIN_IS_I2CEXP(pin_num)) return err;
     int pin = pin_num - PIN_I2C_MIN;
@@ -677,7 +691,7 @@ esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
     return err;
 #else
     return ESP_ERR_NOT_FOUND;
-#endif // CONFIG_I2C_GPIOEXP
+#endif // CONFIG_USE_I2C_GPIOEXP
 }
 
 
@@ -692,7 +706,7 @@ static void vlx_initialize() {
     uint8_t addr = 0x29;
     if (smbus_probe(NUM_I2C, addr)) return;
 #ifdef WITH_VLX
-    vlx = vl53l0x_config(NUM_I2C, PIN_SCL0, PIN_SDA0, -1, addr, 0);
+    vlx = vl53l0x_config(NUM_I2C, PIN_SCL, PIN_SDA, -1, addr, 0);
     const char *err = vl53l0x_init(vlx);
     if (err) {
         ESP_LOGE(TAG, "VLX: initialize VL53L0X failed: %s", err);
@@ -731,6 +745,8 @@ static bool scn_init = false;
 
 static void scn_initialize() {
     // MACROs defined in u8g2_esp32_hal.h
+    //  - I2C_MASTER_NUM = I2C_NUM_1
+    //  - I2C_MASTER_FREQ_HZ = 50000
     int bus = I2C_MASTER_NUM, speed = I2C_MASTER_FREQ_HZ, addr = 0x3C;
     if (i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0)) return;
     scn_init = i2c_master_config(bus, PIN_SDA1, PIN_SCL1, speed) == ESP_OK;
@@ -772,27 +788,34 @@ void scn_progbar(uint8_t percent) { ; }
 
 
 // I2C Ambient Light and Temperature Sensor
-// 7bit I2C address of the GY39 is 0x5B.
 
-esp_err_t gy39_measure(int bus, gy39_data_t *d) {
+typedef struct {
+    uint32_t brightness;
+    uint16_t temperature;
+    uint32_t atmosphere;
+    uint16_t humidity;
+    uint16_t altitude;
+} gy39_payload_t; // TODO check_endian
+
+esp_err_t gy39_measure(gy39_data_t *d) {
     esp_err_t err;
-    uint8_t a[0x0D];
-    if (( err = smbus_rregs(bus, 0x5B, 0x00, a, sizeof(a)) )) return err;
-    d->brightness = 1e-2 * ((a[0] << 24) | (a[1] << 16) | (a[2] << 8) | a[3]);
-    d->temperature = 1e-2 * ((a[4] << 8) | a[5]);
-    d->atmosphere = 1e-2 * ((a[6] << 24) | (a[7] << 16) | (a[8] << 8) | a[9]);
-    d->humidity = 1e-2 * ((a[10] << 8) | a[11]);
-    d->altitude = (a[12] << 8) | a[13];
+    uint8_t addr = 0x5B, b[0x0D];
+    if (( err = smbus_rregs(NUM_I2C, addr, 0x00, b, sizeof(b)) )) return err;
+    d->brightness = 1e-2 * ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+    d->temperature = 1e-2 * ((b[4] << 8) | b[5]);
+    d->atmosphere = 1e-2 * ((b[6] << 24) | (b[7] << 16) | (b[8] << 8) | b[9]);
+    d->humidity = 1e-2 * ((b[10] << 8) | b[11]);
+    d->altitude = (b[12] << 8) | b[13];
     return err;
 }
 
 // I2C Ambient Light Sensor
 // 7bit I2C address of the OPT3001 is configurable by ADDR PIN.
 // Basic address is 0b010001XX where `XX` are:
-//      ADDR -> GND: 0b00
-//      ADDR -> VDD: 0b01
-//      ADDR -> SDA: 0b10
-//      ADDR -> SCL: 0b11
+//      ADDR -> GND: 0b00 (0x44)
+//      ADDR -> VDD: 0b01 (0x45)
+//      ADDR -> SDA: 0b10 (0x46)
+//      ADDR -> SCL: 0b11 (0x47)
 
 #ifdef CONFIG_ALS_TRACK
 static uint8_t i2c_als_addr[4] = {
@@ -903,18 +926,18 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
 // SPI GPIO Expander
 // If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
 // Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
-#ifdef CONFIG_SPI_GPIOEXP
+#ifdef CONFIG_USE_SPI_GPIOEXP
 static spi_device_handle_t spi_pin_hdlr;
 static spi_transaction_t spi_pin_trans;
 static uint8_t spi_pin_data[2] = { 0, 0 };
 #endif
 
 static void spi_initialize() {
-#ifdef CONFIG_SPI_GPIOEXP
+#ifdef CONFIG_USE_SPI_GPIOEXP
     spi_bus_config_t hspi_busconf = {
-        .mosi_io_num = PIN_HMOSI,
-        .miso_io_num = PIN_HMISO,
-        .sclk_io_num = PIN_HSCLK,
+        .mosi_io_num = PIN_MOSI,
+        .miso_io_num = PIN_MISO,
+        .sclk_io_num = PIN_SCLK,
         .quadwp_io_num = -1,
         .quadhd_io_num = -1,
         .max_transfer_sz = 0,
@@ -931,22 +954,22 @@ static void spi_initialize() {
         .cs_ena_posttrans = 0,
         .clock_speed_hz = 5 * 1000 * 1000,  // 5MHz
         .input_delay_ns = 0,
-        .spics_io_num = PIN_HCS1,
+        .spics_io_num = PIN_CS1,
         .flags = 0,
         .queue_size = 1,                    // only one transaction allowed
         .pre_cb = NULL,
         .post_cb = NULL
     };
-    esp_err_t err = spi_bus_initialize(HSPI_HOST, &hspi_busconf, 1);
+    esp_err_t err = spi_bus_initialize(NUM_SPI, &hspi_busconf, 1);
     assert((!err || err == ESP_ERR_INVALID_STATE) && "SPI init failed");
-    ESP_ERROR_CHECK( spi_bus_add_device(HSPI_HOST, &devconf, &spi_pin_hdlr) );
+    ESP_ERROR_CHECK( spi_bus_add_device(NUM_SPI, &devconf, &spi_pin_hdlr) );
     spi_pin_trans.length = LEN(spi_pin_data) * 8; // in bits;
     spi_pin_trans.tx_buffer = spi_pin_data;
-#endif // CONFIG_SPI_GPIOEXP
+#endif // CONFIG_USE_SPI_GPIOEXP
 }
 
 esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
-#ifdef CONFIG_SPI_GPIOEXP
+#ifdef CONFIG_USE_SPI_GPIOEXP
     if (!PIN_IS_SPIEXP(pin_num)) return ESP_ERR_INVALID_ARG;
     int pin = pin_num - PIN_SPI_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = spi_pin_data + idx;
@@ -954,11 +977,11 @@ esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
     return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
 #else
     return ESP_ERR_NOT_FOUND;
-#endif // CONFIG_SPI_GPIOEXP
+#endif // CONFIG_USE_SPI_GPIOEXP
 }
 
 esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
-#ifdef CONFIG_SPI_GPIOEXP
+#ifdef CONFIG_USE_SPI_GPIOEXP
     esp_err_t err = ESP_ERR_INVALID_ARG;
     if (!PIN_IS_SPIEXP(pin_num)) return err;
     int pin = pin_num - PIN_SPI_MIN;
@@ -970,15 +993,13 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
     return err;
 #else
     return ESP_ERR_NOT_FOUND;
-#endif // CONFIG_SPI_GPIOEXP
+#endif // CONFIG_USE_SPI_GPIOEXP
 }
 
 // GPIO Interrupt
 
+#ifdef CONFIG_USE_BTN
 static button_handle_t btn;
-#ifdef CONFIG_KNOB_INPUT
-static knob_handle_t knob;
-#endif
 
 static void gpio_cb_single_click(void *arg, void *data) {
     ESP_LOGI(TAG, "BTN: %d single click", PIN_BTN);
@@ -991,36 +1012,47 @@ static void gpio_cb_double_click(void *arg, void *data) {
 static void gpio_cb_long_press(void *arg, void *data) {
     ESP_LOGI(TAG, "BTN: %d long press", PIN_BTN);
 }
+#endif
 
-static void UNUSED gpio_cb_left_rotate(void *arg, void *data) {
+#ifdef CONFIG_USE_KNOB
+static knob_handle_t knob;
+
+static void gpio_cb_left_rotate(void *arg, void *data) {
     ESP_LOGI(TAG, "Knob: left rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
 }
 
-static void UNUSED gpio_cb_right_rotate(void *arg, void *data) {
+static void gpio_cb_right_rotate(void *arg, void *data) {
     ESP_LOGI(TAG, "Knob: right rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
 }
+#endif
 
 static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
-    // static char buf[9];
+#ifdef CONFIG_USE_BTN
     ets_printf("PIN_BTN %s\n", gpio_get_level(PIN_BTN) ? "RISE" : "FALL");
-#ifdef CONFIG_I2C_GPIOEXP
+#endif
+#ifdef CONFIG_USE_GPIOEXP
+    static char buf[9];
+#endif
+#ifdef CONFIG_USE_I2C_GPIOEXP
     LOOPN(i, LEN(i2c_pin_data)) {
         i2c_trans(NUM_I2C, i2c_pin_addr[i], I2C_MASTER_READ, i2c_pin_data + i, 1);
-        // itoa(i2c_pin_data[idx], buf, 2);
-        // ESP_LOGI(TAG, "I2C GPIO Expander value: 0b%s", buf);
+        itoa(i2c_pin_data[idx], buf, 2);
+        ets_printf("I2C GPIO Expander value: 0b%s\n", buf);
     }
-#endif // CONFIG_I2C_GPIOEXP
-#ifdef CONFIG_SPI_GPIOEXP
-    if (!spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans)) {
-        // ESP_LOGI(TAG, "SPI GPIO Expander value: 0b%s", buf);
+#endif // CONFIG_USE_I2C_GPIOEXP
+#ifdef CONFIG_USE_SPI_GPIOEXP
+    if (spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans)) return;
+    LOOPN(i, LEN(spi_pin_data)) {
+        itoa(spi_pin_data[idx], buf, 2);
+        ets_printf("SPI GPIO Expander value: 0b%s\n", buf);
     }
-#endif // CONFIG_SPI_GPIOEXP
+#endif // CONFIG_USE_SPI_GPIOEXP
 }
 
 static void gpio_initialize() {
-#if defined(CONFIG_I2C_GPIOEXP) || defined(CONFIG_SPI_GPIOEXP)
+#ifdef CONFIG_USE_GPIOEXP
     gpio_config_t int_conf = {
         .pin_bit_mask = BIT64(PIN_INT),
         .mode         = GPIO_MODE_INPUT,
@@ -1032,7 +1064,7 @@ static void gpio_initialize() {
     ESP_ERROR_CHECK( gpio_install_isr_service(0) );
     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
 #endif
-#ifdef CONFIG_KNOB_INPUT
+#ifdef CONFIG_USE_KNOB
     knob_cb_t knob_funcs[] = { gpio_cb_left_rotate, gpio_cb_right_rotate };
     knob_event_t knob_evts[] = { KNOB_LEFT, KNOB_RIGHT };
     knob_config_t knob_conf = {
@@ -1046,6 +1078,7 @@ static void gpio_initialize() {
         iot_knob_register_cb(knob, knob_evts[i], knob_funcs[i], NULL);
     }
 #endif
+#ifdef CONFIG_USE_BTN
     button_cb_t btn_funcs[] = {
         gpio_cb_single_click, gpio_cb_double_click, gpio_cb_long_press
     };
@@ -1064,6 +1097,7 @@ static void gpio_initialize() {
     } else LOOPN(i, LEN(btn_evts)) {
         iot_button_register_cb(btn, btn_evts[i], btn_funcs[i], NULL);
     }
+#endif
 }
 
 esp_err_t gpioext_set_level(int pin, bool level) {
@@ -1084,38 +1118,78 @@ esp_err_t gpioext_get_level(int pin, bool * level, bool sync) {
 }
 
 static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
-    [0]         = "Strapping",
-    [1]         = "UART TXD",
-    [2]         = "Strapping",
-    [3]         = "UART RXD",
-    [34]        = "ADC1 Channel6",
-
-    [PIN_LED]   = "LED",
-    [PIN_BTN]   = "Button",
-#if defined(CONFIG_I2C_GPIOEXP) || defined(CONFIG_SPI_GPIOEXP)
-    [PIN_INT]   = "Interrupt",
+#if defined(TARGET_ESP32)
+    [0]         = "Strapping PU",
+    [2]         = "Strapping PD",
+    [5]         = "Strapping PU",
+    [6]         = "Flash SPICLK",
+    [7]         = "Flash SPIQ",
+    [8]         = "Flash SPID",
+    [9]         = "Flash SPIHD",
+    [10]        = "Flash SPIWP",
+    [11]        = "Flash SPICS0",
+    [16]        = "Flash D2WD",
+    [17]        = "Flash D2WD",
+#elif defined(TARGET_ESP32S3)
+    [0]         = "Strapping PU",
+    [3]         = "Strapping Float",
+    [19]        = "USB DN",
+    [20]        = "USB DP",
+    [26]        = "Flash SPICS1",
+    [27]        = "Flash SPIHD",
+    [28]        = "Flash SPIWP",
+    [29]        = "Flash SPICS0",
+    [30]        = "Flash SPICLK",
+    [31]        = "Flash SPIQ",
+    [32]        = "Flash SPID",
+    [45]        = "Strapping PD",
+    [46]        = "Strapping PD",
 #endif
-
-    [PIN_SDA0]  = "I2C0 SDA",
-    [PIN_SCL0]  = "I2C0 SCL",
+#ifdef CONFIG_USE_LED
+    [PIN_LED]   = "LED",
+#endif
+#ifdef CONFIG_USE_UART
+    [PIN_TXD]   = "UART" STR(CONFIG_UART_NUM) " TXD",
+    [PIN_RXD]   = "UART" STR(CONFIG_UART_NUM) " RXD",
+#endif
+#ifdef CONFIG_USE_I2C
+    [PIN_SDA]   = "I2C" STR(CONFIG_I2C_NUM) " SDA",
+    [PIN_SCL]   = "I2C" STR(CONFIG_I2C_NUM) " SCL",
+#endif
+#ifdef CONFIG_USE_I2C1
     [PIN_SDA1]  = "I2C1 SDA",
     [PIN_SCL1]  = "I2C1 SCL",
-
-    [PIN_HMISO] = "HSPI MISO",
-    [PIN_HMOSI] = "HSPI MOSI",
-    [PIN_HSCLK] = "HSPI SCLK",
-    [PIN_HCS0]  = "HSPI CS0 (SDCard)",
-#ifdef CONFIG_SPI_GPIOEXP
-    [PIN_HCS1]  = "HSPI CS1 (GPIOExp)",
 #endif
-
-#ifdef CONFIG_PWM_SERVO
+#ifdef CONFIG_USE_SPI
+    [PIN_MISO]  = "SPI MISO",
+    [PIN_MOSI]  = "SPI MOSI",
+    [PIN_SCLK]  = "SPI SCLK",
+#endif
+#ifdef PIN_CS0
+    [PIN_CS0]   = "SPI CS0 (SDCard)",
+#endif
+#ifdef PIN_CS1
+    [PIN_CS1]   = "SPI CS1 (GPIOExp)",
+#endif
+#ifdef CONFIG_USE_GPIOEXP
+    [PIN_INT]   = "Interrupt",
+#endif
+#ifdef CONFIG_USE_ADC
+    [PIN_ADC]   = "ADC",
+#endif
+#ifdef CONFIG_USE_BTN
+    [PIN_BTN]   = "Button",
+#endif
+#ifdef CONFIG_USE_KNOB
+    [PIN_ENCA]  = "Knob encoder A",
+    [PIN_ENCB]  = "Knob encoder B",
+#endif
+#ifdef CONFIG_USE_SERVO
     [PIN_SVOH]  = "Servo Yaw",
     [PIN_SVOV]  = "Servo Pitch",
 #endif
-#ifdef CONFIG_KNOB_INPUT
-    [PIN_ENCA]  = "Knob encoder A",
-    [PIN_ENCB]  = "Knob encoder B",
+#ifdef CONFIG_USE_BUZZER
+    [PIN_BUZZ]  = "Buzzer",
 #endif
 };
 
@@ -1147,36 +1221,34 @@ void gpio_table(bool i2c, bool spi) {
     }
 }
 
-// Others
-
 static void uart_initialize() {
-    fflush(stdout); fflush(stderr);
-    msleep(10);
+    // esp_vfs_dev_uart_register is called on startup code to use /dev/uart0
+    fflush(stdout); fsync(fileno(stdout));
 
+#ifdef CONFIG_USE_UART
     // UART driver configuration
     uart_config_t uart_conf = {
         .baud_rate = 115200,
         .data_bits = UART_DATA_8_BITS,
         .parity = UART_PARITY_DISABLE,
         .stop_bits = UART_STOP_BITS_1,
-        .flow_ctrl = UART_HW_FLOWCTRL_DISABLE,
-        .rx_flow_ctrl_thresh = 0,
-        .use_ref_tick = true
+#   if SOC_UART_SUPPORT_REF_TICK
+        .source_clk = UART_SCLK_REF_TICK
+#   elif SOC_UART_SUPPORT_XTAL_CLK
+        .source_clk = UART_SCLK_XTAL
+#   else
+#       error "No UART clock source is aware of DFS"
+#   endif
     };
-    ESP_ERROR_CHECK( uart_param_config(NUM_UART, &uart_conf) );
+    uart_param_config(NUM_UART, &uart_conf);
+    uart_set_pin(NUM_UART, PIN_TXD, PIN_RXD, PIN_RTS, PIN_CTS);
     ESP_ERROR_CHECK( uart_driver_install(NUM_UART, 256, 0, 0, NULL, 0) );
-
-    // Register UART to VFS and configure
-    /* esp_vfs_dev_uart_register(); */
-    esp_vfs_dev_uart_use_driver(NUM_UART);
-    esp_vfs_dev_uart_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
-    esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
+#endif
 }
 
 static void twdt_initialize() {
-#ifdef CONFIG_TASK_WDT
-    ESP_ERROR_CHECK(esp_task_wdt_init(5, false));
-
+#if defined(CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0) \
+ || defined(CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1)
     // Idle tasks are created on each core automatically by RTOS scheduler
     // with the lowest possible priority (0). Our tasks have higher priority,
     // thus leaving almost no time for idle tasks to run. Disable WDT on them.
@@ -1188,10 +1260,10 @@ static void twdt_initialize() {
     {
         TaskHandle_t idle = xTaskGetIdleTaskHandleForCPU(i);
         if (idle && !esp_task_wdt_status(idle) && !esp_task_wdt_delete(idle)) {
-            ESP_LOGW(TAG, "Task IDLE%d @ CPU%d removed from WDT", i, i);
+            ESP_LOGI(TAG, "Task IDLE%d @ CPU%d removed from WDT", i, i);
         }
     }
-#endif // CONFIG_TASK_WDT
+#endif // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPUx
 }
 
 esp_err_t twdt_feed() {
@@ -1202,6 +1274,11 @@ esp_err_t twdt_feed() {
 }
 
 void driver_initialize() {
+    esp_log_level_set("gpio", ESP_LOG_WARN);
+    esp_log_level_set("Knob", ESP_LOG_WARN);
+    esp_log_level_set("button", ESP_LOG_WARN);
+    esp_log_level_set("led_indicator", ESP_LOG_WARN);
+
     pwm_initialize();
     adc_initialize();
     led_initialize();

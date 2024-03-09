@@ -5,14 +5,11 @@
  *
  */
 
-#include "globals.h"
 #include "config.h"
 
 #include "cJSON.h"
 #include "nvs.h"
 #include "nvs_flash.h"
-#include "esp_err.h"
-#include "esp_log.h"
 #include "esp_partition.h"
 
 #if __has_include("esp_idf_version.h")
@@ -206,7 +203,7 @@ static void json_parse_object_recurse(
 bool config_loads(const char *json) {
     cJSON *obj = cJSON_Parse(json);
     if (!obj) {
-        ESP_LOGE(TAG, "Cannot parse JSON: %s", cJSON_GetErrorPtr());
+        ESP_LOGE(TAG, "Could not parse JSON: %s", cJSON_GetErrorPtr());
         return false;
     } else {
         json_parse_object_recurse(obj, &set_config_callback, "");
@@ -256,7 +253,7 @@ esp_err_t config_nvs_init() {
         ESP_PARTITION_TYPE_DATA,
         ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
     if (nvs_st.part == NULL) {
-        ESP_LOGE(TAG, "Cannot found nvs partition. Skip");
+        ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         nvs_st.init = true;
         return nvs_st.error = ESP_ERR_NOT_FOUND;
     }
@@ -279,7 +276,7 @@ esp_err_t config_nvs_init() {
         if (!err) {
             err = nvs_flash_secure_init_partition(nvs_st.part->label, cfg);
         } else {
-            ESP_LOGE(TAG, "Cannot initialize nvs with encryption: %s",
+            ESP_LOGE(TAG, "Could not initialize nvs with encryption: %s",
                      esp_err_to_name(err));
             enc = false;
         }
@@ -302,7 +299,7 @@ esp_err_t config_nvs_init() {
         }
     }
     if (err) {
-        ESP_LOGE(TAG, "Cannot initialize nvs flash: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Could not init nvs flash: %s", esp_err_to_name(err));
     }
     nvs_st.init = true;
     nvs_st.error = err;
@@ -317,7 +314,7 @@ esp_err_t config_nvs_open(const char *ns, bool ro) {
         err = nvs_open(ns, ro ? NVS_READONLY : NVS_READWRITE, &nvs_st.handle);
     }
     if (err) {
-        ESP_LOGE(TAG, "Cannot open nvs namespace `%s:` %s",
+        ESP_LOGE(TAG, "Could not open nvs namespace `%s:` %s",
                  ns, esp_err_to_name(err));
     }
     return err;
@@ -375,27 +372,52 @@ bool config_nvs_dump() {
     return (config_nvs_close() == ESP_OK) && success;
 }
 
-void config_nvs_list() {
+void config_nvs_list(bool all) {
     if (nvs_st.part == NULL) {
-        ESP_LOGE(TAG, "Cannot found nvs partition. Skip");
+        ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
 #ifdef _NVS_ITER_LIST
-    nvs_iterator_t iter;
+    const char *ns = all ? NULL : NAMESPACE_CFG;
     nvs_entry_info_t info;
-    iter = nvs_entry_find(nvs_st.part->label, NAMESPACE_CFG, NVS_TYPE_ANY);
+    nvs_iterator_t iter = nvs_entry_find(nvs_st.part->label, ns, NVS_TYPE_ANY);
     if (!iter) {
-        ESP_LOGE(TAG, "Cannot find entries under `" NAMESPACE_CFG "` in `%s`",
-                 nvs_st.part->label);
+        ESP_LOGE(TAG, "No entries found for namespace `%s` in parition `%s`",
+                 all ? "all" : ns, nvs_st.part->label);
         return;
     }
-    printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
+#   ifdef CONFIG_AUTO_ALIGN
+    size_t nslen = 0, keylen = 0;
     while (iter) {
         nvs_entry_info(iter, &info);
         iter = nvs_entry_next(iter);
-        const char *key = info.key, *value = config_get(key);
-        printf("  %-15.15s\t", key);
-        if (!strcmp(key + strlen(key) - 4, "pass")) {
+        nslen = MAX(nslen, strlen(info.namespace_name));
+        keylen = MAX(keylen, strlen(info.key));
+    }
+    nvs_release_iterator(iter);
+    iter = nvs_entry_find(nvs_st.part->label, ns, NVS_TYPE_ANY);
+#   else
+    size_t nslen = 16, keylen = NVS_KEY_NAME_MAX_SIZE; // see nvs.h
+#   endif
+    if (all) {
+        printf("%-*s %-*s Value\n", nslen, "Namespace", keylen, "Key");
+    } else {
+        printf("Namespace: %s\n  %-*s Value\n", ns, keylen, "Key");
+    }
+    while (iter) {
+        nvs_entry_info(iter, &info);
+        iter = nvs_entry_next(iter);
+        if (all) {
+            printf("%-*s %-*s ", nslen, info.namespace_name, keylen, info.key);
+        } else {
+            printf("  %-*s ", keylen, info.key);
+        }
+        if (strcmp(info.namespace_name, NAMESPACE_CFG)) {
+            putchar('\n');
+            continue;
+        }
+        const char *value = config_get(info.key);
+        if (endswith(info.key, "pass")) {
             printf("`%.*s`\n", strlen(value), "********");
         } else {
             printf("`%s`\n", value);
@@ -409,13 +431,13 @@ void config_nvs_list() {
 
 void config_nvs_stats() {
     if (nvs_st.part == NULL) {
-        ESP_LOGE(TAG, "Cannot found nvs partition. Skip");
+        ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
     nvs_stats_t nvs_stats;
     esp_err_t err = nvs_get_stats(nvs_st.part->label, &nvs_stats);
     if (err) {
-        ESP_LOGE(TAG, "Cannot get nvs data status: %s", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Could not get nvs status: %s", esp_err_to_name(err));
         return;
     }
     printf(
@@ -428,7 +450,7 @@ void config_nvs_stats() {
     );
 }
 
-bool config_initialize() {
+void config_initialize() {
     esp_err_t err;
     config_nvs_init();
 
@@ -457,5 +479,5 @@ bool config_initialize() {
         config_nvs_close();
     }
 
-    return config_nvs_load();
+    config_nvs_load();
 }

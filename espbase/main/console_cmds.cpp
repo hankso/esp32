@@ -1,29 +1,19 @@
 /* 
- * File: console_cmds.cpp
+ * File: commands.cpp
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-13 18:03:04
- *
- * Implemented commands are:
- *  
  */
 
 #include "console.h"
 #include "config.h"
 #include "update.h"
-#include "globals.h"
 #include "drivers.h"
 #include "filesys.h"
 #include "network.h"
 
-#include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
-#include "rom/uart.h"
-#include "sys/param.h"
-#include "driver/i2c.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
 
@@ -150,9 +140,11 @@ static int system_sleep(int argc, char **argv) {
         if (system_sleep_args.pin->count) {
             if (( err = enable_gpio_light_wakeup() )) return err;
         }
+#ifdef CONFIG_USE_UART
         fprintf(stderr, "Enable UART wakeup, num: %d\n", NUM_UART);
         ESP_ERROR_CHECK( uart_set_wakeup_threshold(NUM_UART, 3) );
         ESP_ERROR_CHECK( esp_sleep_enable_uart_wakeup(NUM_UART) );
+#endif
     } else {
         if (system_sleep_args.pin->count) {
             if (( err = enable_gpio_deep_wakeup() )) return err;
@@ -160,7 +152,10 @@ static int system_sleep(int argc, char **argv) {
     }
 
     fprintf(stderr, "Turn to %s sleep mode\n", light ? "light" : "deep");
-    fflush(stderr); uart_tx_wait_idle(NUM_UART);
+    fflush(stderr); fsync(fileno(stderr));
+#ifdef CONFIG_USE_UART
+    uart_tx_wait_idle(NUM_UART);
+#endif
     if (light) {
         esp_light_sleep_start();
     } else {
@@ -267,10 +262,17 @@ static struct {
     struct arg_int *blk;
     struct arg_end *end;
 } driver_led_args = {
-    .idx = arg_int0(NULL, NULL, "<0-" STR(CONFIG_LED_NUM) ">", "LED index"),
-    .lgt = arg_str0(NULL, "light", "<0-255|on|off>", "set brightness"),
-    .clr = arg_str0(NULL, "color", "<0xAABBCC>", "set RGB color"),
-    .blk = arg_int0(NULL, "blink", "<-1-7>", "set blink effect"),
+    .idx = arg_int0(
+        NULL, NULL,
+        "<0"
+#   if CONFIG_LED_NUM > 1
+        "-" STR(CONFIG_LED_NUM)
+#   endif
+        ">", "LED index"
+    ),
+    .lgt = arg_str0("l", NULL, "<0-255|on|off>", "set lightness"),
+    .clr = arg_str0("c", NULL, "<0xAABBCC>", "set RGB color"),
+    .blk = arg_int0("b", NULL, "<-1-7>", "set blink effect"),
     .end = arg_end(4)
 };
 
@@ -342,7 +344,17 @@ static struct {
     struct arg_lit *spi;
     struct arg_end *end;
 } driver_gpio_args = {
-    .pin = arg_int0(NULL, NULL, "<0-39|40-79|80-99>", "pin number"),
+    .pin = arg_int0(
+        NULL, NULL,
+        "<0-" STR(GPIO_PIN_COUNT)
+#   ifdef CONFIG_USE_I2C_GPIOEXP
+        "|24 I2C"
+#   endif
+#   ifdef CONFIG_USE_SPI_GPIOEXP
+        "|16 SPI"
+#   endif
+        ">", "gpio number"
+    ),
     .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
     .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
     .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
@@ -385,7 +397,18 @@ static struct {
     struct arg_int *len;
     struct arg_end *end;
 } driver_i2c_args = {
-    .bus = arg_int1(NULL, NULL, "<0|1>", "I2C bus number"),
+    .bus = arg_int1(
+        NULL, NULL,
+        "<"
+#   if defined(CONFIG_USE_I2C1) && CONFIG_I2C_NUM > 1
+        "1|"
+#   endif
+        STR(CONFIG_I2C_NUM)
+#   if defined(CONFIG_USE_I2C1) && CONFIG_I2C_NUM < 1
+        "|1"
+#   endif
+        ">", "I2C bus number"
+    ),
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
     .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "register value"),
@@ -471,7 +494,7 @@ static int driver_als(int argc, char **argv) {
         }
     } else {
         gy39_data_t dat;
-        if (!( err = gy39_measure(NUM_I2C, &dat) ))
+        if (!( err = gy39_measure(&dat) ))
             printf("GY39 %.2f lux, %.2f degC, %.2f Pa, %.2f %%, %.2f m\n",
                     dat.brightness, dat.temperature,
                     dat.atmosphere, dat.humidity, dat.altitude);
@@ -626,7 +649,7 @@ static struct {
     .load = arg_lit0(NULL, "load", "load from NVS flash"),
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
-    .list = arg_lit0(NULL, "list", "list NVS entries"),
+    .list = arg_litn(NULL, "list", 0, 2, "list NVS entries"),
     .end = arg_end(6)
 };
 
@@ -647,10 +670,10 @@ static int utils_config(int argc, char **argv) {
         ret = config_nvs_load();
     } else if (utils_config_args.save->count) {
         ret = config_nvs_dump();
-    } else if (utils_config_args.list->count) {
-        config_nvs_list();
     } else if (utils_config_args.stat->count) {
         config_nvs_stats();
+    } else if (utils_config_args.list->count) {
+        config_nvs_list(utils_config_args.list->count > 1);
     } else {
         config_list();
     }
@@ -1028,12 +1051,12 @@ static int net_ftm(int argc, char **argv) {
     const char *subcmd = net_ftm_args.cmd->sval[0];
     if (strstr(subcmd, "REP")) {
         int16_t base = net_ftm_args.base->ival[0];
-        return ftm_responder(
+        return ftm_respond(
             ARG_STR(net_ftm_args.ctrl, NULL),
             net_ftm_args.base->count ? &base : NULL);
     } else if (strstr(subcmd, "REQ")) {
         uint8_t npkt = net_ftm_args.npkt->ival[0];
-        return ftm_initiator(
+        return ftm_request(
             ARG_STR(net_ftm_args.ssid, NULL),
             ARG_INT(net_ftm_args.tout, 0),
             net_ftm_args.npkt->count ? &npkt : NULL);
@@ -1054,9 +1077,9 @@ static struct {
     struct arg_end *end;
 } net_mdns_args = {
     .ctrl = arg_str0("a", NULL, "<on|off>", "for responder: enable / disable"),
-    .host = arg_str0("h", NULL, "<hostname>", "mDNS hostname to query"),
-    .serv = arg_str0("s", NULL, "<_http|_ftp|etc>", "mDNS service to query"),
-    .proto = arg_str0("p", NULL, "<_tcp|_udp|etc>", "mDNS protocol to query"),
+    .host = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
+    .serv = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
+    .proto = arg_str0("p", NULL, "<_tcp>", "mDNS protocol to query"),
     .tout = arg_int0("t", NULL, "<msec>", "time to wait for querying record"),
     .end = arg_end(4)
 };
@@ -1196,9 +1219,20 @@ static void register_network() {
  * Export register commands
  */
 
-extern "C" void console_register_commands() {
+void console_register_commands() {
+    const esp_console_cmd_t clear = {
+        .command = "clear",
+        .help = "Clean screen",
+        .hint = NULL,
+        .func = [] (int c, char **v) -> int {
+            linenoiseClearScreen();
+            return ESP_OK;
+        },
+        .argtable = NULL
+    };
     esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_ERROR_CHECK( esp_console_register_help_command() );
+    ESP_ERROR_CHECK( esp_console_cmd_register(&clear) );
     register_network();
     register_driver();
     register_system();

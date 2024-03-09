@@ -13,12 +13,9 @@
  * STA_SSID & STA_PASS.
  */
 
-#ifndef _WIFI_H_
-#define _WIFI_H_
+#pragma once
 
 #include "globals.h"
-
-#include "esp_err.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -36,8 +33,8 @@ esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel, uint16_t timeout_ms);
 esp_err_t wifi_sta_wait(uint16_t timeout_ms);
 esp_err_t wifi_sta_list_ap();
 
-esp_err_t ftm_initiator(const char *ssid, uint16_t timeout_ms, uint8_t *count);
-esp_err_t ftm_responder(const char *ctrl, int16_t *offset_cm);
+esp_err_t ftm_request(const char *ssid, uint16_t timeout_ms, uint8_t *count);
+esp_err_t ftm_respond(const char *ctrl, int16_t *offset_cm);
 esp_err_t mdns_command(const char *action, const char *hostname,
                        const char *service, const char *proto,
                        uint16_t timeout_ms);
@@ -50,5 +47,3 @@ esp_err_t iperf_command(const char *host, uint16_t port, uint16_t length,
 #ifdef __cplusplus
 }
 #endif
-
-#endif // _WIFI_H_

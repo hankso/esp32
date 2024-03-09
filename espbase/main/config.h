@@ -6,12 +6,9 @@
  * See more in comment strings
  */
 
-#ifndef _CONFIG_H_
-#define _CONFIG_H_
+#pragma once
 
-#include <stdbool.h>
-
-#include "esp_err.h"
+#include "globals.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -64,7 +61,7 @@ typedef struct {
 
 extern config_t Config;
 
-bool config_initialize();
+void config_initialize();
 bool config_loads(const char *);        // load Config from json
 char * config_dumps();                  // dump Config into json
 void config_list();                     // list all configurations
@@ -88,11 +85,9 @@ bool config_nvs_remove(const char *);   // remove one entry in NVS
 bool config_nvs_clear();                // remove all entries in NVS
 bool config_nvs_load();                 // load Config from NVS partition
 bool config_nvs_dump();                 // save Config to NVS partition
-void config_nvs_list();                 // list all entries in NVS
 void config_nvs_stats();                // get NVS partition detail
+void config_nvs_list(bool);             // list [all] entries in NVS
 
 #ifdef __cplusplus
 }
 #endif
-
-#endif // _CONFIG_H_

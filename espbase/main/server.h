@@ -39,18 +39,26 @@
  *                  - param `?reset&size=int`
  */
 
-#ifndef _SERVER_H_
-#define _SERVER_H_
+#pragma once
+
+#include "globals.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 void server_loop_begin();
 void server_loop_end();
 
 #ifdef __cplusplus
+}
+#endif
+
+
+#ifdef __cplusplus
 
 #include <AsyncTCP.h>
 #include <ESPAsyncWebServer.h>
-
-extern "C" {
 
 class WebServerClass {
 private:
@@ -73,7 +81,4 @@ public:
 
 extern WebServerClass WebServer;
 
-}
 #endif // __cplusplus
-
-#endif // _SERVER_H_

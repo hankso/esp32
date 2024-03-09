@@ -1,5 +1,5 @@
 <template>
-    <v-expansion-panels class="my-2">
+    <v-expansion-panels class="schema-editor my-2">
         <v-expansion-panel>
             <v-expansion-panel-title v-slot="{ expanded }">
                 Edit Schema
@@ -62,12 +62,12 @@ watch(
     margin: -8px -24px -16px; /* hotfix for v-expansion-panel-text__wrapper */
 }
 
-.codejar {
+.code-jar {
     max-height: 30vh;
     overflow-y: auto;
 }
 
-.codejar + p {
+.code-jar + p {
     color: #b00020;
     font-size: 12px;
     margin-left: 8px;

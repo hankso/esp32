@@ -18,6 +18,7 @@ coverage/
 **/files/www/
 **/files/docs/
 
+sdkconfig
 stats.html
 node_modules
 managed_components

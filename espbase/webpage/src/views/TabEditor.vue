@@ -5,13 +5,13 @@ import { cvtcase, copyToClipboard, downloadAsFile } from '@/utils'
 import TabFileman from '@/views/TabFileman.vue'
 
 import {
-    mdiDownload,
-    mdiLockOutline,
-    mdiClipboardTextOutline,
-    mdiClipboardCheckOutline,
-    mdiFormatColorText,
     mdiCounter,
-    mdiFileTreeOutline,
+    mdiDownload,
+    mdiFormatColorText,
+    mdiLockOutline as mdiLock,
+    mdiFileTreeOutline as mdiFileTree,
+    mdiClipboardTextOutline as mdiClipboardText,
+    mdiClipboardCheckOutline as mdiClipboardCheck,
 } from '@mdi/js'
 
 import { basename, resolve, extname } from 'path-browserify'
@@ -41,10 +41,10 @@ const config = ref({
 })
 
 const propIcons = {
-    readonly: mdiLockOutline,
+    readonly: mdiLock,
     highlight: mdiFormatColorText,
     lineNumber: mdiCounter,
-    treeView: mdiFileTreeOutline,
+    treeView: mdiFileTree,
 }
 
 const links = computed(() => {
@@ -57,13 +57,13 @@ const links = computed(() => {
     }))
 })
 
-const select = computed(() => {
-    return Object.values(toValue(config)).map((v, i) => (v === true ? i : ''))
-})
+const copyIcon = computed(() =>
+    toValue(copied) ? mdiClipboardCheck : mdiClipboardText
+)
 
-const copyIcon = computed(() => {
-    return toValue(copied) ? mdiClipboardCheckOutline : mdiClipboardTextOutline
-})
+const uploadIcon = computed(() =>
+    toValue(loading) === false ? '$complete' : '$close'
+)
 
 function copy() {
     copyToClipboard(toValue(code)).then(() => {
@@ -120,82 +120,66 @@ watch(
             <TabFileman
                 v-show="config.treeView"
                 :use-link="false"
-                class="mx-0 my-0"
-                height="35vh"
+                min-width="30%"
+                height="40vh"
             />
         </v-scale-transition>
 
         <v-sheet border rounded="lg" class="flex-grow-1 overflow-hidden">
-            <v-toolbar density="comfortable" class="border-b">
-                <v-btn icon class="ms-0 me-n4" @click="upload">
-                    <v-icon :icon="loading === false ? '$complete' : '$close'">
-                    </v-icon>
-                    <v-tooltip activator="parent" location="bottom">
-                        {{ loading === false ? `Save as ${path}` : 'Cancel' }}
-                    </v-tooltip>
-                </v-btn>
-
-                <v-breadcrumbs :items="links"></v-breadcrumbs>
-
+            <v-toolbar height="36" class="border-b">
+                <v-breadcrumbs density="compact" :items="links"></v-breadcrumbs>
                 <v-spacer></v-spacer>
 
-                <span class="text-error d-none d-md-inline">
+                <span class="text-error d-none d-md-inline me-4">
                     {{ code.trim().split('\n').length }} lines -
                     {{ code.length }} bytes
                 </span>
 
-                <v-btn-group
-                    divided
-                    rounded="s-lg e-0"
-                    density="comfortable"
-                    variant="outlined"
+                <v-btn icon @click="upload">
+                    <v-icon :icon="uploadIcon"></v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        {{ loading === false ? `Save as ${path}` : 'Cancel' }}
+                    </v-tooltip>
+                </v-btn>
+                <v-btn icon @click="copy">
+                    <v-icon :icon="copyIcon"></v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        {{ copied ? 'Copied!' : 'Copy to clipboard' }}
+                    </v-tooltip>
+                </v-btn>
+                <v-btn icon @click="downloadAsFile(code, basename(path))">
+                    <v-icon :icon="mdiDownload"></v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        Download as {{ basename(path) }}
+                    </v-tooltip>
+                </v-btn>
+                <v-btn
+                    icon
+                    v-for="(icon, prop) in propIcons"
+                    :key="prop"
+                    :color="config[prop] ? 'purple' : ''"
+                    @click="config[prop] = !config[prop]"
                 >
-                    <v-btn icon @click="copy">
-                        <v-icon :icon="copyIcon"></v-icon>
-                        <v-tooltip activator="parent" location="bottom">
-                            {{ copied ? 'Copied!' : 'Copy to clipboard' }}
-                        </v-tooltip>
-                    </v-btn>
-
-                    <v-btn icon @click="downloadAsFile(code, basename(path))">
-                        <v-icon :icon="mdiDownload"></v-icon>
-                        <v-tooltip activator="parent" location="bottom">
-                            Download as {{ basename(path) }}
-                        </v-tooltip>
-                    </v-btn>
-                </v-btn-group>
-
-                <v-btn-toggle
-                    :model-value="select"
-                    rounded="s-0 e-lg"
-                    density="comfortable"
-                    variant="outlined"
-                    color="primary"
-                    class="me-2"
-                    multiple
-                    divided
-                >
-                    <v-btn
-                        icon
-                        v-for="(icon, prop) in propIcons"
-                        :key="prop"
-                        @click="config[prop] = !config[prop]"
-                    >
-                        <v-icon :icon="icon"></v-icon>
-                        <v-tooltip activator="parent" location="bottom">
-                            Turn {{ config[prop] ? 'off' : 'on' }}
-                            {{ cvtcase(prop, 'snake') }}
-                        </v-tooltip>
-                    </v-btn>
-                </v-btn-toggle>
+                    <v-icon :icon="icon"></v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        Turn {{ config[prop] ? 'off' : 'on' }}
+                        {{ cvtcase(prop, 'title') }}
+                    </v-tooltip>
+                </v-btn>
             </v-toolbar>
+
             <CodeJar v-model="code" v-bind="config" />
         </v-sheet>
     </div>
 </template>
 
 <style scoped>
-.v-btn-group .v-btn {
-    padding: 0 20px;
+.v-btn {
+    width: 36px;
+    height: inherit;
+    border-radius: 0;
+    margin-inline-end: 0 !important;
+    border-inline-start: thin solid
+        rgba(var(--v-border-color), var(--v-border-opacity)) !important;
 }
 </style>

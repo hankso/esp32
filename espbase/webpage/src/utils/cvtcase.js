@@ -1,4 +1,11 @@
 // Modified on www.30secondsofcode.org/js/s/string-case-conversion
+// Supported cases:
+//   - PascalCase
+//   - camelCase
+//   - kebab-case
+//   - snake_case
+//   - Title Case
+//   - Capital case
 
 const cases = ['pascal', 'camel', 'kebab', 'snake', 'title', 'capital']
 

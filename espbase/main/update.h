@@ -4,8 +4,7 @@
  * Create: 2020-03-23 11:42:30
  */
 
-#ifndef _UPDATE_H_
-#define _UPDATE_H_
+#pragma once
 
 #include "globals.h"
 
@@ -13,7 +12,7 @@
 extern "C" {
 #endif
 
-void ota_initialize();
+void update_initialize();
 
 void ota_updation_reset();
 bool ota_updation_begin(size_t);
@@ -29,5 +28,3 @@ void ota_partition_info();
 #ifdef __cplusplus
 }
 #endif
-
-#endif // _UPDATE_H_

@@ -18,30 +18,22 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 
-static const char *TAG = "hankso";
-
 // Task list:
 //  WiFi/AsyncTCP/WebServer Core 0
 //  Console (command REPL) Core 1
 //  Main loop (screen) Core 1
 
-void init() {
-    esp_log_level_set(TAG, ESP_LOG_DEBUG);
-    ESP_LOGI(TAG, "Init Configuration");        config_initialize();
-    ESP_LOGI(TAG, "Init OTA Updation");         ota_initialize();
-    ESP_LOGI(TAG, "Init File Systems");         fs_initialize();
-    ESP_LOGI(TAG, "Init Network Connection");   network_initialize();   // 89040 Bytes
-    ESP_LOGI(TAG, "Init Hardware Drivers");     driver_initialize();
-    ESP_LOGI(TAG, "Init Command Line Console"); console_initialize();
-    fflush(stdout);
-}
-
 void setup() {
+    config_initialize();
+    update_initialize();
+    filesys_initialize();
+    network_initialize();
+    driver_initialize();
+    console_initialize();
+
+    led_set_blink(0);
     server_loop_begin();    // Core 0 (i.e. Pro CPU)
     console_loop_begin(1);  // Core 1 (i.e. App CPU)
-#ifdef CONFIG_LED_INDICATOR
-    led_set_blink(0);
-#endif
 }
 
 void loop() {
@@ -62,13 +54,13 @@ void loop() {
 
 #if !CONFIG_AUTOSTART_ARDUINO
 void loopTask(void *pvParameters) {
+    setup();
     for (;;) {
         loop();
     }
 }
 
 extern "C" void app_main(void) {
-    init(); setup();
     //                      function  task name  stacksize param prio hdlr cpu
     xTaskCreatePinnedToCore(loopTask, "mainloop", 1024 * 4, NULL, 1, NULL, 1);
 }

@@ -1,5 +1,5 @@
 <template>
-    <v-form class="fix-schema-form-content rounded-lg overflow-x-hidden">
+    <v-form class="schema-form fix-schema-form-content rounded-lg">
         <slot />
 
         <template v-for="item in items" :key="item.name">
@@ -164,6 +164,7 @@ const items = computed(() => genItem(toValue(data) ?? scaffold(props.schema)))
 <style scoped>
 .v-form {
     position: relative; /* for v-overlay contained */
+    overflow-x: hidden;
     padding-top: 12px;
 }
 

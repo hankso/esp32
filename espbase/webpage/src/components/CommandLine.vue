@@ -1,7 +1,7 @@
 <template>
     <Terminal
         ref="instance"
-        class="fix-terminal"
+        class="command-line fix-terminal"
         :key="forceUpdate"
         :name="title"
         :title
