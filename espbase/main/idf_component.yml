@@ -1,5 +1,6 @@
 ## IDF Component Manager Manifest File
 dependencies:
+  espressif/usb_host_cdc_acm: "*"
   espressif/knob: "=*"
   espressif/button: "=*"
   espressif/led_indicator: "=*"

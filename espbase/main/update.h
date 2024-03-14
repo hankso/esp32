@@ -16,7 +16,7 @@ void update_initialize();
 
 void ota_updation_reset();
 bool ota_updation_begin(size_t);
-bool ota_updation_write(uint8_t *, size_t);
+bool ota_updation_write(void *, size_t);
 bool ota_updation_end();
 bool ota_updation_url(const char *);
 bool ota_updation_partition(const char *);

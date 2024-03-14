@@ -50,6 +50,7 @@ config_t Config = {
         .MDNS_HOST = "",
         .OTA_RUN   = "1",
         .OTA_URL   = "",
+        .USB_MODE  = "",
         .PROMPT    = "esp32> ",
     },
     .info = {
@@ -106,6 +107,7 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.ota.run",     &Config.app.OTA_RUN,    NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
+    {"app.usb.mode",    &Config.app.USB_MODE,   NULL},
     {"app.prompt",      &Config.app.PROMPT,     NULL},
 };
 
@@ -120,6 +122,13 @@ static uint16_t rwlen = LEN(rwlst);
  * Configuration I/O
  */
 
+static struct {
+    bool init;                      // whether nvs flash has been initialized
+    esp_err_t error;                // nvs flash init result
+    nvs_handle handle;              // nvs handle obtained from nvs_open
+    const esp_partition_t *part;    // nvs flash partition
+} ctx = { false, ESP_OK, 0, NULL };
+
 static int16_t config_index(const char *key) {
     LOOPN(i, rwlen) {
         if (!strcmp(key, rwlst[i].key)) return i;
@@ -127,19 +136,25 @@ static int16_t config_index(const char *key) {
     return -1;
 }
 
-static bool config_set_safe(config_entry_t *ent, const char *value) {
-    if (!strcmp(*ent->value, value)) return true;
+static esp_err_t config_set_safe(
+    config_entry_t *ent, const char *value, bool commit
+) {
+    if (!strcmp(*ent->value, value)) return ESP_OK;
     char *tmp = strdup(value);
-    if (!tmp) return false;
+    if (!tmp) return ESP_ERR_NO_MEM;
     TRYFREE(ent->freeval);
     *ent->value = ent->freeval = tmp;
-    return true;
+    if (commit && !config_nvs_open(NAMESPACE_CFG, false)) {
+        nvs_set_str(ctx.handle, ent->key, *ent->value);
+        config_nvs_close();
+    }
+    return ESP_OK;
 }
 
 bool config_set(const char *key, const char *value) {
     int16_t idx = config_index(key);
     if (idx == -1) return false;
-    return config_set_safe(rwlst + idx, value ? value : "");
+    return config_set_safe(rwlst + idx, value ? value : "", true) == ESP_OK;
 }
 
 const char * config_get(const char *key) {
@@ -148,14 +163,19 @@ const char * config_get(const char *key) {
 }
 
 void config_list() {
-    printf("Namespace: " NAMESPACE_CFG "\n  KEY\t\t\tVALUE\n");
+#ifdef CONFIG_AUTO_ALIGN
+    size_t keylen = 0;
+    LOOPN(i, rwlen) { keylen = MAX(keylen, strlen(rwlst[i].key)); }
+#else
+    size_t keylen = 16;
+#endif
+    printf("Namespace: " NAMESPACE_CFG "\n  %-*s Value\n", keylen, "Key");
     LOOPN(i, rwlen) {
-        const char *key = rwlst[i].key, *value = *rwlst[i].value;
-        printf("  %-15.15s\t", key);
-        if (!strcmp(key + strlen(key) - 4, "pass")) {
-            printf("`%.*s`", strlen(value), "****************");
+        printf("  %-*s ", keylen, rwlst[i].key);
+        if (endswith(rwlst[i].key, "pass")) {
+            LPCHR('*', MIN(strlen(*rwlst[i].value), 16));
         } else {
-            printf("`%s`", value);
+            printf(*rwlst[i].value);
         }
         printf("%s\n", rwlst[i].freeval ? " (modified)" : "");
     }
@@ -174,22 +194,21 @@ static void set_config_callback(const char *key, cJSON *item) {
 }
 
 static void json_parse_object_recurse(
-    cJSON *item, void (*cb)(const char *, cJSON *), const char *prefix)
-{
+    cJSON *item, void (*cb)(const char *, cJSON *), const char *root
+) {
     while (item) {
         if (item->string == NULL) {  // may be the root object
-            if (item->child) json_parse_object_recurse(item->child, cb, prefix);
+            if (item->child) json_parse_object_recurse(item->child, cb, root);
             item = item->next;
             continue;
         }
 
         // resolve key string with parent's name
-        uint8_t plen = strlen(prefix);
-        uint8_t slen = strlen(item->string) + (plen ? plen + 1 : 0) + 1;
-        char *key = (char *)malloc(slen);
-        if (key == NULL) continue;
-        if (plen) snprintf(key, slen, "%s.%s", prefix, item->string);
-        else      snprintf(key, slen, item->string);
+        char *key;
+        uint8_t rlen = strlen(root);
+        uint8_t slen = strlen(item->string) + (rlen ? rlen + 1 : 0) + 1;
+        if (EALLOC(key, slen)) continue;
+        snprintf(key, slen, "%s%s%s", root, rlen ? "." : "", item->string);
 
         (*cb)(key, item);
 
@@ -226,36 +245,84 @@ char * config_dumps() {
  * Configuration utilities
  */
 
-static struct {
-    bool init;                      // whether nvs flash has been initialized
-    esp_err_t error;                // nvs flash init result
-    nvs_handle handle;              // nvs handle obtained from nvs_open
-    const esp_partition_t *part;    // nvs flash partition
-} nvs_st = { false, ESP_OK, 0, NULL };
-
-// nvs helper function: nvs_load_str wrapps on nvs_get_str
 static esp_err_t nvs_load_str(config_entry_t *ent) {
-    esp_err_t err;
-    char *value;
     size_t len = 0;
-    if (( err = nvs_get_str(nvs_st.handle, ent->key, NULL, &len) )) return err;
-    if (!( value = (char *)malloc(len) )) return ESP_ERR_NO_MEM;
-    if (!( err = nvs_get_str(nvs_st.handle, ent->key, value, &len) )) {
-        if (config_set_safe(ent, value)) err = ESP_ERR_NO_MEM;
+    char *buf = NULL;
+    esp_err_t err = nvs_get_str(ctx.handle, ent->key, NULL, &len);
+    if (!err) err = EALLOC(buf, len);
+    if (!err) err = nvs_get_str(ctx.handle, ent->key, buf, &len);
+    if (!err) err = config_set_safe(ent, buf, false);
+    TRYFREE(buf);
+    return err;
+}
+
+static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
+    char *buf = NULL;
+    size_t len = 16;
+    uint8_t data[8];
+    nvs_handle hdl;
+    esp_err_t err = nvs_open(info->namespace_name, NVS_READONLY, &hdl);
+    if (err) return err;
+    if (info->type == NVS_TYPE_STR) {
+        if (!err) err = nvs_get_str(hdl, info->key, NULL, &len);
+        if (!err) err = EALLOC(buf, len);
+        if (!err) err = nvs_get_str(hdl, info->key, buf, &len);
+    } else if (info->type == NVS_TYPE_BLOB) {
+        if (!err) err = nvs_get_blob(hdl, info->key, NULL, &len);
+        if (!err) err = EALLOC(buf, len * 3);
+        if (!err) err = nvs_get_blob(hdl, info->key, buf + len * 2, &len);
+        if (!err) hexdumps((uint8_t *)(buf + len * 2), buf, len, 32);
+    } else if (!( err = EALLOC(buf, len) )) {
+        switch (info->type) {
+            case NVS_TYPE_U8:
+                err = nvs_get_u8(hdl, info->key, (uint8_t *)data);
+                snprintf(buf, len, "%u", *(uint8_t *)data);
+                break;
+            case NVS_TYPE_I8:
+                err = nvs_get_i8(hdl, info->key, (int8_t *)data);
+                snprintf(buf, len, "%d", *(int8_t *)data);
+                break;
+            case NVS_TYPE_U16:
+                err = nvs_get_u16(hdl, info->key, (uint16_t *)data);
+                snprintf(buf, len, "%u", *(uint16_t *)data);
+                break;
+            case NVS_TYPE_I16:
+                err = nvs_get_i16(hdl, info->key, (int16_t *)data);
+                snprintf(buf, len, "%d", *(int16_t *)data);
+                break;
+            case NVS_TYPE_U32:
+                err = nvs_get_u32(hdl, info->key, (uint32_t *)data);
+                snprintf(buf, len, "%u", *(uint32_t *)data);
+                break;
+            case NVS_TYPE_I32:
+                err = nvs_get_i32(hdl, info->key, (int32_t *)data);
+                snprintf(buf, len, "%d", *(int32_t *)data);
+                break;
+            case NVS_TYPE_U64:
+                err = nvs_get_u64(hdl, info->key, (uint64_t *)data);
+                snprintf(buf, len, "%llu", *(uint64_t *)data);
+                break;
+            case NVS_TYPE_I64:
+                err = nvs_get_i64(hdl, info->key, (int64_t *)data);
+                snprintf(buf, len, "%lld", *(int64_t *)data);
+                break;
+            default: err = ESP_ERR_INVALID_STATE;
+        }
     }
-    TRYFREE(value);
+    if (hdl) nvs_close(hdl);
+    if (err) TRYFREE(buf);
+    *vptr = buf;
     return err;
 }
 
 esp_err_t config_nvs_init() {
-    if (nvs_st.init) return nvs_st.error;
-    nvs_st.part = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA,
-        ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
-    if (nvs_st.part == NULL) {
+    if (ctx.init) return ctx.error;
+    ctx.part = esp_partition_find_first(
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS, NULL);
+    if (ctx.part == NULL) {
         ESP_LOGE(TAG, "Could not found nvs partition. Skip");
-        nvs_st.init = true;
-        return nvs_st.error = ESP_ERR_NOT_FOUND;
+        ctx.init = true;
+        return ctx.error = ESP_ERR_NOT_FOUND;
     }
 #ifdef CONFIG_AUTOSTART_ARDUINO
     nvs_flash_deinit();
@@ -265,8 +332,7 @@ esp_err_t config_nvs_init() {
 #ifdef CONFIG_NVS_ENCRYPT
     enc = true;
     const esp_partition_t *keys = esp_partition_find_first(
-        ESP_PARTITION_TYPE_DATA,
-        ESP_PARTITION_SUBTYPE_DATA_NVS_KEY, NULL);
+        ESP_PARTITION_TYPE_DATA, ESP_PARTITION_SUBTYPE_DATA_NVS_KEY, NULL);
     if (keys != NULL) {
         nvs_sec_cfg_t *cfg;
         err = nvs_flash_read_security_cfg(keys, cfg);
@@ -274,7 +340,7 @@ esp_err_t config_nvs_init() {
             err = nvs_flash_generate_keys(keys, cfg);
         }
         if (!err) {
-            err = nvs_flash_secure_init_partition(nvs_st.part->label, cfg);
+            err = nvs_flash_secure_init_partition(ctx.part->label, cfg);
         } else {
             ESP_LOGE(TAG, "Could not initialize nvs with encryption: %s",
                      esp_err_to_name(err));
@@ -282,68 +348,61 @@ esp_err_t config_nvs_init() {
         }
     } else { enc = false; }
 #endif
-    if (!enc) err = nvs_flash_init_partition(nvs_st.part->label);
-    if (err == ESP_ERR_NVS_NO_FREE_PAGES ||
-        err == ESP_ERR_NVS_NEW_VERSION_FOUND)
+    if (!enc) err = nvs_flash_init_partition(ctx.part->label);
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND)
     {
-        err = nvs_flash_erase_partition(nvs_st.part->label);
+        err = nvs_flash_erase_partition(ctx.part->label);
         if (!err) { // partition cleared. we try again
 #ifdef CONFIG_NVS_ENCRYPT
             if (enc) {
-                err = nvs_flash_secure_init_partition(nvs_st.part->label, cfg);
+                err = nvs_flash_secure_init_partition(ctx.part->label, cfg);
             } else
 #endif
             {
-                err = nvs_flash_init_partition(nvs_st.part->label);
+                err = nvs_flash_init_partition(ctx.part->label);
             }
         }
     }
     if (err) {
         ESP_LOGE(TAG, "Could not init nvs flash: %s", esp_err_to_name(err));
     }
-    nvs_st.init = true;
-    nvs_st.error = err;
+    ctx.init = true;
+    ctx.error = err;
     return err;
 }
 
 esp_err_t config_nvs_open(const char *ns, bool ro) {
-    if (nvs_st.handle) return ESP_FAIL;
-    esp_err_t err = ESP_OK;
-    if (!nvs_st.init) err = config_nvs_init();
-    if (!err) {
-        err = nvs_open(ns, ro ? NVS_READONLY : NVS_READWRITE, &nvs_st.handle);
-    }
-    if (err) {
-        ESP_LOGE(TAG, "Could not open nvs namespace `%s:` %s",
-                 ns, esp_err_to_name(err));
-    }
+    if (ctx.handle) return ESP_FAIL;
+    esp_err_t err = ctx.init ? ESP_OK : config_nvs_init();
+    if (!err) err = nvs_open(ns, ro ? NVS_READONLY : NVS_READWRITE, &ctx.handle);
+    if (err) ESP_LOGE(TAG, "open `%s` fail: %s", ns, esp_err_to_name(err));
     return err;
 }
 
 esp_err_t config_nvs_commit() {
-    if (!nvs_st.handle) return ESP_ERR_NVS_INVALID_HANDLE;
-    esp_err_t err = nvs_commit(nvs_st.handle);
+    if (!ctx.handle) return ESP_ERR_NVS_INVALID_HANDLE;
+    esp_err_t err = nvs_commit(ctx.handle);
     if (err) ESP_LOGE(TAG, "commit fail: %s", esp_err_to_name(err));
     return err;
 }
 
 esp_err_t config_nvs_close() {
-    if (!nvs_st.handle) return ESP_ERR_NVS_INVALID_HANDLE;
+    if (!ctx.handle) return ESP_ERR_NVS_INVALID_HANDLE;
     esp_err_t err = config_nvs_commit();
-    nvs_close(nvs_st.handle); nvs_st.handle = 0;
+    nvs_close(ctx.handle); ctx.handle = 0;
     return err;
 }
 
 bool config_nvs_remove(const char *key) {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
-    esp_err_t err = nvs_erase_key(nvs_st.handle, key);
+    esp_err_t err = nvs_erase_key(ctx.handle, key);
     if (err) ESP_LOGE(TAG, "erase `%s` fail: %s", key, esp_err_to_name(err));
     return config_nvs_close() == ESP_OK;
 }
 
 bool config_nvs_clear() {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
-    esp_err_t err = nvs_erase_all(nvs_st.handle);
+    esp_err_t err = nvs_erase_all(ctx.handle);
     if (err) ESP_LOGE(TAG, "erase nvs data fail: %s", esp_err_to_name(err));
     return config_nvs_close() == ESP_OK;
 }
@@ -364,7 +423,7 @@ bool config_nvs_dump() {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
     bool success = true;
     LOOPN(i, rwlen) {
-        if (nvs_set_str(nvs_st.handle, rwlst[i].key, *rwlst[i].value)) {
+        if (nvs_set_str(ctx.handle, rwlst[i].key, *rwlst[i].value)) {
             success = false;
             break;
         }
@@ -372,18 +431,38 @@ bool config_nvs_dump() {
     return (config_nvs_close() == ESP_OK) && success;
 }
 
+static const char * nvs_type_str(nvs_type_t type) {
+    static char buf[5];
+    switch (type) {
+        CASESTR(NVS_TYPE_U8, 9);
+        CASESTR(NVS_TYPE_I8, 9);
+        CASESTR(NVS_TYPE_U16, 9);
+        CASESTR(NVS_TYPE_I16, 9);
+        CASESTR(NVS_TYPE_U32, 9);
+        CASESTR(NVS_TYPE_I32, 9);
+        CASESTR(NVS_TYPE_U64, 9);
+        CASESTR(NVS_TYPE_I64, 9);
+        CASESTR(NVS_TYPE_STR, 9);
+        CASESTR(NVS_TYPE_BLOB, 9);
+        CASESTR(NVS_TYPE_ANY, 9);
+        default:
+            snprintf(buf, sizeof(buf), "0x%02X", type);
+            return buf;
+    }
+}
+
 void config_nvs_list(bool all) {
-    if (nvs_st.part == NULL) {
+    if (ctx.part == NULL) {
         ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
 #ifdef _NVS_ITER_LIST
-    const char *ns = all ? NULL : NAMESPACE_CFG;
+    const char *ns = all ? NULL : NAMESPACE_CFG, *val;
     nvs_entry_info_t info;
-    nvs_iterator_t iter = nvs_entry_find(nvs_st.part->label, ns, NVS_TYPE_ANY);
+    nvs_iterator_t iter = nvs_entry_find(ctx.part->label, ns, NVS_TYPE_ANY);
     if (!iter) {
         ESP_LOGE(TAG, "No entries found for namespace `%s` in parition `%s`",
-                 all ? "all" : ns, nvs_st.part->label);
+                 all ? "all" : ns, ctx.part->label);
         return;
     }
 #   ifdef CONFIG_AUTO_ALIGN
@@ -395,33 +474,33 @@ void config_nvs_list(bool all) {
         keylen = MAX(keylen, strlen(info.key));
     }
     nvs_release_iterator(iter);
-    iter = nvs_entry_find(nvs_st.part->label, ns, NVS_TYPE_ANY);
+    iter = nvs_entry_find(ctx.part->label, ns, NVS_TYPE_ANY);
 #   else
     size_t nslen = 16, keylen = NVS_KEY_NAME_MAX_SIZE; // see nvs.h
 #   endif
     if (all) {
-        printf("%-*s %-*s Value\n", nslen, "Namespace", keylen, "Key");
+        printf("%-*s %-*s Type Value\n", nslen, "Namespace", keylen, "Key");
     } else {
-        printf("Namespace: %s\n  %-*s Value\n", ns, keylen, "Key");
+        printf("Namespace: %s\n  %-*s Type Value\n", ns, keylen, "Key");
     }
     while (iter) {
         nvs_entry_info(iter, &info);
         iter = nvs_entry_next(iter);
-        if (all) {
-            printf("%-*s %-*s ", nslen, info.namespace_name, keylen, info.key);
+        char *tmp = NULL;
+        if (!strcmp(info.namespace_name, NAMESPACE_CFG)) {
+            val = config_get(info.key);
         } else {
-            printf("  %-*s ", keylen, info.key);
+            val = nvs_load_val_ro(&info, &tmp) ? "" : tmp;
         }
-        if (strcmp(info.namespace_name, NAMESPACE_CFG)) {
-            putchar('\n');
-            continue;
-        }
-        const char *value = config_get(info.key);
-        if (endswith(info.key, "pass")) {
-            printf("`%.*s`\n", strlen(value), "********");
+        printf("%-*s %-*s %4s ",
+                all ? nslen : 1, all ? info.namespace_name : " ",
+                keylen, info.key, nvs_type_str(info.type));
+        if (endswith(info.key, "pass") || endswith(info.key, "pswd")) {
+            LPCHRN('*', MIN(strlen(val), 16));
         } else {
-            printf("`%s`\n", value);
+            puts(val);
         }
+        TRYFREE(tmp);
     }
     nvs_release_iterator(iter);
 #else
@@ -430,12 +509,12 @@ void config_nvs_list(bool all) {
 }
 
 void config_nvs_stats() {
-    if (nvs_st.part == NULL) {
+    if (ctx.part == NULL) {
         ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
     nvs_stats_t nvs_stats;
-    esp_err_t err = nvs_get_stats(nvs_st.part->label, &nvs_stats);
+    esp_err_t err = nvs_get_stats(ctx.part->label, &nvs_stats);
     if (err) {
         ESP_LOGE(TAG, "Could not get nvs status: %s", esp_err_to_name(err));
         return;
@@ -444,7 +523,7 @@ void config_nvs_stats() {
         "NVS Partition Size: %s\n"
         "  Namespaces: %d\n"
         "  Entries: %d/%d (%.2f %% free)\n",
-        format_size(nvs_st.part->size, false), nvs_stats.namespace_count,
+        format_size(ctx.part->size, false), nvs_stats.namespace_count,
         nvs_stats.used_entries, nvs_stats.total_entries,
         100.0 * nvs_stats.free_entries / nvs_stats.total_entries
     );
@@ -468,12 +547,12 @@ void config_initialize() {
     // startup times counter test
     if (config_nvs_open(NAMESPACE_INFO, false) == ESP_OK) {
         uint32_t counter = 0;
-        if (( err = nvs_get_u32(nvs_st.handle, "counter", &counter) )) {
+        if (( err = nvs_get_u32(ctx.handle, "counter", &counter) )) {
             ESP_LOGE(TAG, "get u32 `counter` fail: %s", esp_err_to_name(err));
         }
         counter++;
         ESP_LOGI(TAG, "Current run times: %u", counter);
-        if (( err = nvs_set_u32(nvs_st.handle, "counter", counter) )) {
+        if (( err = nvs_set_u32(ctx.handle, "counter", counter) )) {
             ESP_LOGE(TAG, "set u32 `counter` fail: %s", esp_err_to_name(err));
         }
         config_nvs_close();

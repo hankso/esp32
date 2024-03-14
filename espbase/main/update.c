@@ -116,7 +116,7 @@ bool ota_updation_begin(size_t size) {
     return true;
 }
 
-bool ota_updation_write(uint8_t *data, size_t size) {
+bool ota_updation_write(void *data, size_t size) {
     if (!ota_updation_st.handle || ota_updation_st.error) return false;
     ota_updation_st.error = esp_ota_write(ota_updation_st.handle, data, size);
     if (ota_updation_st.error) {
@@ -161,16 +161,16 @@ esp_err_t ota_updation_fetch_url(const char *url) {
     // };
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) return ESP_FAIL;
+    int rsize;
+    char *buf;
     size_t
         hsize = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t),
         asize = sizeof(esp_app_desc_t);
-    uint8_t *ota_buf = (uint8_t *)calloc(1024 + 1, sizeof(uint8_t));
-    if (!ota_buf) return ESP_ERR_NO_MEM;
-    esp_err_t err = ESP_OK;
-    if ( (err = esp_http_client_open(client, 0)) ) goto http_clean;
+    esp_err_t err = EALLOC(buf, 1024 + 1);
+    if (err) return err;
+    if (( err = esp_http_client_open(client, 0) )) goto http_clean;
     esp_http_client_fetch_headers(client);
-    int rsize;
-    while (( rsize = esp_http_client_read(client, (char *)ota_buf, 1024) )) {
+    while (( rsize = esp_http_client_read(client, buf, 1024) )) {
         if (rsize < 0) {
             err = ESP_FAIL;
             goto http_clean;
@@ -181,7 +181,7 @@ esp_err_t ota_updation_fetch_url(const char *url) {
             }
             esp_app_desc_t new_info, run_info, ota_info = ota_updation_st.info;
             const esp_partition_t *running = ota_updation_st.running;
-            memcpy(&new_info, ota_buf + hsize, asize);
+            memcpy(&new_info, buf + hsize, asize);
             printf("New app firmware version: %s\n", new_info.version);
             esp_ota_get_partition_description(running, &run_info);
             printf("Running firmware version: %s\n", run_info.version);
@@ -194,7 +194,7 @@ esp_err_t ota_updation_fetch_url(const char *url) {
             }
             if (!ota_updation_begin(0)) goto ota_err;
         }
-        if (!ota_updation_write(ota_buf, rsize)) goto ota_err;
+        if (!ota_updation_write(buf, rsize)) goto ota_err;
     }
     if (!ota_updation_end()) goto ota_err;
     goto http_clean;
@@ -204,7 +204,7 @@ ota_err:
 http_clean:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    TRYFREE(ota_buf);
+    TRYFREE(buf);
     return err;
 #else
     return ESP_ERR_INVALID_STATE;

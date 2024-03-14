@@ -12,8 +12,9 @@
 // #define CONSOLE_SYSTEM_SLEEP        // 12292 Bytes
 // #define CONSOLE_SYSTEM_UPDATE       // 3196 Bytes
 
-#define CONSOLE_DRIVER_LED          // 700 Bytes
 #define CONSOLE_DRIVER_GPIO         // 700 Bytes
+#define CONSOLE_DRIVER_USB          // 430 Bytes
+#define CONSOLE_DRIVER_LED          // 700 Bytes
 #define CONSOLE_DRIVER_I2C          // 1436 Bytes
 // #define CONSOLE_DRIVER_ALS          // 1920 Bytes
 // #define CONSOLE_DRIVER_ADC          // 1424 Bytes
@@ -43,8 +44,7 @@ extern "C" {
 // Config and init console. commands are registered at the end.
 void console_initialize();
 
-// Implemented in console_cmds.cpp
-void console_register_commands();
+void console_register_prompt(const char *prompt);
 
 char * console_handle_command(const char *cmd, int history);
 

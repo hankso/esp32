@@ -2,15 +2,19 @@
  * File: console.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-12 15:58:29
+ * Desc: Replacement of `esp_console_new_repl_xxx` & `esp_console_start_repl`.
 */
 
 #include "console.h"
 #include "drivers.h"
 #include "config.h"
 
+#ifdef CONFIG_USE_CONSOLE
+
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
+#include "esp_vfs_cdcacm.h"
 #include "esp_vfs_usb_serial_jtag.h"
 #include "driver/usb_serial_jtag.h"
 #include "freertos/FreeRTOS.h"
@@ -26,31 +30,57 @@
 
 static const char *TAG = "Console";
 
-static const char *prompt = "$ ";
+static char prompt[32] = "$ ";
 
-static SemaphoreHandle_t xSemaphore = NULL;
+static SemaphoreHandle_t running = NULL;
+
+void console_register_commands(); // Implemented in commands.cpp
+
+void console_register_prompt(const char * str) {
+    if (!str || !strlen(str)) {
+        prompt[0] = '\0';
+        return;
+    }
+#ifdef CONFIG_LOG_COLORS
+    const char * color = LOG_COLOR(LOG_COLOR_PURPLE);
+    size_t len = strlen(color) + strlen(str) + strlen(LOG_RESET_COLOR);
+    if (!linenoiseIsDumbMode() && len < sizeof(prompt)) {
+        snprintf(prompt, len + 1, "%s%s%s", color, str, LOG_RESET_COLOR);
+        ESP_LOGI(TAG, "Using colorful prompt `%s`", prompt);
+    } else
+#endif
+    {
+        snprintf(prompt, sizeof(prompt), str);
+    }
+}
 
 void console_initialize() {
+    // esp_system/startup.c -> esp_vfs_console_register()
+    //  - /dev/uart/{NUM_UART}
+    //  - /dev/usbserjtag
+    //  - /dev/cdcacm
+    //  - /dev/secondary
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT)
-    esp_vfs_dev_uart_use_driver(UART_NUM_0);
     esp_vfs_dev_uart_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
+    esp_vfs_dev_uart_use_driver(UART_NUM_0);
 #elif defined(CONFIG_ESP_CONSOLE_UART_CUSTOM) && defined(CONFIG_USE_UART)
-    // Set VFS to use /dev/uart{NUM_UART} for STDIN, STDOUT and STDERR
-    esp_vfs_dev_uart_use_driver(NUM_UART);
     esp_vfs_dev_uart_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
+    esp_vfs_dev_uart_use_driver(NUM_UART);
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    setvbuf(stdin, NULL, _IONBF, 0); // disable buffering on stdin
     esp_vfs_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
     esp_vfs_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
-    // Enable non-blocking mode on stdin and stdout
-    fcntl(fileno(stdout), F_SETFL, 0);
+    fcntl(fileno(stdout), F_SETFL, 0); // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
     usb_serial_jtag_driver_config_t conf = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( usb_serial_jtag_driver_install(&conf) );
-    // Set VFS to use /dev/usb_jtag for STDIN, STDOUT and STDERR
     esp_vfs_usb_serial_jtag_use_driver();
+#elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
+    esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_cdcacm_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    fcntl(fileno(stdout), F_SETFL, 0); // non-blocking mode
+    fcntl(fileno(stdin), F_SETFL, 0);
 #endif
 
     esp_log_level_set(TAG, ESP_LOG_WARN);
@@ -61,22 +91,11 @@ void console_initialize() {
     linenoiseSetCompletionCallback(&esp_console_get_completion);
     linenoiseSetHintsCallback((linenoiseHintsCallback *)&esp_console_get_hint);
     linenoiseHistorySetMaxLen(100);
-    prompt = Config.app.PROMPT;
     if (linenoiseProbe()) {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
         ESP_LOGW(TAG, "Try use PuTTY/Miniterm.py/idf_monitor.py.");
-#if CONFIG_LOG_COLORS
-    } else {
-        int l = strlen(prompt) + strlen(LOG_COLOR_W) + strlen(LOG_RESET_COLOR);
-        char *tmp = (char *)malloc(l + 1);
-        if (tmp != NULL) {
-            sprintf(tmp, "%s%s%s", LOG_COLOR_W, prompt, LOG_RESET_COLOR);
-            prompt = tmp;
-            ESP_LOGI(TAG, "Using colorful prompt `%s`", prompt);
-        }
-#endif
     }
     esp_console_config_t console_config = {
         .max_cmdline_length = 256,
@@ -87,11 +106,14 @@ void console_initialize() {
 #endif
     };
     ESP_ERROR_CHECK( esp_console_init(&console_config) );
+    console_register_prompt(Config.app.PROMPT);
     console_register_commands();
 
-    xSemaphore = xSemaphoreCreateBinary();
-    assert(xSemaphore != NULL && "Cannot create binary semaphore for console");
-    xSemaphoreGive(xSemaphore);
+    if (( running = xSemaphoreCreateBinary() )) {
+        xSemaphoreGive(running);
+    } else {
+        ESP_LOGE(TAG, "Could not create semaphore! This is NOT thread-safe!");
+    }
 }
 
 /* Redirect STDOUT to a buffer, thus any thing printed to STDOUT will be
@@ -150,7 +172,7 @@ void console_initialize() {
 
 char * console_handle_command(const char *cmd, int history) {
     // Semaphore is better than task notification
-    if (xSemaphoreTake(xSemaphore, pdMS_TO_TICKS(200)) == pdFALSE)
+    if (running && xSemaphoreTake(running, pdMS_TO_TICKS(200)) == pdFALSE)
         return strdup("Console task is executing command");
     if (history) linenoiseHistoryAdd(cmd);
 
@@ -179,7 +201,7 @@ char * console_handle_command(const char *cmd, int history) {
             buf[size + 1] = '\0';
         }
     }
-    xSemaphoreGive(xSemaphore);
+    if (running) xSemaphoreGive(running);
     return buf;
 }
 
@@ -288,5 +310,25 @@ exit:
     TRYFREE(cmd);
     return ret;
 }
+
+#else // CONFIG_USE_CONSOLE
+
+void console_initialize() {}
+
+void console_register_prompt(const char *s) { NOTUSED(s); }
+
+char * console_handle_command(const char *c, int h) {
+    return NULL; NOTUSED(c); NOTUSED(h);
+}
+
+void console_handle_one() {}
+
+void console_handle_loop(void *a) { return; NOTUSED(a); }
+
+void console_loop_begin(int x) { return; NOTUSED(x); }
+
+char * console_handle_rpc(const char *j) { return NULL; NOTUSED(j); }
+
+#endif // CONFIG_USE_CONSOLE
 
 // THE END

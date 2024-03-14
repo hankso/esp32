@@ -20,8 +20,15 @@
 
 void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
 
-char * cast_away_const(const char *str) {
-    return (char *)(void *)(const void *)str;
+void asleep(uint32_t ms) {
+    static TickType_t tick_curr = 0, tick_next = 0;
+    tick_curr = xTaskGetTickCount(); // Accurate time control
+    if (!tick_next) {
+        tick_next = tick_curr;
+    } else if (tick_curr < tick_next) {
+        vTaskDelay(tick_next - tick_curr);
+    }
+    tick_next += ms * portTICK_PERIOD_MS;
 }
 
 bool strbool(const char *str) {
@@ -40,19 +47,81 @@ bool startswith(const char *str, const char *head) {
     return !strncmp(str, head, strlen(head));
 }
 
-char hexdigits(uint8_t v) {
-    return (v < 10) ? (v + '0') : (v - 10 + 'a');
+bool parse_int(const char *str, int *var) {
+    if (str == NULL) return false;
+    char *endptr;
+    int val = strtol(str, &endptr, 0);
+    if (endptr == str) return false;
+    if (var != NULL) *var = val;
+    return true;
 }
 
-const char * format_sha256(const uint8_t *src, size_t len) {
+bool parse_uint16(const char *str, uint16_t *var) {
+    int value;
+    if (!parse_int(str, &value)) return false;
+    if (value < 0 || value > (uint16_t)-1) return false;
+    if (var != NULL) *var = value;
+    return true;
+}
+
+bool parse_float(const char *str, float *var) {
+    if (str == NULL) return false;
+    char *endptr;
+    float val = strtof(str, &endptr);
+    if (endptr == str) return false;
+    if (var != NULL) *var = val;
+    return true;
+}
+
+size_t parse_all(const char *str, int *var, size_t size) {
+    size_t len = str ? strlen(str) : 0, idx = 0;
+    const char *headptr = str;
+    char *endptr;
+    int val = 0;
+    while ((size_t)(headptr - str) < len && idx < size) {
+        val = strtol(headptr, &endptr, 0);
+        if (headptr != endptr) var[idx++] = val;
+        headptr = endptr + 1;
+    }
+    return idx;
+}
+
+char * cast_away_const(const char *str) {
+    return (char *)(void *)(const void *)str;
+}
+
+static char hexdigits(uint8_t v) {
+    if (v < 10) return v + '0';
+    if (v > 15) return 'Z';
+    return v - 10 + 'A';
+}
+
+void hexdump(const void *src, size_t bytes, size_t maxlen) {
+    size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
+    LOOPN(i, count) printf(" %02X", ((uint8_t *)src)[i++]);
+    if (bytes && maxbytes && bytes > maxbytes)
+        printf(" ... [%u/%u]", count, bytes);
+    putchar('\n');
+}
+
+char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
+    size_t maxbytes = maxlen / 2, count = MIN(bytes, maxbytes);
+    LOOPN(i, count) {
+        dst[2 * i + 0] = hexdigits(((uint8_t *)src)[i] >> 4);
+        dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
+    }
+    if (bytes && maxbytes && bytes > maxbytes) {
+        sprintf(dst + count * 2, " ... [%u/%u]", count, bytes);
+    } else {
+        dst[count * 2] = '\0';
+    }
+    return dst;
+}
+
+const char * format_sha256(const void *src, size_t len) {
     static char buf[64 + 1];
     if (!src || !len) { buf[0] = '\0'; return buf; }
-    LOOPN(i, 32) {
-        buf[2 * i] = hexdigits(src[i] >> 4);
-        buf[2 * i + 1] = hexdigits(src[i] & 0xF);
-    }
-    buf[MIN(len, 64)] = '\0';
-    return buf;
+    return hexdumps(src, buf, len, 64);
 }
 
 // Note: format_size format string into static buffer. Therefore you don't
@@ -95,13 +164,11 @@ void task_info() {
     }
     // Sort tasks by pcTaskName and xCoreID
     LOOPN(i, num) {
-        if (tasks[i].xCoreID > 1) tasks[i].xCoreID = -1;
         LOOP(j, i + 1, num) {
-            if (strcmp(tasks[i].pcTaskName, tasks[j].pcTaskName) > 0) {
-                tmp = tasks[i];
-                tasks[i] = tasks[j];
-                tasks[j] = tmp;
-            }
+            if (strcmp(tasks[i].pcTaskName, tasks[j].pcTaskName) < 0) continue;
+            tmp = tasks[i];
+            tasks[i] = tasks[j];
+            tasks[j] = tmp;
         }
     }
 #   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
@@ -113,7 +180,8 @@ void task_info() {
             taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
         printf("%3d  (%c)  %-15s %2d  %3d %3d%% %7s\n",
                tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
-               taskname, tasks[i].uxCurrentPriority, tasks[i].xCoreID,
+               taskname, tasks[i].uxCurrentPriority,
+               tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
                100 * tasks[i].ulRunTimeCounter / ulTotalRunTime,
                format_size(tasks[i].usStackHighWaterMark, false));
     }

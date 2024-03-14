@@ -10,6 +10,7 @@
 #include "drivers.h"
 #include "filesys.h"
 #include "network.h"
+#include "usbmode.h"
 
 #include "esp_sleep.h"
 #include "esp_console.h"
@@ -254,6 +255,82 @@ static void register_system() {
  * Driver commands
  */
 
+#ifdef CONSOLE_DRIVER_GPIO
+static struct {
+    struct arg_int *pin;
+    struct arg_int *lvl;
+    struct arg_lit *i2c;
+    struct arg_lit *spi;
+    struct arg_end *end;
+} driver_gpio_args = {
+    .pin = arg_int0(
+        NULL, NULL,
+        "<0-49" // FIXME: STR(GPIO_PIN_COUNT) will include bracket
+#   ifdef CONFIG_USE_I2C_GPIOEXP
+        "|24 I2C"
+#   endif
+#   ifdef CONFIG_USE_SPI_GPIOEXP
+        "|16 SPI"
+#   endif
+        ">", "gpio number"
+    ),
+    .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
+    .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
+    .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
+    .end = arg_end(4)
+};
+
+static int driver_gpio(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &driver_gpio_args))
+        return ESP_ERR_INVALID_ARG;
+    if (!driver_gpio_args.pin->count) {
+        gpio_table(driver_gpio_args.i2c->count, driver_gpio_args.spi->count);
+        return ESP_OK;
+    }
+    bool level;
+    uint32_t pin_num = driver_gpio_args.pin->ival[0];
+    esp_err_t err = ESP_OK;
+    if (driver_gpio_args.lvl->count) {
+        err = gpioext_set_level(pin_num, driver_gpio_args.lvl->ival[0]);
+    } else {
+        err = gpioext_get_level(pin_num, &level, true);
+    }
+    if (err) {
+        printf("%s GPIO %d level error: %s\n",
+               driver_gpio_args.lvl->count ? "Set" : "Get",
+               pin_num, esp_err_to_name(err));
+    } else {
+        printf("GPIO %d: %s\n", pin_num, level ? "HIGH" : "LOW");
+    }
+    return ESP_OK;
+}
+#endif // CONSOLE_DRIVER_GPIO
+
+#ifdef CONSOLE_DRIVER_USB
+static struct {
+    struct arg_int *mode;
+    struct arg_lit *now;
+    struct arg_end *end;
+} driver_usb_args = {
+    .mode = arg_int0(NULL, NULL, "<0-3>", "specify USB mode"),
+    .now = arg_lit0(NULL, "now", "reboot now"),
+    .end = arg_end(2)
+};
+
+static int driver_usb(int argc, char **argv) {
+    if (!arg_noerror(argc, argv, (void **) &driver_usb_args))
+        return ESP_ERR_INVALID_ARG;
+    esp_err_t err = ESP_OK;
+    usbmode_t mode = (usbmode_t)ARG_INT(driver_usb_args.mode, -1);
+    if (mode < 0) {
+        printf("USB mode is %s\n", usbmode_str(mode));
+    } else if (!( err = usbmode_switch(mode, driver_usb_args.now->count) )) {
+        printf("USB mode set to %s\n", usbmode_str(mode));
+    }
+    return err;
+}
+#endif // CONSOLE_DRIVER_USB
+
 #ifdef CONSOLE_DRIVER_LED
 static struct {
     struct arg_int *idx;
@@ -277,7 +354,6 @@ static struct {
 };
 
 static int driver_led(int argc, char **argv) {
-    static char buf[16];
     if (!arg_noerror(argc, argv, (void **) &driver_led_args))
         return ESP_ERR_INVALID_ARG;
     esp_err_t err = ESP_OK;
@@ -294,6 +370,7 @@ static int driver_led(int argc, char **argv) {
         }
         return err;
     }
+    char buf[16];
     if (idx < 0) {
         buf[0] = 0;
     } else {
@@ -335,57 +412,6 @@ static int driver_led(int argc, char **argv) {
     return err;
 }
 #endif // CONSOLE_DRIVER_LED
-
-#ifdef CONSOLE_DRIVER_GPIO
-static struct {
-    struct arg_int *pin;
-    struct arg_int *lvl;
-    struct arg_lit *i2c;
-    struct arg_lit *spi;
-    struct arg_end *end;
-} driver_gpio_args = {
-    .pin = arg_int0(
-        NULL, NULL,
-        "<0-" STR(GPIO_PIN_COUNT)
-#   ifdef CONFIG_USE_I2C_GPIOEXP
-        "|24 I2C"
-#   endif
-#   ifdef CONFIG_USE_SPI_GPIOEXP
-        "|16 SPI"
-#   endif
-        ">", "gpio number"
-    ),
-    .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
-    .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
-    .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
-    .end = arg_end(4)
-};
-
-static int driver_gpio(int argc, char **argv) {
-    if (!arg_noerror(argc, argv, (void **) &driver_gpio_args))
-        return ESP_ERR_INVALID_ARG;
-    if (!driver_gpio_args.pin->count) {
-        gpio_table(driver_gpio_args.i2c->count, driver_gpio_args.spi->count);
-        return ESP_OK;
-    }
-    bool level;
-    uint32_t pin_num = driver_gpio_args.pin->ival[0];
-    esp_err_t err = ESP_OK;
-    if (driver_gpio_args.lvl->count) {
-        err = gpioext_set_level(pin_num, driver_gpio_args.lvl->ival[0]);
-    } else {
-        err = gpioext_get_level(pin_num, &level, true);
-    }
-    if (err) {
-        printf("%s GPIO %d level error: %s\n",
-               driver_gpio_args.lvl->count ? "Set" : "Get",
-               pin_num, esp_err_to_name(err));
-    } else {
-        printf("GPIO %d: %s\n", pin_num, level ? "HIGH" : "LOW");
-    }
-    return ESP_OK;
-}
-#endif // CONSOLE_DRIVER_GPIO
 
 #ifdef CONSOLE_DRIVER_I2C
 static struct {
@@ -572,15 +598,6 @@ static int driver_pwm(int argc, char **argv) {
 
 static void register_driver() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_DRIVER_LED
-        {
-            .command = "led",
-            .help = "Set / get LED color / brightness",
-            .hint = NULL,
-            .func= &driver_led,
-            .argtable = &driver_led_args
-        },
-#endif
 #ifdef CONSOLE_DRIVER_GPIO
         {
             .command = "gpio",
@@ -588,6 +605,24 @@ static void register_driver() {
             .hint = NULL,
             .func = &driver_gpio,
             .argtable = &driver_gpio_args
+        },
+#endif
+#ifdef CONSOLE_DRIVER_USB
+        {
+            .command = "usb",
+            .help = "Set / get USB working mode",
+            .hint = NULL,
+            .func = &driver_usb,
+            .argtable = &driver_usb_args
+        },
+#endif
+#ifdef CONSOLE_DRIVER_LED
+        {
+            .command = "led",
+            .help = "Set / get LED color / brightness",
+            .hint = NULL,
+            .func = &driver_led,
+            .argtable = &driver_led_args
         },
 #endif
 #ifdef CONSOLE_DRIVER_I2C
@@ -642,6 +677,7 @@ static struct {
     struct arg_lit *save;
     struct arg_lit *stat;
     struct arg_lit *list;
+    struct arg_lit *lall;
     struct arg_end *end;
 } utils_config_args = {
     .key = arg_str0(NULL, NULL, "key", "specify config by key"),
@@ -649,7 +685,8 @@ static struct {
     .load = arg_lit0(NULL, "load", "load from NVS flash"),
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
-    .list = arg_litn(NULL, "list", 0, 2, "list NVS entries"),
+    .list = arg_lit0(NULL, "list", "list config NVS entries"),
+    .lall = arg_lit0(NULL, "list-all", "list all NVS entries"),
     .end = arg_end(6)
 };
 
@@ -673,7 +710,9 @@ static int utils_config(int argc, char **argv) {
     } else if (utils_config_args.stat->count) {
         config_nvs_stats();
     } else if (utils_config_args.list->count) {
-        config_nvs_list(utils_config_args.list->count > 1);
+        config_nvs_list(false);
+    } else if (utils_config_args.lall->count) {
+        config_nvs_list(true);
     } else {
         config_list();
     }
@@ -837,7 +876,7 @@ static int utils_history(int argc, char **argv) {
     }
     const char *dev = ARG_STR(utils_history_args.dev, "flash");
     const char *dst = ARG_STR(utils_history_args.dst, "history.txt");
-    static char fullpath[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char fullpath[CONFIG_SPIFFS_OBJ_NAME_LEN];
     if (strstr(dev, "flash")) {
 #ifdef CONFIG_FFS_MP
         snprintf(fullpath, sizeof(fullpath), "%s%s%s",
@@ -1219,7 +1258,7 @@ static void register_network() {
  * Export register commands
  */
 
-void console_register_commands() {
+extern "C" void console_register_commands() {
     const esp_console_cmd_t clear = {
         .command = "clear",
         .help = "Clean screen",

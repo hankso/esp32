@@ -10,6 +10,7 @@
 #include "console.h"
 #include "filesys.h"
 #include "network.h"
+#include "usbmode.h"
 #include "update.h"
 #include "config.h"
 #include "server.h"
@@ -30,6 +31,7 @@ void setup() {
     network_initialize();
     driver_initialize();
     console_initialize();
+    usbmode_initialize();
 
     led_set_blink(0);
     server_loop_begin();    // Core 0 (i.e. Pro CPU)
@@ -37,19 +39,10 @@ void setup() {
 }
 
 void loop() {
-    static TickType_t tick_curr = 0, tick_next = 0;
     static uint8_t count = 0;
-
-    /* Accurate time control */
-    tick_curr = xTaskGetTickCount();
-    if (!tick_next) {
-        tick_next = tick_curr;
-    } else if (tick_curr < tick_next) {
-        vTaskDelay(tick_next - tick_curr);
-    }
-    tick_next += 500 * portTICK_PERIOD_MS;
+    asleep(500);
+    scn_progbar((count += 2) / 255.0 * 100);
     twdt_feed();
-    scn_progbar((count += 2) / 255.0 * 100); // draw on screen
 }
 
 #if !CONFIG_AUTOSTART_ARDUINO

@@ -219,7 +219,7 @@ void CFSFileImpl::dir_next() {
     // false  + NULL  => baddir or end
     // false  + \x00  => skip this entry
     // false  + char  => next is file
-    // true   + NULL  => ESP_ERR_NO_MEM
+    // true   + NULL  => ENOMEM
     // true   + char  => next is dir
     if (_baddir) return;
     TRYFREE(_npath);
@@ -307,7 +307,7 @@ bool SDMMCFS::begin(bool format, const char *base, uint8_t max) {
     _impl->mountpoint(base);
     printf("Mounted SD Card to %s\n", base);
     _total = (size_t)_card->csd.capacity * _card->csd.sector_size;
-#ifdef CONFIG_USE_FFATFS
+#ifdef CONFIG_FFS_FAT
     FATFS *info;
     DWORD free_clust;
     char drv = { (char)(48 + ff_diskio_get_pdrv_card(_card)), ':', '\0' };
@@ -346,12 +346,12 @@ SDMMCFS SDFS;
 
 #endif // CONFIG_USE_SDFS
 
-// Flash FAT / SPI Flash File System
+// FAT File System / SPI Flash File System
 
 #ifdef CONFIG_USE_FFS
 
 bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
-#ifdef CONFIG_USE_FFATFS
+#ifdef CONFIG_FFS_FAT
     if (_wlhdl != WL_INVALID_HANDLE) return true;
     esp_vfs_fat_mount_config_t conf = {
         .format_if_mount_failed = format,
@@ -379,7 +379,7 @@ bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
     };
     esp_err_t err = esp_vfs_spiffs_register(&conf);
     if (!err) esp_spiffs_info(_label, &_total, &_used);
-#endif // CONFIG_USE_FFATFS
+#endif // CONFIG_FFS_FAT
     if (err) {
         printf("Failed to mount FlashFS: %s\n", esp_err_to_name(err));
         return false;
@@ -392,12 +392,12 @@ bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
 
 void FLASHFS::end() {
     esp_err_t err =
-#ifdef CONFIG_USE_FFATFS
+#ifdef CONFIG_FFS_FAT
         esp_vfs_fat_spiflash_unmount(_impl->mountpoint(), _wlhdl);
 #else
         esp_spiffs_mounted(_label) ? \
             esp_vfs_spiffs_unregister(_label) : ESP_ERR_INVALID_STATE;
-#endif // CONFIG_USE_FFATFS
+#endif // CONFIG_FFS_FAT
     if (!err) {
         _impl->mountpoint(NULL);
         _wlhdl = WL_INVALID_HANDLE;
@@ -408,7 +408,7 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
     String base = dir, path;
     if (!base.startsWith("/")) base = "/" + base;
     if (!base.endsWith("/")) base = base + "/";
-#ifdef CONFIG_USE_FFATFS
+#ifdef CONFIG_FFS_FAT
     File root = open(base), file;
     while (file = root.openNextFile()) {
 #else
@@ -425,7 +425,7 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
             if (lastDir == path) continue;
             file = open(lastDir = path);
         }
-#endif // CONFIG_USE_FFATFS
+#endif // CONFIG_FFS_FAT
         (*cb)(file, arg);
         file.close();
     }

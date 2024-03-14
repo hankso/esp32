@@ -60,7 +60,7 @@ def _project_name():
     try:
         with open(__cmkfile__) as f:
             content = f.read()
-        return re.findall(r'project\((\w+)\)', content)[0]
+        return re.findall(r'project\((\w+)[ \)]', content)[0]
     except Exception:
         return 'testing'
 

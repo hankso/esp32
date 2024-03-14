@@ -5,6 +5,7 @@
  */
 
 #include "drivers.h"
+#include "config.h"
 
 #include "esp_attr.h"
 #include "esp_adc_cal.h"
@@ -22,15 +23,18 @@
 #   include "u8g2_esp32_hal.h"
 #   define WITH_U8G2
 #endif
+
 #if defined(CONFIG_VLX_SENSOR) && __has_include("vl53l0x.h")
 #    include "vl53l0x.h"
 #    define WITH_VLX
 #endif
+
 #ifdef CONFIG_USE_BTN
-#include "iot_button.h"
+#   include "iot_button.h"
 #endif
+
 #ifdef CONFIG_USE_KNOB
-#include "iot_knob.h"
+#   include "iot_knob.h"
 #endif
 
 static const char *TAG = "Driver";
@@ -591,11 +595,10 @@ esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val) {
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
     int length = 16;
     size_t len = end - start;
-    uint8_t *buf = (uint8_t *)malloc(len);
-    if (!buf) return ESP_ERR_NO_MEM;
-    esp_err_t err = smbus_rregs(bus, addr, start, buf, len);
-    if (err) return err;
-    for (uint8_t reg = start; reg <= end; reg++) {
+    uint8_t *buf;
+    esp_err_t err = EALLOC(buf, len);
+    if (!err) err = smbus_rregs(bus, addr, start, buf, len);
+    for (uint8_t reg = start; !err && reg <= end; reg++) {
         if (reg == start) {
             printf("I2C %d-%02X register table\n", bus, addr);
             printf("ADDR:");
@@ -607,8 +610,8 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t start, uint8_t end) {
             printf("\n%04X:", reg);
         }
         printf(" %02X", buf[reg - start]);
+        if (reg == end) putchar('\n');
     }
-    putchar('\n');
     return err;
 }
 
@@ -747,8 +750,9 @@ static void scn_initialize() {
     // MACROs defined in u8g2_esp32_hal.h
     //  - I2C_MASTER_NUM = I2C_NUM_1
     //  - I2C_MASTER_FREQ_HZ = 50000
-    int bus = I2C_MASTER_NUM, speed = I2C_MASTER_FREQ_HZ, addr = 0x3C;
-    if (i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0)) return;
+    int addr = 0x3C, bus = I2C_MASTER_NUM, speed = I2C_MASTER_FREQ_HZ;
+    if (bus != NUM_I2C)
+        ESP_ERROR_CHECK( i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0) );
     scn_init = i2c_master_config(bus, PIN_SDA1, PIN_SCL1, speed) == ESP_OK;
     scn_init = scn_init && smbus_probe(bus, addr) == ESP_OK;
     if (!scn_init) return;

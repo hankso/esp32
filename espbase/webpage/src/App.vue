@@ -7,6 +7,7 @@ import { useTheme, useDisplay } from 'vuetify'
 import {
     mdiConsole,
     mdiUsbPort,
+    mdiDuck,
     mdiFileTree,
     mdiPencilBoxMultiple,
     mdiCog,
@@ -27,43 +28,33 @@ const title = `${name} WebUI`
 const apmode = ref(true)
 const drawer = ref(false)
 
-const aponly = [
-    { type: 'divider' },
-    { type: 'subheader', title: 'AP mode' },
-    ...[
-        ['File Manager', '/fileman', mdiFileTree],
-        ['Online Editor', '/editor', mdiPencilBoxMultiple],
-        ['Configuration', '/configs', mdiCog],
-        ['Firmware OTA', '/updation', mdiUpdate],
-        ['About', '/about', mdiInformation],
-    ].map(([t, l, i]) => ({
-        title: t,
-        props: {
-            prependIcon: i,
-            color: 'primary',
-            to: l,
-        },
-    })),
-]
+function parseLink(title, descs) {
+    return [
+        { type: 'divider' },
+        { type: 'subheader', title },
+        ...descs.map(([t, to, prependIcon]) => ({
+            title: t,
+            props: {
+                to,
+                color: 'primary',
+                prependIcon,
+            },
+        })),
+    ]
+}
 
-const items = computed(() => [
-    { type: 'divider' },
-    { type: 'subheader', title: 'STA mode' },
-    {
-        title: 'Web Console',
-        props: {
-            prependIcon: mdiConsole,
-            to: '/home',
-        },
-    },
-    {
-        title: 'Web Serial',
-        props: {
-            prependIcon: mdiUsbPort,
-            to: '/serial',
-        },
-    },
-    ...(toValue(apmode) ? aponly : []),
+const aponly = parseLink('AP mode', [
+    ['File Manager', '/fileman', mdiFileTree],
+    ['Online Editor', '/editor', mdiPencilBoxMultiple],
+    ['Configuration', '/configs', mdiCog],
+    ['Firmware OTA', '/updation', mdiUpdate],
+    ['About', '/about', mdiInformation],
+])
+
+const staonly = parseLink('STA mode', [
+    ['Web Console', '/home', mdiConsole],
+    ['Web Serial', '/serial', mdiUsbPort],
+    ['JSON RPC', '/jsonrpc', mdiDuck],
 ])
 
 function toggleTheme() {
@@ -71,6 +62,7 @@ function toggleTheme() {
 }
 
 const progbar = ref(false)
+
 provide('progbar', progbar)
 
 const snackbar = ref({
@@ -159,7 +151,7 @@ onMounted(() => {
                     </template>
                 </v-list-item>
             </v-list>
-            <v-list nav :items></v-list>
+            <v-list nav :items="staonly.concat(apmode ? aponly : [])"></v-list>
         </v-navigation-drawer>
 
         <v-app-bar border="b" elevation="0" density="comfortable" :title>
