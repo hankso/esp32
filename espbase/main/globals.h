@@ -94,7 +94,7 @@ char * cast_away_const(const char *);
 const char * format_size(size_t, bool);
 const char * format_sha256(const void *, size_t);
 
-void task_info();
+void task_info(uint8_t sort);
 void memory_info();
 void version_info();
 void hardware_info();

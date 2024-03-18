@@ -178,7 +178,6 @@ void onUpdatePost(
         led_set_light(0, 1);
         ota_updation_write(data, len);
         led_set_light(0, 0);
-        printf("\rProgress: %s", format_size(index, false));
     }
     if (isFinal) {
         if (!ota_updation_end())
@@ -293,7 +292,7 @@ void onUpload(
         led_set_light(0, 1);
         file.write(data, len);
         led_set_light(0, 0);
-        printf("\rProgress: %s", format_size(index, false));
+        printf("\rProgress: %8s", format_size(index, false));
     }
     if (isFinal && file) {
         file.flush();
@@ -521,9 +520,9 @@ void WebServerClass::register_api_ap() {
 }
 
 void WebServerClass::register_api_ws() {
-    _wsocket.onEvent(onWebSocket);
-    _wsocket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
-    _server.addHandler(&_wsocket);
+    _socket.onEvent(onWebSocket);
+    _socket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
+    _server.addHandler(&_socket);
 }
 
 void WebServerClass::register_statics() {

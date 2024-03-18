@@ -58,7 +58,7 @@ async function upgrade(e) {
             }
         },
     })
-        .then(() => notify('Upgraded!'))
+        .then(() => notify('Upgraded!') || location.reload())
         .catch(({ message }) => notify(message))
         .finally(() => (loading.value = upgrade.ctrl = false))
 }

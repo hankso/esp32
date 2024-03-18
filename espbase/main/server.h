@@ -3,10 +3,7 @@
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  *
- * WebServerClass wraps on AsyncWebServer to provide only `begin` and `end`
- * function for easier usage.
- *
- * This component (AsyncServer framework & APIs) occupy about 113KB in firmware.
+ * This feature (AsyncWebServer + APIs) occupies about 113KB in firmware.
  *
  * Static files:
  *  Name    Method  Description
@@ -52,18 +49,27 @@ void server_loop_end();
 
 #ifdef __cplusplus
 }
+
+#if __has_include("ESPAsyncWebServer.h")
+#   include <AsyncTCP.h>
+#   include <ESPAsyncWebServer.h>
+#   define WITH_ESPASYNC
+#elif __has_include("PsychicHttp.h")
+#   include <PsychicHttp.h>
+#   define WITH_PSYCHIC
+#else
+#   warning "No HTTP/S Server framework found!"
 #endif
-
-
-#ifdef __cplusplus
-
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
 
 class WebServerClass {
 private:
+#if defined(WITH_ESPASYNC)
     AsyncWebServer _server = AsyncWebServer(80);
-    AsyncWebSocket _wsocket = AsyncWebSocket("/ws");
+    AsyncWebSocket _socket = AsyncWebSocket("/ws");
+#elif defined(WITH_PSYCHIC)
+    PsychicHttpServer _server = PsychicHttpServer(80);
+    PsychicWebSocketHandler _socket = PsychicWebSocketHandler("/ws");
+#endif
     bool _started;
 public:
     WebServerClass(): _started(false) {}

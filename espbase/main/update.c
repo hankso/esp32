@@ -124,9 +124,9 @@ bool ota_updation_write(void *data, size_t size) {
         return false;
     }
     ota_updation_st.saved += size;
-    printf("\rProgress: %.2f%% %d/%d KB",
-           (float)ota_updation_st.saved / ota_updation_st.total * 100,
-           ota_updation_st.saved / 1024, ota_updation_st.total / 1024);
+    printf("\rProgress: %4d / %4d KB %3d%%",
+           ota_updation_st.saved / 1024, ota_updation_st.total / 1024,
+           100 * ota_updation_st.saved / ota_updation_st.total);
     return true;
 }
 

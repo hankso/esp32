@@ -129,7 +129,7 @@ const char * format_sha256(const void *src, size_t len) {
 // result before calling format_size once again, because the buffer will be
 // reused and overwriten.
 const char * format_size(size_t bytes, bool inbit) {
-    static char buffer[16]; // xxxx.xxu\0
+    static char buffer[16]; // xxxx.xx u\0
     static char * units[] = { " ", "K", "M", "G", "T", "P" };
     static int Bdems[] = { 0, 1, 2, 3, 3, 4 };
     static int bdems[] = { 0, 2, 3, 3, 4, 7 };
@@ -146,7 +146,22 @@ const char * format_size(size_t bytes, bool inbit) {
     return buffer;
 }
 
-void task_info() {
+static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
+    int aid = a->xCoreID > 1 ? -1 : a->xCoreID;
+    int bid = b->xCoreID > 1 ? -1 : b->xCoreID;
+    if (sort_attr == 0) return a->xTaskNumber < b->xTaskNumber;
+    if (sort_attr == 1) return a->eCurrentState < b->eCurrentState;
+    if (sort_attr == 2) {
+        int rst = strcmp(a->pcTaskName, b->pcTaskName);
+        return rst ? rst < 0 : aid < bid;
+    }
+    if (sort_attr == 3) return a->uxCurrentPriority < b->uxCurrentPriority;
+    if (sort_attr == 4) return aid < bid;
+    if (sort_attr == 5) return a->ulRunTimeCounter < b->ulRunTimeCounter;
+    return a->usStackHighWaterMark < b->usStackHighWaterMark;
+}
+
+void task_info(uint8_t sort_attr) {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
     // Running Ready Blocked Suspended Deleted
     static const char task_states[] = "*RBSD", *taskname;
@@ -165,7 +180,7 @@ void task_info() {
     // Sort tasks by pcTaskName and xCoreID
     LOOPN(i, num) {
         LOOP(j, i + 1, num) {
-            if (strcmp(tasks[i].pcTaskName, tasks[j].pcTaskName) < 0) continue;
+            if (task_compare(sort_attr, tasks + i, tasks + j)) continue;
             tmp = tasks[i];
             tasks[i] = tasks[j];
             tasks[j] = tmp;
@@ -189,6 +204,7 @@ void task_info() {
 #else
     puts("Unsupported command! Enable `CONFIG_FREERTOS_USE_TRACE_FACILITY` "
          "in menuconfig/sdkconfig to run this command");
+    NOTUSED(sort_attr);
 #endif
 }
 
@@ -201,7 +217,7 @@ void version_info() {
            desc->project_name, desc->version, __DATE__, __TIME__);
 }
 
-static uint16_t memory_types[] = {
+static uint32_t memory_types[] = {
     0, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA,
     MALLOC_CAP_INTERNAL, MALLOC_CAP_DEFAULT
 };
@@ -211,20 +227,19 @@ static const char * const memory_names[] = {
 };
 
 void memory_info() {
-    uint16_t mem_type = 0;
-    size_t total_size;
+    uint32_t mem_type = 0;
     multi_heap_info_t info;
-    printf("Type        Size     Used    Avail Used\n");
+    printf("Type       Avail     Used     Size Free\n");
     LOOPND(i, LEN(memory_types)) {
         heap_caps_get_info(&info, i ? memory_types[i] : mem_type);
-        total_size = info.total_free_bytes + info.total_allocated_bytes;
-        printf("%-7s %8s %8s %8s %3d%%\n",
-            memory_names[i], format_size(total_size, false),
-            format_size(info.total_allocated_bytes, false),
-            format_size(info.total_free_bytes, false),
-            100 * info.total_allocated_bytes / total_size);
-        if (total_size)
-            mem_type |= memory_types[i];
+        size_t total = info.total_free_bytes + info.total_allocated_bytes;
+        if (total) mem_type |= memory_types[i];
+        printf("%-7s", memory_names[i]);
+        printf(" %8s", format_size(info.total_allocated_bytes, false));
+        printf(" %8s", format_size(info.total_free_bytes, false));
+        printf(" %8s", format_size(total, false));
+        printf(" %3d%%", total ? 100 * info.total_free_bytes / total : 0);
+        putchar('\n');
     }
 }
 
