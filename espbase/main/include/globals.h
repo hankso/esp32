@@ -17,6 +17,7 @@
 
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_idf_version.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -56,7 +57,15 @@ extern "C" {
 #   define TARGET_ESP32S
 #   define TARGET_ESP32S3
 #else
-#warning "This project has only been tested on ESP32 & ESP32-Sn chips"
+#   warning "This project has only been tested on ESP32 & ESP32-Sn chips"
+#endif
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#   define TARGET_IDF_5
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+#   define TARGET_IDF_4
+#else
+#   warning "This project has only been tested on ESP-IDF v4.4.x & v5.x"
 #endif
 
 // Hotfix for board specified MACROs

@@ -79,7 +79,7 @@ static void led_initialize() {
         },
         .led_strip_driver = LED_STRIP_RMT,
         .led_strip_rmt_cfg = {
-#       if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 0, 0)
+#       if TARGET_IDF_4
             .rmt_channel = 0,
 #       else
             .clk_src = RMT_CLK_SRC_DEFAULT,

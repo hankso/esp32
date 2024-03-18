@@ -12,13 +12,6 @@
 #include "nvs_flash.h"
 #include "esp_partition.h"
 
-#if __has_include("esp_idf_version.h")
-#    include "esp_idf_version.h"
-#    if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 0, 0)
-#        define _NVS_ITER_LIST
-#    endif
-#endif
-
 #define NAMESPACE_INFO "info"
 #define NAMESPACE_CFG "config"
 
@@ -456,7 +449,6 @@ void config_nvs_list(bool all) {
         ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
-#ifdef _NVS_ITER_LIST
     const char *ns = all ? NULL : NAMESPACE_CFG, *val;
     nvs_entry_info_t info;
     nvs_iterator_t iter = nvs_entry_find(ctx.part->label, ns, NVS_TYPE_ANY);
@@ -503,9 +495,6 @@ void config_nvs_list(bool all) {
         TRYFREE(tmp);
     }
     nvs_release_iterator(iter);
-#else
-    ESP_LOGE(TAG, "NVS Entries iteration not supported");
-#endif
 }
 
 void config_nvs_stats() {

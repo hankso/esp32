@@ -109,8 +109,12 @@ static esp_err_t cdc_device_init(usbmode_t prev) {
         descriptor_str_kconfig[3] = Config.info.UID;
     tinyusb_config_t tusb_conf = {
         .external_phy = false,
-        .descriptor = &descriptor_kconfig,
         .string_descriptor = descriptor_str_kconfig,
+#   ifdef IDF_TARGET_5
+        .device_descriptor = &descriptor_kconfig,
+#   else
+        .descriptor = &descriptor_kconfig,
+#   endif
     };
     if (( err = tinyusb_driver_install(&tusb_conf) )) return err;
     LOOP(i, 1, LEN(descriptor_str_kconfig)) {
@@ -120,7 +124,9 @@ static esp_err_t cdc_device_init(usbmode_t prev) {
         .usb_dev = TINYUSB_USBDEV_0,
         .cdc_port = TINYUSB_CDC_ACM_0,
 #   ifdef CONFIG_USB_CDC_DEVICE_SERIAL
+#       ifdef TARGET_IDF_4
         .rx_unread_buf_sz = CONFIG_TINYUSB_CDC_RX_BUFSIZE,
+#       endif
         .callback_rx = &cdc_device_cb,
         .callback_line_state_changed = &cdc_device_cb,
 #   endif
@@ -133,6 +139,20 @@ static esp_err_t cdc_device_init(usbmode_t prev) {
     ESP_LOGI(TAG, "Running as CDC serial device");
 #   endif
     return err;
+#endif
+}
+
+static esp_err_t cdc_device_exit(usbmode_t next) {
+#if defined(CONFIG_USB_CDC_DEVICE) && defined(TARGET_IDF_5)
+    esp_err_t err = ESP_OK;
+#   ifdef CONFIG_USB_CDC_DEVICE_CONSOLE
+    if (!err) err = esp_tusb_deinit_console(TINYUSB_CDC_ACM_0);
+#   endif
+    if (!err) err = tusb_cdc_acm_deinit(TINYUSB_CDC_ACM_0);
+    if (!err) err = tinyusb_driver_uninstall();
+    return err;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
 #endif
 }
 
@@ -327,12 +347,16 @@ static esp_err_t cdc_host_init(usbmode_t prev) {
 }
 
 static esp_err_t cdc_host_exit(usbmode_t next) {
+#ifndef CONFIG_USB_CDC_HOST
+    return ESP_ERR_NOT_SUPPORTED;
+#else
     ctx.running = false;
     if (!acquire(ctx.client_sem, TIMEOUT_WAIT))
         return ctx.err ?: ESP_ERR_TIMEOUT;
     if (!acquire(ctx.usblib_sem, TIMEOUT_WAIT))
         ESP_LOGE(TAG, "usb_lib stop failed");
     return ctx.err;
+#endif
 }
 
 static esp_err_t msc_device_init(usbmode_t prev) {
@@ -357,7 +381,7 @@ static struct {
     esp_err_t (*exit)(usbmode_t next);
 } modes[] = {
     { SERIAL_JTAG, serial_jtag_init, serial_jtag_exit },
-    { CDC_DEVICE, cdc_device_init, NULL },
+    { CDC_DEVICE, cdc_device_init, cdc_device_exit },
     { CDC_HOST, cdc_host_init, cdc_host_exit },
     { MSC_DEVICE, msc_device_init, NULL },
     { MSC_HOST, msc_host_init, NULL },
