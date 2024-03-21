@@ -170,14 +170,14 @@ menu "ESP Base Configuration"
     menuconfig USE_USB
         bool "Enable USB" if IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32S3
         default y if IDF_TARGET_ESP32S3
-        select TINYUSB # Attention! Do NOT use TINYUSB_ENABLED!
+        select TINYUSB
         help
             Enable usbmode_xxx functions. Add about 62.7Kb to firmware.
     if USE_USB
         config USB_CDC_DEVICE
             bool "Enable USB CDC slave mode"
             select TINYUSB_CDC_ENABLED
-            default y if IDF_TARGET_ESP32S3
+            default y
         choice
             prompt "Select USB CDC slave mode function"
             depends on USB_CDC_DEVICE
@@ -190,15 +190,27 @@ menu "ESP Base Configuration"
 
         config USB_CDC_HOST
             bool "Enable USB CDC host mode"
-            default n
+            default y
+
+        config USB_MSC_DEVICE
+            bool "Enable USB MSC Slave mode"
+            select TINYUSB_MSC_ENABLED
+            imply USE_FFS
+            imply USE_SDFS
+            default y
 
         config USB_MSC_HOST
             bool "Enable USB MSC host mode"
-            default n
+            default y
 
         config USB_HID_DEVICE
             bool "Enable USB HID slave mode"
-            default n
+            select TINYUSB_HID_ENABLED
+            default y
+
+        config USB_HID_HOST
+            bool "Enable USB HID host mode"
+            default y
     endif
 
     config USE_GPIOEXP

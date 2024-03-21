@@ -44,19 +44,34 @@
 
 #include "globals.h"
 
-#include "dirent.h"
-#include "sdmmc_cmd.h"
-#include "wear_levelling.h"
-#include "sys/stat.h"
-#include "driver/sdmmc_types.h"
+#include "dirent.h"                 // for DIR
+#include "wear_levelling.h"         // for wl_handle_t
+#include "diskio_impl.h"            // for FF_DRV_NOT_USED
+#include "sys/stat.h"               // for struct stat
+#include "driver/sdmmc_types.h"     // for sdmmc_card_t
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+typedef struct {
+    union {
+        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
+        sdmmc_card_t *card;     // if defined CONFIG_USE_SDFS
+    };
+    int pdrv;                   // if not defined CONFIG_FFS_SPIFFS
+    bool isffs;                 // false: card, true: wlhdl
+    size_t blkcnt;
+    size_t blksize;
+    uint64_t used;
+    uint64_t total;
+} filesys_info_t;
+
 void filesys_initialize();
-void filesys_ffs_info(size_t *used, size_t *total);
-void filesys_sdfs_info(size_t *used, size_t *total);
+void filesys_ffs_info(filesys_info_t *info);
+void filesys_sdfs_info(filesys_info_t *info);
+bool filesys_acquire(bool ffs, uint32_t msec);  // enable write protect
+bool filesys_release(bool ffs);                 // disable write protect
 
 #ifdef __cplusplus
 }
@@ -97,9 +112,20 @@ protected:
     char *              _fpath; // path with mountpoint
     mutable bool        _written;
     mutable struct stat _stat;
-    bool                _getstat() const;
 private:
-    void        dir_next();
+    void dir_next();
+
+    bool getstat() const {
+        if (!_fpath) return false;
+        if (!_written) return true;
+        if (!stat(_fpath, &_stat)) {
+            _written = false;
+            return true;
+        } else {
+            memset(&_stat, 0, sizeof(_stat));
+            return false;
+        }
+    }
 public:
     CFSFileImpl(CFSImpl *fs, const char *path, const char *mode);
     ~CFSFileImpl() override { close(); }
@@ -113,8 +139,8 @@ public:
 
     operator    bool()                  { return !_badfile || !_baddir; }
     const char* path() const override   { return (const char *)_path; }
-    size_t      size() const override   { _getstat(); return _stat.st_size; }
-    time_t      getLastWrite() override { _getstat(); return _stat.st_mtime; }
+    size_t      size() const override   { getstat(); return _stat.st_size; }
+    time_t      getLastWrite() override { getstat(); return _stat.st_mtime; }
     size_t      position() const override { return tell(); }
     boolean     isDirectory(void) override { return _isdir; }
     void        rewindDirectory(void) override { if (!_baddir) rewinddir(_dir); }
@@ -128,22 +154,29 @@ public:
 
 class CFS : public FS {
 protected:
-    size_t _total, _used;
+    uint64_t _total, _used;
 public:
     CFS() : FS(FSImplPtr(new CFSImpl())), _total(0), _used(0) {}
 
     // work through directory
     virtual void walk(const char *, void (*cb)(File, void *), void *) = 0;
-    // print information of file entries
-    void list(const char *path, FILE *stream);
+    // print information of file entries by walk through directory
+    void list(const char *dir, FILE *stream);
     // conver list result to JSON
-    char * list(const char *path);
+    char * list(const char *dir);
 
-    size_t totalBytes() { return _total; }
-    size_t usedBytes() { return _used; }
+    uint64_t usedBytes() { return _used; }
+    uint64_t totalBytes() { return _total; }
 
-    void printInfo() {
-        fprintf(stdout, "File System used %d/%d KB (%d%%)\n",
+    void getInfo(filesys_info_t *info) {
+        memset(info, 0, sizeof(filesys_info_t));
+        info->used = _used;
+        info->total = _total;
+        info->pdrv = FF_DRV_NOT_USED;
+    }
+
+    void printInfo(FILE *stream = stdout) {
+        fprintf(stream, "File System used %llu/%llu KB (%llu%%)\n",
                 _used / 1024, _total / 1024, 100 * _used / _total);
     }
 };
@@ -161,6 +194,7 @@ public:
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
+    void getInfo(filesys_info_t *info);
 };
 #endif
 
@@ -175,15 +209,8 @@ public:
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
-
-    void printInfo() {
-        if (!_card) {
-            fprintf(stdout, "SD Card not detected\n");
-            return;
-        }
-        CFS::printInfo();
-        sdmmc_card_print_info(stdout, _card);
-    }
+    void getInfo(filesys_info_t *info);
+    void printInfo(FILE *stream = stdout);
 };
 #endif
 

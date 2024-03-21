@@ -25,13 +25,13 @@
 //  Main loop (screen) Core 1
 
 void setup() {
+    driver_initialize();
     config_initialize();
     update_initialize();
     filesys_initialize();
-    network_initialize();
-    driver_initialize();
-    console_initialize();
     usbmode_initialize();
+    console_initialize();
+    network_initialize();
 
     led_set_blink(0);
     server_loop_begin();    // Core 0 (i.e. Pro CPU)

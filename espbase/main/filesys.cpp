@@ -10,17 +10,61 @@
 #include "cJSON.h"
 #include "esp_spiffs.h"
 #include "esp_vfs_fat.h"
-#include "driver/sdmmc_host.h"
+#include "diskio_wl.h"
+#include "diskio_sdmmc.h"
 #include "driver/sdspi_host.h"
 
 #include <Arduino.h>
 
-using namespace fs;
+static const char * TAG = "filesys";
+
+static SemaphoreHandle_t lock[2]; // for FFS & SDFS
+
+void filesys_initialize() {
+    LOOPN(i, LEN(lock)) {
+        lock[i] = xSemaphoreCreateBinary();
+        if (lock[i]) RELEASE(lock[i]);
+    }
+#ifdef CONFIG_USE_FFS
+    if (FFS.begin()) FFS.printInfo();
+#endif
+#ifdef CONFIG_USE_SDFS
+    if (SDFS.begin()) SDFS.printInfo();
+#endif
+}
+
+void filesys_ffs_info(filesys_info_t *info) {
+#ifdef CONFIG_USE_FFS
+    FFS.getInfo(info);
+#else
+    memset(info, 0, sizeof(filesys_info_t));
+    info->pdrv = FF_DRV_NOT_USED;
+#endif
+}
+
+void filesys_sdfs_info(filesys_info_t *info) {
+#ifdef CONFIG_USE_SDFS
+    SDFS.getInfo(info);
+#else
+    memset(info, 0, sizeof(filesys_info_t));
+    info->pdrv = FF_DRV_NOT_USED;
+#endif
+}
+
+bool filesys_acquire(bool idx, uint32_t msec) {
+    return lock[idx] ? ACQUIRE(lock[idx], msec) : false;
+}
+
+bool filesys_release(bool idx) {
+    return lock[idx] ? RELEASE(lock[idx]) : false;
+}
+
+// File system APIs
+
+namespace fs {
 
 static bool _valid_path(const char *path) { return path && path[0] == '/'; }
 static bool _write_mode(const char *mode) { return mode && strchr(mode, 'w'); }
-
-// File System APIs
 
 FileImplPtr CFSImpl::open(const char *path, const char *mode, const bool create) {
     if (!_mountpoint || !_valid_path(path) ||
@@ -129,13 +173,14 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
         TRYFREE(_fpath);
         return;
     }
-    if (_getstat()) {
+    if (getstat()) {
         if (S_ISREG(_stat.st_mode)) {
             _file = fopen(_fpath, mode);
         } else if (S_ISDIR(_stat.st_mode)) {
             _dir = opendir(_fpath);
         } else {
-            printf("Unknown %s type 0x%08X", _fpath, _stat.st_mode & _IFMT);
+            ESP_LOGE(TAG, "Path %s unknown type 0x%08X",
+                    _fpath, _stat.st_mode & _IFMT);
         }
     } else {
         if (_write_mode(mode)) {
@@ -150,18 +195,6 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     _isdir = _dir != NULL;
     _badfile = _isdir || !_file;
     _baddir = !_isdir || !_dir;
-}
-
-bool CFSFileImpl::_getstat() const {
-    if (!_fpath) return false;
-    if (!_written) return true;
-    if (!stat(_fpath, &_stat)) {
-        _written = false;
-        return true;
-    } else {
-        memset(&_stat, 0, sizeof(_stat));
-        return false;
-    }
 }
 
 size_t CFSFileImpl::write(const uint8_t *buf, size_t size) {
@@ -263,70 +296,56 @@ FileImplPtr CFSFileImpl::openNextFile(const char *mode) {
 #ifdef CONFIG_USE_SDFS
 
 bool SDMMCFS::begin(bool format, const char *base, uint8_t max) {
-    esp_vfs_fat_sdmmc_mount_config_t mount_conf = {
+    if (_card) return true;
+
+    esp_log_level_set("sdspi_transaction", ESP_LOG_WARN);
+
+    esp_vfs_fat_mount_config_t mount_conf = {
         .format_if_mount_failed = format,
         .max_files = max,
         .allocation_unit_size = 16 * 1024,
     };
 
-    sdmmc_host_t host_conf = SDMMC_HOST_DEFAULT();
+    sdmmc_host_t host_conf = SDSPI_HOST_DEFAULT();
 
-    // SDMMC_SLOT_CONFIG_DEFAULT()
-    sdspi_slot_config_t slot_conf = {
+    sdspi_device_config_t slot_conf = {
+        .host_id   = NUM_SPI,
         .gpio_cs   = PIN_CS0,
-#ifdef CONFIG_GPIO_HSPI_SDCD
-        .gpio_cd   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDCD),
-#else
-        .gpio_cd   = SDMMC_SLOT_NO_CD,
-#endif
-#ifdef CONFIG_GPIO_HSPI_SDWP
-        .gpio_wp   = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDWP),
-#else
-        .gpio_wp   = SDMMC_SLOT_NO_WP,
-#endif
-#ifdef CONFIG_GPIO_HSPI_SDINT
-        .gpio_int  = GPIO_NUMBER(CONFIG_GPIO_HSPI_SDINT),
-#else
-        .gpio_int  = SDMMC_SLOT_NO_INT,
-#endif
-        .gpio_miso = PIN_MISO,
-        .gpio_mosi = PIN_MOSI,
-        .gpio_sck  = PIN_SCLK,
-        .dma_channel = 1,
+        .gpio_cd   = SDSPI_SLOT_NO_CD,
+        .gpio_wp   = SDSPI_SLOT_NO_WP,
+        .gpio_int  = SDSPI_SLOT_NO_INT,
     };
 
     // This convenience function calls init function `sdspi_host_init`, which
     // will initialize SPI bus and won't handle ESP_ERR_INVALID_STATE error.
     // So keep in mind to manually handle this error if you re-init a SPI bus.
-    esp_err_t err = esp_vfs_fat_sdmmc_mount(
+    esp_err_t err = esp_vfs_fat_sdspi_mount(
         base, &host_conf, &slot_conf, &mount_conf, &_card);
-    if (err) {
-        printf("Failed to mount SD Card: %s\n", esp_err_to_name(err));
+    if (err && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "Failed to mount SD Card: %s", esp_err_to_name(err));
         return false;
     }
     _impl->mountpoint(base);
-    printf("Mounted SD Card to %s\n", base);
-    _total = (size_t)_card->csd.capacity * _card->csd.sector_size;
-#ifdef CONFIG_FFS_FAT
-    FATFS *info;
+    ESP_LOGI(TAG, "SD Card mounted to %s", base);
+    FATFS *fs;
     DWORD free_clust;
-    char drv = { (char)(48 + ff_diskio_get_pdrv_card(_card)), ':', '\0' };
-    if (f_getfree(drv, &free_clust, &fsinfo) == FR_OK) {
+    char drv[] = { (char)(48 + ff_diskio_get_pdrv_card(_card)), ':', '\0' };
+    if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
 #   if FF_MAX_SS != FF_MIN_SS
-        _used = (fs->n_fatent - 2 - free_clust) * fsinfo->csize * fsinfo->ssize;
+        uint64_t ssize = fs->ssize; // == _card->csd.sector_size ?
 #   else
-        _used = (fs->n_fatent - 2 - free_clust) * fsinfo->csize * FF_SS_SDCARD;
+        uint64_t ssize = FF_SS_SDCARD;
 #   endif
+        _used = ssize * (fs->n_fatent - 2 - free_clust) * fs->csize;
     }
-#endif
+    _total = (uint64_t)_card->csd.capacity * _card->csd.sector_size;
     return true;
 }
 
 void SDMMCFS::end() {
-    esp_err_t err = esp_vfs_fat_sdmmc_unmount();
-    if (!err) {
-        _card = NULL;
+    if (!esp_vfs_fat_sdmmc_unmount()) {
         _impl->mountpoint(NULL);
+        _card = NULL;
     }
 }
 
@@ -342,8 +361,47 @@ void SDMMCFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
     root.close();
 }
 
-SDMMCFS SDFS;
+void SDMMCFS::getInfo(filesys_info_t *info) {
+    CFS::getInfo(info);
+    if (( info->card = _card )) {
+        info->pdrv = ff_diskio_get_pdrv_card(_card);
+        info->blkcnt = _card->csd.capacity;
+        info->blksize = _card->csd.sector_size;
+    }
+}
 
+void SDMMCFS::printInfo(FILE *stream) {
+    CFS::printInfo(stream);
+    if (!_card) return;
+    // see sdmmc_card_print_info
+    const char * type = (
+        _card->is_sdio ? "SDIO"
+            : (_card->is_mmc ? "MMC"
+                : (_card->ocr & SD_OCR_SDHC_CAP ? "SDHC/SDXC"
+                    : "SDSC"
+    )));
+    fprintf(
+        stream,
+        "Name: %s\n"
+        "S/N:  %d\n"
+        "VPID: 0x%04X:0x%04X\n"
+        "Type: %s\n"
+        "Size: %s\n"
+        "Freq: %d %cHz%s\n"
+        "CSD:  sector_size=%d, read_block_len=%d, capacity=0x%0*X\n",
+        _card->cid.name, _card->cid.serial,
+        _card->cid.mfg_id, _card->cid.oem_id,
+        type, format_size(_total, false),
+        _card->max_freq_khz / (_card->max_freq_khz < 1000 ? 1 : 1000),
+        _card->max_freq_khz < 1000 ? 'K' : 'M', _card->is_ddr ? ", DDR" : "",
+        _card->csd.sector_size, _card->csd.read_block_len,
+        _card->csd.capacity >> 16 ? 8 : 4, _card->csd.capacity
+    );
+    if (_card->is_sdio) {
+        fprintf(stream, "SCR:  sd_spec=%d, bus_width=%d\n",
+                _card->scr.sd_spec, _card->scr.bus_width);
+    }
+}
 #endif // CONFIG_USE_SDFS
 
 // FAT File System / SPI Flash File System
@@ -360,17 +418,18 @@ bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
     };
     esp_err_t err = esp_vfs_fat_spiflash_mount(base, _label, &conf, &_wlhdl);
     if (!err) {
-        FATFS *fsinfo;
+        FATFS *fs;
         DWORD free_clust;
         char drv[] = { (char)(48 + ff_diskio_get_pdrv_wl(_wlhdl)), ':', '\0' };
-        if (f_getfree(drv, &free_clust, &fsinfo) == FR_OK) {
-            size_t ssize = fsinfo->csize * CONFIG_WL_SECTOR_SIZE;
-            _total = (fs->n_fatent - 2) * ssize;
-            _used = (fs->n_fatent - 2 - free_clust) * ssize;
+        if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
+            uint64_t ssize = wl_sector_size(_wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
+            _used = ssize * (fs->n_fatent - 2 - free_clust) * fs->csize;
+            _total = ssize * (fs->n_fatent - 2) * fs->csize;
         }
     }
 #else
     if (esp_spiffs_mounted(_label)) return true;
+    size_t used, total;
     esp_vfs_spiffs_conf_t conf = {
         .base_path = base,
         .partition_label = _label,
@@ -378,14 +437,17 @@ bool FLASHFS::begin(bool format, const char *base, uint8_t max) {
         .format_if_mount_failed = format
     };
     esp_err_t err = esp_vfs_spiffs_register(&conf);
-    if (!err) esp_spiffs_info(_label, &_total, &_used);
+    if (!err && !esp_spiffs_info(_label, &total, &used)) {
+        _used = used;
+        _total = total;
+    }
 #endif // CONFIG_FFS_FAT
     if (err) {
-        printf("Failed to mount FlashFS: %s\n", esp_err_to_name(err));
+        ESP_LOGE(TAG, "Failed to mount FlashFS: %s", esp_err_to_name(err));
         return false;
     } else {
         _impl->mountpoint(base);
-        printf("Mounted FlashFS to %s\n", base);
+        ESP_LOGI(TAG, "FlashFS mounted to %s", base);
         return true;
     }
 }
@@ -432,32 +494,22 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
     root.close();
 }
 
-FLASHFS FFS;
+void FLASHFS::getInfo(filesys_info_t *info) {
+    CFS::getInfo(info);
+    if (( info->wlhdl = _wlhdl ) != WL_INVALID_HANDLE) {
+        info->pdrv = ff_diskio_get_pdrv_wl(_wlhdl);
+        info->isffs = true;
+        info->blksize = wl_sector_size(_wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
+        info->blkcnt = info->blksize ? (_total / info->blksize) : 0;
+    }
+}
 #endif // CONFIG_USE_FFS
 
-void filesys_initialize() {
+} // namespace fs
+
 #ifdef CONFIG_USE_FFS
-    if (FFS.begin()) FFS.printInfo();
+fs::FLASHFS FFS;
 #endif
 #ifdef CONFIG_USE_SDFS
-    if (SDFS.begin()) SDFS.printInfo();
+fs::SDMMCFS SDFS;
 #endif
-}
-
-void filesys_ffs_info(size_t *used, size_t *total) {
-#ifdef CONFIG_USE_FFS
-    *used = FFS.usedBytes();
-    *total = FFS.totalBytes();
-#else
-    *used = *total = 0;
-#endif
-}
-
-void filesys_sdfs_info(size_t *used, size_t *total) {
-#ifdef CONFIG_USE_SDFS
-    *used = SDFS.usedBytes();
-    *total = SDFS.usedBytes();
-#else
-    *used = *total = 0;
-#endif
-}

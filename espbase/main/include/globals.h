@@ -29,22 +29,33 @@ extern "C" {
 #define NOTUSED(x)              (void)(x)
 #define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
 #define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
-#define LOOP(x, l, h)           for (int (x) = (l); (x) < (h); (x)++)
-#define LOOPD(x, h, l)          for (int (x) = (h); (x) > (l); (x)--)
+#define LOOP(x, l, h)           for (int x = (l); x < (h); x++)
+#define LOOPD(x, h, l)          for (int x = (h); x > (l); x--)
 #define LOOPN(x, n)             LOOP(x, 0, (n))
 #define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
-#define LPCHR(c, n)             { LOOPN(x, (n)) putchar(c); }
+#define LPCHR(c, n)             { LOOPN(x, (n)) putchar((c)); }
 #define LPCHRN(c, n)            { LPCHR(c, n); putchar('\n'); }
 #define TRYFREE(p)              { if (p) free(p); (p) = NULL; }
 #define UNUSED                  __attribute__((unused))
 #define PACKED                  __attribute__((packed))
 #define FALLTH                  __attribute__((fallthrough))
+
+#ifndef ABS
+#define ABS(x)                  ( (x) > 0 ? (x) : -(x) )
+#endif
 #ifndef MAX
 #define MAX(a, b)               ( (a) > (b) ? (a) : (b) )
 #define MIN(a, b)               ( (a) > (b) ? (b) : (a) )
 #endif
-#define EALLOC(v, l)            \
-    ( ((v) = (typeof (v)) malloc(l)) ? ESP_OK : ESP_ERR_NO_MEM )
+
+#define EALLOC(v, l)                                                        \
+        ( ((v) = (typeof (v)) malloc(l)) ? ESP_OK : ESP_ERR_NO_MEM )
+
+#define ACQUIRE(s, m)                                                       \
+        ( xSemaphoreTake(s, m ? pdMS_TO_TICKS(m) : portMAX_DELAY) == pdTRUE )
+
+#define RELEASE(s)                                                          \
+        ( xSemaphoreGive(s) == pdTRUE )
 
 // Aliases
 
@@ -72,6 +83,8 @@ extern "C" {
 #define BOARD_ESP32S3_LUATOS
 
 #ifdef BOARD_ESP32S3_LUATOS
+#   undef   CONFIG_GPIO_SPI_CS0
+#   define  CONFIG_GPIO_SPI_CS0 9
 #   undef   CONFIG_GPIO_LED
 #   define  CONFIG_GPIO_LED 10
 #   undef   CONFIG_USE_I2C1
@@ -100,7 +113,7 @@ bool parse_float(const char *, float *ptr);
 size_t parse_all(const char *, int *arr, size_t arrlen);
 char * cast_away_const(const char *);
 
-const char * format_size(size_t, bool);
+const char * format_size(uint64_t, bool);
 const char * format_sha256(const void *, size_t);
 
 void task_info(uint8_t sort);

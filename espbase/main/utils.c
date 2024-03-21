@@ -128,13 +128,12 @@ const char * format_sha256(const void *src, size_t len) {
 // need to free the buffer after logging/strcpy etc. But you must save the
 // result before calling format_size once again, because the buffer will be
 // reused and overwriten.
-const char * format_size(size_t bytes, bool inbit) {
+const char * format_size(uint64_t bytes, bool inbit) {
     static char buffer[16]; // xxxx.xx u\0
     static char * units[] = { " ", "K", "M", "G", "T", "P" };
     static int Bdems[] = { 0, 1, 2, 3, 3, 4 };
     static int bdems[] = { 0, 2, 3, 3, 4, 7 };
-    if (!bytes)
-        return inbit ? "0 b" : "0 B";
+    if (!bytes) return inbit ? "0 b" : "0 B";
     double tmp = bytes * (inbit ? 8 : 1), base = 1024;
     int exp = 0;                        // you can replace this with log10
     while (exp < 5 && tmp > base) {
@@ -210,11 +209,13 @@ void task_info(uint8_t sort_attr) {
 
 void version_info() {
     const esp_app_desc_t *desc = esp_ota_get_app_description();
-    printf("IDF Version: %s based on FreeRTOS %s\n"
-           "Firmware Version: %s %s\n"
-           "Compile time: %s %s\n",
+    printf("ESP-IDF  %s\n"
+           "FreeRTOS %s\n"
+           "Firmware %s%s%s\n"
+           "Compiled %s %s\n",
            esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
-           desc->project_name, desc->version, __DATE__, __TIME__);
+           Config.info.VER, strlen(Config.info.VER) ? " " : "",
+           desc->version, __DATE__, __TIME__);
 }
 
 static uint32_t memory_types[] = {
@@ -363,9 +364,9 @@ static uint8_t partition_used(const esp_partition_t *part) {
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT ||
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS
     ) {
-        size_t used, total;
-        filesys_ffs_info(&used, &total);
-        if (total) return 100 * used / total;
+        filesys_info_t info;
+        filesys_ffs_info(&info);
+        if (info.total) return 100 * info.used / info.total;
     }
     return 0;
 }

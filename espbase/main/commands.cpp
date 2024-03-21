@@ -652,7 +652,7 @@ static struct {
 
 static int utils_lstask(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_lstask_args);
-    task_info(ARG_INT(utils_lstask_args.sort, 0));
+    task_info(ARG_INT(utils_lstask_args.sort, 2));
     return ESP_OK;
 }
 #endif

@@ -5,7 +5,6 @@
  */
 
 #include "drivers.h"
-#include "config.h"
 
 #include "esp_attr.h"
 #include "esp_adc_cal.h"
@@ -15,6 +14,7 @@
 #include "sys/param.h"
 #include "driver/adc.h"
 #include "driver/ledc.h"
+#include "driver/sdspi_host.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -931,24 +931,27 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
 // If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
 // Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
 #ifdef CONFIG_USE_SPI_GPIOEXP
-static spi_device_handle_t spi_pin_hdlr;
+static spi_device_handle_t spi_pin_hdl;
 static spi_transaction_t spi_pin_trans;
 static uint8_t spi_pin_data[2] = { 0, 0 };
 #endif
 
 static void spi_initialize() {
-#ifdef CONFIG_USE_SPI_GPIOEXP
-    spi_bus_config_t hspi_busconf = {
+    spi_bus_config_t buf_conf = {
         .mosi_io_num = PIN_MOSI,
         .miso_io_num = PIN_MISO,
         .sclk_io_num = PIN_SCLK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 0,
+        .max_transfer_sz = 4000,
         .flags = SPICOMMON_BUSFLAG_MASTER,
         .intr_flags = 0
     };
-    spi_device_interface_config_t devconf = {
+    esp_err_t err = spi_bus_initialize(NUM_SPI, &buf_conf, SDSPI_DEFAULT_DMA);
+    if (err && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "SPI init failed: %s", esp_err_to_name(err));
+        return;
+    }
+#ifdef CONFIG_USE_SPI_GPIOEXP
+    spi_device_interface_config_t dev_conf = {
         .command_bits = 0,
         .address_bits = 0,
         .dummy_bits = 0,
@@ -964,9 +967,7 @@ static void spi_initialize() {
         .pre_cb = NULL,
         .post_cb = NULL
     };
-    esp_err_t err = spi_bus_initialize(NUM_SPI, &hspi_busconf, 1);
-    assert((!err || err == ESP_ERR_INVALID_STATE) && "SPI init failed");
-    ESP_ERROR_CHECK( spi_bus_add_device(NUM_SPI, &devconf, &spi_pin_hdlr) );
+    ESP_ERROR_CHECK( spi_bus_add_device(NUM_SPI, &dev_conf, &spi_pin_hdl) );
     spi_pin_trans.length = LEN(spi_pin_data) * 8; // in bits;
     spi_pin_trans.tx_buffer = spi_pin_data;
 #endif // CONFIG_USE_SPI_GPIOEXP
@@ -978,7 +979,7 @@ esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
     int pin = pin_num - PIN_SPI_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7), *datp = spi_pin_data + idx;
     *datp = level ? (*datp | mask) : (*datp & ~mask);
-    return spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
+    return spi_device_polling_transmit(spi_pin_hdl, &spi_pin_trans);
 #else
     return ESP_ERR_NOT_FOUND;
 #endif // CONFIG_USE_SPI_GPIOEXP
@@ -991,7 +992,7 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
     int pin = pin_num - PIN_SPI_MIN;
     uint8_t idx = pin >> 3, mask = BIT(pin & 0x7);
     if (sync)
-        err = spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans);
+        err = spi_device_polling_transmit(spi_pin_hdl, &spi_pin_trans);
     if (!err)
         *level = spi_pin_data[idx] & mask;
     return err;
@@ -1047,7 +1048,7 @@ static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
     }
 #endif // CONFIG_USE_I2C_GPIOEXP
 #ifdef CONFIG_USE_SPI_GPIOEXP
-    if (spi_device_polling_transmit(spi_pin_hdlr, &spi_pin_trans)) return;
+    if (spi_device_polling_transmit(spi_pin_hdl, &spi_pin_trans)) return;
     LOOPN(i, LEN(spi_pin_data)) {
         itoa(spi_pin_data[idx], buf, 2);
         ets_printf("SPI GPIO Expander value: 0b%s\n", buf);

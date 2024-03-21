@@ -52,8 +52,8 @@ config_t Config = {
 #else
         .NAME  = "",
 #endif
-#ifdef PROJECT_VER
-        .VER   = PROJECT_VER,
+#ifdef PROJECT_VERSION
+        .VER   = PROJECT_VERSION,
 #else
         .VER   = "",
 #endif
