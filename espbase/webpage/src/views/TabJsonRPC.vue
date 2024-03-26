@@ -1,3 +1,1 @@
-<template>
-TODO: useWebsocket and JSON-RPC
-</template>
+<template>TODO: useWebsocket and JSON-RPC</template>

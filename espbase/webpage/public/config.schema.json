@@ -125,6 +125,18 @@
         { "maxLength": 0 }
       ]
     },
+    "app.usb.mode": {
+      "description": "Select USB work mode",
+      "enum": [
+        "SERIAL_JTAG",
+        "CDC_DEVICE",
+        "CDC_HOST",
+        "MSC_DEVICE",
+        "MSC_HOST",
+        "HID_DEVICE",
+        "HID_HOST"
+      ]
+    },
     "app.prompt": {
       "description": "Console promption string",
       "type": "string",

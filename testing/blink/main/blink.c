@@ -11,9 +11,12 @@ Time: Fri 25 Jan 2019 15:09:44 CST
 #include "driver/gpio.h"
 #include "sdkconfig.h"
 
+#include "tinyusb.h"
+
 #define LED CONFIG_BLINK_GPIO
 
 void app_main() {
+    // tinyusb_driver_install(NULL);
     printf("Hello world!\n"); fflush(stdout);
 
     gpio_pad_select_gpio(LED);

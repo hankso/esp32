@@ -23,7 +23,7 @@ static SemaphoreHandle_t lock[2]; // for FFS & SDFS
 void filesys_initialize() {
     LOOPN(i, LEN(lock)) {
         lock[i] = xSemaphoreCreateBinary();
-        if (lock[i]) RELEASE(lock[i]);
+        if (lock[i]) xSemaphoreGive(lock[i]);
     }
 #ifdef CONFIG_USE_FFS
     if (FFS.begin()) FFS.printInfo();
@@ -33,30 +33,35 @@ void filesys_initialize() {
 #endif
 }
 
-void filesys_ffs_info(filesys_info_t *info) {
-#ifdef CONFIG_USE_FFS
-    FFS.getInfo(info);
-#else
-    memset(info, 0, sizeof(filesys_info_t));
-    info->pdrv = FF_DRV_NOT_USED;
-#endif
+bool filesys_acquire(filesys_type_t type, uint32_t msec) {
+    uint8_t idx = type == FILESYS_SDCARD;
+    return lock[idx] ? xSemaphoreTake(lock[idx], TIMEOUT(msec)) : false;
 }
 
-void filesys_sdfs_info(filesys_info_t *info) {
+bool filesys_release(filesys_type_t type) {
+    uint8_t idx = type == FILESYS_SDCARD;
+    return lock[idx] ? xSemaphoreGive(lock[idx]) : false;
+}
+
+bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
+    if (type == FILESYS_SDCARD) {
 #ifdef CONFIG_USE_SDFS
-    SDFS.getInfo(info);
-#else
+        SDFS.getInfo(info);
+        return info->card != NULL;
+#endif
+    } else {
+#ifdef CONFIG_USE_FFS
+        FFS.getInfo(info);
+#   ifdef CONFIG_FFS_FAT
+        return info->total != 0 && info->wlhdl != WL_INVALID_HANDLE;
+#   else
+        return info->total != 0;
+#   endif
+#endif
+    }
     memset(info, 0, sizeof(filesys_info_t));
     info->pdrv = FF_DRV_NOT_USED;
-#endif
-}
-
-bool filesys_acquire(bool idx, uint32_t msec) {
-    return lock[idx] ? ACQUIRE(lock[idx], msec) : false;
-}
-
-bool filesys_release(bool idx) {
-    return lock[idx] ? RELEASE(lock[idx]) : false;
+    return false;
 }
 
 // File system APIs
@@ -363,6 +368,7 @@ void SDMMCFS::walk(const char *path, void (*cb)(File, void *), void *arg) {
 
 void SDMMCFS::getInfo(filesys_info_t *info) {
     CFS::getInfo(info);
+    info->type = FILESYS_SDCARD;
     if (( info->card = _card )) {
         info->pdrv = ff_diskio_get_pdrv_card(_card);
         info->blkcnt = _card->csd.capacity;
@@ -496,9 +502,9 @@ void FLASHFS::walk(const char *dir, void (*cb)(File, void *), void *arg) {
 
 void FLASHFS::getInfo(filesys_info_t *info) {
     CFS::getInfo(info);
+    info->type = FILESYS_FLASH;
     if (( info->wlhdl = _wlhdl ) != WL_INVALID_HANDLE) {
         info->pdrv = ff_diskio_get_pdrv_wl(_wlhdl);
-        info->isffs = true;
         info->blksize = wl_sector_size(_wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
         info->blkcnt = info->blksize ? (_total / info->blksize) : 0;
     }

@@ -43,13 +43,6 @@ static const char
 "<body>"
 "</html>";
 
-void server_loop_begin() {
-    esp_log_level_set(TAG, ESP_LOG_INFO);
-    WebServer.begin();
-}
-
-void server_loop_end() { WebServer.end(); }
-
 static bool log_request = true;
 
 void log_msg(AsyncWebServerRequest *req, const char *msg = "") {
@@ -491,22 +484,11 @@ void WebServerClass::begin() {
     if (_started) return _server.begin();
     _server.reset();
     _server.addRewrite(new APIRewrite());
-    register_api_sta();
-    register_api_ap();
-    register_api_ws();
-    register_statics();
-    DefaultHeaders::Instance()
-        .addHeader("Access-Control-Allow-Origin", "*");
-    _server.begin();
-    _started = true;
-}
 
-void WebServerClass::register_api_sta() {
+    // STA APIs
     _server.on("/cmd", HTTP_POST, onCommand);
     _server.on("/alive", HTTP_ANY, onSuccess);
-}
-
-void WebServerClass::register_api_ap() {
+    // AP APIs
     _server.on("/apmode", HTTP_ANY, onSuccess).setFilter(ON_AP_FILTER);
     _server.on("/edit", HTTP_GET, onEdit).setFilter(ON_AP_FILTER);
     _server.on("/editc", HTTP_ANY, onCreate).setFilter(ON_AP_FILTER);
@@ -517,15 +499,11 @@ void WebServerClass::register_api_ap() {
     _server.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
     _server.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
         .setFilter(ON_AP_FILTER);
-}
-
-void WebServerClass::register_api_ws() {
+    // WebSocket API
     _socket.onEvent(onWebSocket);
     _socket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
     _server.addHandler(&_socket);
-}
-
-void WebServerClass::register_statics() {
+    // Static files
     _server.serveStatic("/data/", FFS, Config.web.DIR_DATA);
     _server.serveStatic("/docs/", FFS, Config.web.DIR_DOCS);
     _server.serveStatic("/", FFS, Config.web.DIR_ROOT)
@@ -535,9 +513,22 @@ void WebServerClass::register_statics() {
         .setAuthentication(Config.web.HTTP_NAME, Config.web.HTTP_PASS);
     _server.onFileUpload(onUploadStrict);
     _server.onNotFound(onError);
+
+    DefaultHeaders::Instance()
+        .addHeader("Access-Control-Allow-Origin", "*");
+    _server.begin();
+    _started = true;
 }
 
-bool WebServerClass::logging() { return log_request; }
-void WebServerClass::logging(bool log_request) { log_request = log_request; }
-
 WebServerClass WebServer;
+
+void server_loop_begin() {
+    WebServer.begin();
+}
+
+void server_loop_end() {
+    WebServer.end();
+}
+
+bool server_get_logging() { return log_request; }
+void server_set_logging(bool val) { log_request = val; }

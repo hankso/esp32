@@ -8,8 +8,9 @@ dependencies:
     version: ">=0.15.0~2"
     rules:
       - if: "idf_version >=5.0"
-  espressif/usb_host_msc: "*"
   espressif/usb_host_cdc_acm: "*"
+  espressif/usb_host_msc: "*"
+  espressif/usb_host_hid: "*"
   # leeebo/tinyusb_src:
   #   version: ">=0.15.0~6"
   #   rules:

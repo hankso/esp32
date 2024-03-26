@@ -7,10 +7,10 @@
 /* Framework EspAsyncWebServer depends on Arduino FS libraries, so we have to
  * implement our file system based on Arduino FS instead of native ESP32 VFS.
  *
- * - SDMMCFS is implemented for SD Card FAT File System in SPI mode.
+ * - SDMMCFS is implemented for SD Card FAT File System.
  *
- * - FLASHFS supports SPIFFS & FFATFS and is configurable by defining macro
- * `CONFIG_USE_FFATFS`. It default initializes SPIFFS on `storage` partition.
+ * - FLASHFS supports SPIFFS and FAT format. It is configurable by defining
+ *   macro `CONFIG_FFS_FAT` or `CONFIG_FFS_SPIFFS`.
  *
  * This module relies on Arduino FS Abstract Layer but nothing.
  *
@@ -31,9 +31,9 @@
  * Note that fs::FileImpl's `operator bool()` has no relation with FileImplPtr,
  * it is used to determine whether the file exists:
  *
- *      MyFSFileImpl file_impl(MyFS, "/filename", "r");
+ *      MyFSFileImpl file_impl(MyFS, "/path", "r");
  *      if (file_impl) {
- *          printf("file/dir does exist\n");
+ *          printf("file / folder does exist\n");
  *          file_impl.close();
  *      }
  *
@@ -54,24 +54,28 @@
 extern "C" {
 #endif
 
+typedef enum {
+    FILESYS_FLASH,              // if defined CONFIG_USE_FFS
+    FILESYS_SDCARD,             // if defined CONFIG_USE_SDFS
+} filesys_type_t;
+
 typedef struct {
-    union {
-        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
-        sdmmc_card_t *card;     // if defined CONFIG_USE_SDFS
-    };
-    int pdrv;                   // if not defined CONFIG_FFS_SPIFFS
-    bool isffs;                 // false: card, true: wlhdl
-    size_t blkcnt;
-    size_t blksize;
     uint64_t used;
     uint64_t total;
+    size_t blkcnt;
+    size_t blksize;
+    int pdrv;                   // available if FAT Flash or FAT SDCard
+    union {
+        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
+        sdmmc_card_t *card;
+    };
+    filesys_type_t type;
 } filesys_info_t;
 
 void filesys_initialize();
-void filesys_ffs_info(filesys_info_t *info);
-void filesys_sdfs_info(filesys_info_t *info);
-bool filesys_acquire(bool ffs, uint32_t msec);  // enable write protect
-bool filesys_release(bool ffs);                 // disable write protect
+bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
+bool filesys_release(filesys_type_t);                 // give write lock
+bool filesys_get_info(filesys_type_t, filesys_info_t *);
 
 #ifdef __cplusplus
 }

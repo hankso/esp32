@@ -41,7 +41,7 @@ typedef struct config_application_t {
     const char * MDNS_HOST; // Register mDNS hostname
     const char * OTA_RUN;   // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
-    const char * USB_MODE;  // USB working mode & function
+    const char * USB_MODE;  // Select USB work mode
     const char * PROMPT;    // Console promption string
 } config_app_t;
 

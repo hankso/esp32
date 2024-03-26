@@ -25,7 +25,10 @@ const backup = ref({})
 async function submit(e) {
     if (e && !(await e).valid) return
     setConfig(toValue(config))
-        .then(() => notify('Configuration saved!') && refresh())
+        .then(() => {
+            notify('Configuration saved!')
+            refresh()
+        })
         .catch(({ message }) => notify(message))
 }
 

@@ -179,7 +179,7 @@ menu "ESP Base Configuration"
             select TINYUSB_CDC_ENABLED
             default y
         choice
-            prompt "Select USB CDC slave mode function"
+            prompt "Select USB CDC slave mode features"
             depends on USB_CDC_DEVICE
             default USB_CDC_DEVICE_SERIAL
             config USB_CDC_DEVICE_SERIAL
@@ -205,7 +205,8 @@ menu "ESP Base Configuration"
 
         config USB_HID_DEVICE
             bool "Enable USB HID slave mode"
-            select TINYUSB_HID_ENABLED
+            select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4+
+            select TINYUSB_HID_COUNT    # for ESP-IDF v5.0+
             default y
 
         config USB_HID_HOST

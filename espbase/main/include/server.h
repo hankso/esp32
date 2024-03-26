@@ -46,6 +46,8 @@ extern "C" {
 
 void server_loop_begin();
 void server_loop_end();
+bool server_get_logging();
+void server_set_logging(bool);
 
 #ifdef __cplusplus
 }
@@ -77,14 +79,6 @@ public:
 
     void begin();                   // run server in LWIP thread
     void end() { _server.end(); }   // stop AsyncWebServer
-    void register_api_sta();
-    void register_api_ap();
-    void register_api_ws();
-    void register_statics();
-    bool logging();
-    void logging(bool);             // enable/disable http request logging
 };
-
-extern WebServerClass WebServer;
 
 #endif // __cplusplus

@@ -4,7 +4,6 @@
  * Create: 2020-03-13 18:03:04
  */
 
-#include "sdkconfig.h"
 #include "globals.h"
 #include "drivers.h"
 #include "console.h"
@@ -17,12 +16,6 @@
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
-#include "esp_log.h"
-
-// Task list:
-//  WiFi/AsyncTCP/WebServer Core 0
-//  Console (command REPL) Core 1
-//  Main loop (screen) Core 1
 
 void setup() {
     driver_initialize();
@@ -40,9 +33,9 @@ void setup() {
 
 void loop() {
     static uint8_t count = 0;
-    asleep(500);
     scn_progbar((count += 2) / 255.0 * 100);
     twdt_feed();
+    asleep(500);
 }
 
 #if !CONFIG_AUTOSTART_ARDUINO

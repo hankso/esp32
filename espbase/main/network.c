@@ -60,8 +60,6 @@ static wifi_config_t config_sta = {
     }
 };
 
-static esp_err_t mdns_initialize();
-
 static const char * wifi_authmode_str(wifi_auth_mode_t auth) {
     switch (auth) {
         case WIFI_AUTH_OPEN:            return "OPEN";
@@ -329,6 +327,8 @@ static void event_handler(
         ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
     }
 }
+
+static esp_err_t mdns_initialize();
 
 void network_initialize() {
     esp_err_t err;

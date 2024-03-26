@@ -264,7 +264,7 @@ static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
         if (!err) err = nvs_get_blob(hdl, info->key, NULL, &len);
         if (!err) err = EALLOC(buf, len * 3);
         if (!err) err = nvs_get_blob(hdl, info->key, buf + len * 2, &len);
-        if (!err) hexdumps((uint8_t *)(buf + len * 2), buf, len, 32);
+        if (!err) hexdumps((buf + len * 2), buf, len, MIN(32, len * 2));
     } else if (!( err = EALLOC(buf, len) )) {
         switch (info->type) {
             case NVS_TYPE_U8:

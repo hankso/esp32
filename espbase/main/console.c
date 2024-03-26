@@ -175,7 +175,7 @@ void console_initialize() {
 
 char * console_handle_command(const char *cmd, int history) {
     // Semaphore is better than task notification
-    if (running && xSemaphoreTake(running, pdMS_TO_TICKS(100)) != pdTRUE)
+    if (running && !xSemaphoreTake(running, TIMEOUT(100)))
         return strdup("Console task is executing command");
     if (history) linenoiseHistoryAdd(cmd);
 

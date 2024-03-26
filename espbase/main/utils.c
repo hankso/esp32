@@ -90,6 +90,12 @@ char * cast_away_const(const char *str) {
     return (char *)(void *)(const void *)str;
 }
 
+static uint8_t numdigits(int n) {
+    uint8_t i = !n;
+    while (n) { n /= 10; i++; }
+    return i;
+}
+
 static char hexdigits(uint8_t v) {
     if (v < 10) return v + '0';
     if (v > 15) return 'Z';
@@ -105,13 +111,24 @@ void hexdump(const void *src, size_t bytes, size_t maxlen) {
 }
 
 char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
-    size_t maxbytes = maxlen / 2, count = MIN(bytes, maxbytes);
+    if (!dst || !maxlen) return 0;
+    size_t maxbytes, count, offset = 0;
+    if ((bytes * 2 + 1) <= maxlen) {
+        maxbytes = (maxlen - 1) / 2;
+    } else if (maxlen < (9 + numdigits(bytes) + numdigits(maxlen / 2))) {
+        dst[0] = '\0';
+        return dst; // no space
+    } else { // append tail to dst
+        offset = maxlen - 9 - numdigits(bytes);
+        maxbytes = (offset - numdigits(maxlen / 2)) / 2;
+    }
+    count = MIN(bytes, maxbytes);
     LOOPN(i, count) {
         dst[2 * i + 0] = hexdigits(((uint8_t *)src)[i] >> 4);
         dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
     }
-    if (bytes && maxbytes && bytes > maxbytes) {
-        sprintf(dst + count * 2, " ... [%u/%u]", count, bytes);
+    if (offset) {
+        sprintf(dst + offset - numdigits(count), " ... [%u/%u]", count, bytes);
     } else {
         dst[count * 2] = '\0';
     }
@@ -121,7 +138,7 @@ char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
 const char * format_sha256(const void *src, size_t len) {
     static char buf[64 + 1];
     if (!src || !len) { buf[0] = '\0'; return buf; }
-    return hexdumps(src, buf, len, 64);
+    return hexdumps(src, buf, len, sizeof(buf));
 }
 
 // Note: format_size format string into static buffer. Therefore you don't
@@ -365,8 +382,8 @@ static uint8_t partition_used(const esp_partition_t *part) {
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS
     ) {
         filesys_info_t info;
-        filesys_ffs_info(&info);
-        if (info.total) return 100 * info.used / info.total;
+        if (filesys_get_info(FILESYS_FLASH, &info))
+            return 100 * info.used / info.total;
     }
     return 0;
 }

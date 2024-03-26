@@ -311,11 +311,15 @@ static int driver_gpio(int argc, char **argv) {
 static struct {
     struct arg_str *umt;
     struct arg_lit *now;
+    struct arg_str *key;
+    struct arg_str *mse;
     struct arg_end *end;
 } driver_usb_args = {
     .umt = arg_str0(NULL, NULL, "<0-6|S|C|M|H>", "specify USB mode"),
     .now = arg_lit0(NULL, "now", "reboot now"),
-    .end = arg_end(2)
+    .key = arg_str0(NULL, "key", "<CODE>", "HID report keypress"),
+    .mse = arg_str0(NULL, "mouse", "<B|XYVH>", "HID report mouse"),
+    .end = arg_end(4)
 };
 
 static int driver_usb(int argc, char **argv) {
@@ -324,7 +328,27 @@ static int driver_usb(int argc, char **argv) {
     esp_err_t err = ESP_OK;
     bool reboot = driver_usb_args.now->count;
     const char *mode = ARG_STR(driver_usb_args.umt, "");
-    if (!driver_usb_args.umt->count) {
+    const char *press = ARG_STR(driver_usb_args.key, "");
+    const char *mouse = ARG_STR(driver_usb_args.mse, "");
+    if (driver_usb_args.mse->count) {
+        int num, vals[4] = { 0 };
+        if (!strcmp(mouse, "square")) {
+            hid_report_mouse(0, 20, 0, 0, 0); msleep(50);
+            hid_report_mouse(0, 0, 20, 0, 0); msleep(50);
+            hid_report_mouse(0, -20, 0, 0, 0); msleep(50);
+            hid_report_mouse(0, 0, -20, 0, 0); msleep(50);
+        } else if (!( num = parse_all(mouse, vals, sizeof(vals)) )) {
+            printf("Invalid mouse to report: `%s`\n", mouse);
+            err = ESP_ERR_INVALID_ARG;
+        } else if (num < 2) {
+            hid_report_mouse_button(vals[0]); msleep(25);
+            hid_report_mouse_button(0);
+        } else {
+            hid_report_mouse(0, vals[0], vals[1], vals[2], vals[3]);
+        }
+    } else if (driver_usb_args.key->count) {
+        hid_report_keypress(press, 50);
+    } else if (!driver_usb_args.umt->count) {
         usbmode_status();
     } else if ('0' <= mode[0] && mode[0] <= '6') {
         err = usbmode_switch((usbmode_t)(mode[0] - '0'), reboot);
@@ -675,7 +699,7 @@ static int utils_lsmem(int argc, char **argv) {
             // heap_caps_dump_all(); break; // Too much infomation
             heap_caps_print_heap_info(MALLOC_CAP_DMA);
             heap_caps_print_heap_info(MALLOC_CAP_EXEC);
-            __attribute__((fallthrough));
+            FALLTH;
         case 1:
             heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
@@ -692,7 +716,7 @@ static struct {
     struct arg_end *end;
 } utils_lsfs_args = {
     .dir = arg_str0(NULL, NULL, "abspath", NULL),
-    .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
+    .dev = arg_str0("d", NULL, "<flash|sdcard>", "select FS from device"),
     .end = arg_end(2)
 };
 
@@ -706,7 +730,7 @@ static int utils_lsfs(int argc, char **argv) {
 #else
         ESP_LOGW(TAG, "Flash File System not enabled");
 #endif
-    } else if (strstr(dev, "sdmmc")) {
+    } else if (strstr(dev, "sdcard")) {
 #ifdef CONFIG_SDFS_MP
         SDFS.list(dir, stdout);
 #else
@@ -825,7 +849,7 @@ static struct {
     struct arg_end *end;
 } utils_hist_args = {
     .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
-    .dev = arg_str0("d", NULL, "<flash|sdmmc>", "select FS from device"),
+    .dev = arg_str0("d", NULL, "<flash|sdcard>", "select FS from device"),
     .dst = arg_str0("f", NULL, "history.txt", "relative path to file"),
     .end = arg_end(3)
 };
@@ -852,7 +876,7 @@ static int utils_hist(int argc, char **argv) {
 #else
         ESP_LOGW(TAG, "Flash File System not enabled");
 #endif // CONFIG_FFS_MP
-    } else if (strstr(dev, "sdmmc")) {
+    } else if (strstr(dev, "sdcard")) {
 #ifdef CONFIG_SDFS_MP
         snprintf(fullpath, sizeof(fullpath), "%s%s%s",
                 CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);

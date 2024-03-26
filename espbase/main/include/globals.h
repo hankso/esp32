@@ -18,6 +18,7 @@
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_idf_version.h"
+#include "sdkconfig.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,7 +36,9 @@ extern "C" {
 #define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
 #define LPCHR(c, n)             { LOOPN(x, (n)) putchar((c)); }
 #define LPCHRN(c, n)            { LPCHR(c, n); putchar('\n'); }
-#define TRYFREE(p)              { if (p) free(p); (p) = NULL; }
+#define TRYNULL(p, f)           { if (p) f(p); (p) = NULL; }
+#define TRYFREE(p)              TRYNULL(p, free)
+#define TIMEOUT(m)              ( m ? pdMS_TO_TICKS(m) : portMAX_DELAY )
 #define UNUSED                  __attribute__((unused))
 #define PACKED                  __attribute__((packed))
 #define FALLTH                  __attribute__((fallthrough))
@@ -50,12 +53,6 @@ extern "C" {
 
 #define EALLOC(v, l)                                                        \
         ( ((v) = (typeof (v)) malloc(l)) ? ESP_OK : ESP_ERR_NO_MEM )
-
-#define ACQUIRE(s, m)                                                       \
-        ( xSemaphoreTake(s, m ? pdMS_TO_TICKS(m) : portMAX_DELAY) == pdTRUE )
-
-#define RELEASE(s)                                                          \
-        ( xSemaphoreGive(s) == pdTRUE )
 
 // Aliases
 
