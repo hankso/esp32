@@ -50,26 +50,29 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
 #define ARG_STR(p, s)   ((p)->count ? (p)->sval[0] : (s))
 #define ARG_INT(p, v)   ((p)->count ? (p)->ival[0] : (v))
 
-#define ARG_PARSE(c, v, t)  {                                               \
-    if (!arg_noerror((c), (v), (void **)(t)))                               \
-        return ESP_ERR_INVALID_ARG;                                         \
-}
+#define ARG_PARSE(c, v, t)                                                  \
+        do {                                                                \
+            if (!arg_noerror((c), (v), (void **)(t)))                       \
+            return ESP_ERR_INVALID_ARG;                                     \
+        } while (0)
 
-#define ESP_CMD(d, c, h) {                                                  \
-    .command = #c,                                                          \
-    .help = (h),                                                            \
-    .hint = NULL,                                                           \
-    .func = &(d ## _ ## c),                                                 \
-    .argtable = NULL                                                        \
-}
+#define ESP_CMD(d, c, h)                                                    \
+        {                                                                   \
+            .command = #c,                                                  \
+            .help = (h),                                                    \
+            .hint = NULL,                                                   \
+            .func = &(d ## _ ## c),                                         \
+            .argtable = NULL                                                \
+        }
 
-#define ESP_CMD_ARG(d, c, h) {                                              \
-    .command = #c,                                                          \
-    .help = (h),                                                            \
-    .hint = NULL,                                                           \
-    .func = &(d ## _ ## c),                                                 \
-    .argtable = &(d ## _ ## c ## _args)                                     \
-}
+#define ESP_CMD_ARG(d, c, h)                                                \
+        {                                                                   \
+            .command = #c,                                                  \
+            .help = (h),                                                    \
+            .hint = NULL,                                                   \
+            .func = &(d ## _ ## c),                                         \
+            .argtable = &(d ## _ ## c ## _args)                             \
+        }
 
 /******************************************************************************
  * System commands
@@ -86,94 +89,98 @@ static const char * const wakeup_reason_list[] = {
 };
 
 static struct {
+    struct arg_str *mode;
     struct arg_int *tout;
     struct arg_int *pin;
     struct arg_int *lvl;
-    struct arg_str *mode;
     struct arg_end *end;
 } system_sleep_args = {
-    .tout = arg_int0(NULL, "time", "<t>", "wakeup time, ms"),
-    .pin  = arg_intn(NULL, "gpio", "<n>", 0, 8, "Wakeup using specified GPIO"),
-    .lvl  = arg_intn(NULL, "level", "<0|1>", 0, 8, "GPIO level to trigger wakeup"),
-    .mode = arg_str0(NULL, "method", "<light|deep>", "sleep mode"),
-    .end = arg_end(4)
+    .mode = arg_str0(NULL, NULL, "<light|deep>", "sleep mode"),
+    .tout = arg_int0("t", NULL, "<2^31>", "wakeup timeout in ms"),
+    .pin  = arg_intn("p", NULL, "<0-49>", 0, 8, "wakeup from GPIO[s]"),
+    .lvl  = arg_intn("l", NULL, "<0|1>", 0, 8, "GPIO level[s] to detect"),
+    .end  = arg_end(4)
 };
 
-static int enable_gpio_light_wakeup() {
-    int gpio_count = system_sleep_args.pin->count;
-    int level_count = system_sleep_args.lvl->count;
-    if (level_count && (gpio_count != level_count)) {
+static esp_err_t enable_gpio_light_wakeup() {
+    int pin_cnt = system_sleep_args.pin->count;
+    int lvl_cnt = system_sleep_args.lvl->count;
+    if (!pin_cnt) return ESP_OK;
+    if (lvl_cnt && (pin_cnt != lvl_cnt)) {
         ESP_LOGE(TAG, "GPIO and level mismatch!");
         return ESP_ERR_INVALID_ARG;
     }
-    int gpio, level;
-    gpio_int_type_t intr;
+    int lvl;
     const char *lvls;
-    for (int i = 0; i < gpio_count; i++) {
-        gpio = system_sleep_args.pin->ival[i];
-        level = level_count ? system_sleep_args.lvl->ival[i] : 0;
-        lvls = level ? "HIGH" : "LOW";
-        intr = level ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL;
-        fprintf(stderr, "Enable GPIO wakeup, num: %d, level: %s\n", gpio, lvls);
-        ESP_ERROR_CHECK( gpio_wakeup_enable((gpio_num_t)gpio, intr) );
-    }
-    ESP_ERROR_CHECK( esp_sleep_enable_gpio_wakeup() );
-    esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON);
-    return ESP_OK;
-}
-
-static int enable_gpio_deep_wakeup() {
-    int gpio = system_sleep_args.pin->ival[0], level = 0;
-    if (system_sleep_args.lvl->count) {
-        level = system_sleep_args.lvl->ival[0];
-        if (level != 0 && level != 1) {
-            ESP_LOGE(TAG, "Invalid wakeup level: %d", level);
-            return ESP_ERR_INVALID_ARG;
+    gpio_num_t pin;
+    gpio_int_type_t intr;
+    LOOPN(i, pin_cnt) {
+        pin = (gpio_num_t)system_sleep_args.pin->ival[i];
+        lvl = lvl_cnt ? system_sleep_args.lvl->ival[i] : 0;
+        lvls = lvl ? "HIGH" : "LOW";
+        intr = lvl ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL;
+        if (esp_sleep_is_valid_wakeup_gpio(pin)) {
+            fprintf(stderr, "Use GPIO wakeup, num %d level %s\n", pin, lvls);
+            ESP_ERROR_CHECK( gpio_wakeup_enable(pin, intr) );
+        } else {
+            fprintf(stderr, "Skip GPIO wakeup, num %d level %s\n", pin, lvls);
         }
     }
-    const char *lvls = level ? "HIGH" : "LOW";
-    esp_sleep_ext1_wakeup_mode_t mode;
-    mode = level ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ALL_LOW;
-    fprintf(stderr, "Enable GPIO wakeup, num: %d, level: %s\n", gpio, lvls);
-    ESP_ERROR_CHECK( esp_sleep_enable_ext1_wakeup(1ULL << gpio, mode) );
-    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-    return ESP_OK;
+    ESP_ERROR_CHECK( esp_sleep_enable_gpio_wakeup() );
+    return esp_sleep_pd_config(ESP_PD_DOMAIN_VDDSDIO, ESP_PD_OPTION_ON);
+}
+
+static esp_err_t enable_gpio_deep_wakeup() {
+    int pin_cnt = system_sleep_args.pin->count;
+    if (!pin_cnt) return ESP_OK;
+    int lvl = ARG_INT(system_sleep_args.lvl, 0);
+    const char *lvls = lvl ? "ANY_HIGH" : "ALL_LOW";
+    esp_sleep_ext1_wakeup_mode_t mode = \
+        lvl ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ALL_LOW;
+    gpio_num_t pin;
+    uint64_t mask = 0;
+    LOOPN(i, pin_cnt) {
+        pin = (gpio_num_t)system_sleep_args.pin->ival[i];
+        if (esp_sleep_is_valid_wakeup_gpio(pin)) {
+            fprintf(stderr, "Use GPIO wakeup, num %d level %s\n", pin, lvls);
+            mask |= 1ULL << pin;
+        } else {
+            fprintf(stderr, "Skip GPIO wakeup, num %d level %s\n", pin, lvls);
+        }
+    }
+    ESP_ERROR_CHECK( esp_sleep_enable_ext1_wakeup(mask, mode) );
+    return esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
 }
 
 static int system_sleep(int argc, char **argv) {
     ARG_PARSE(argc, argv, &system_sleep_args);
-    if (system_sleep_args.tout->count) {
-        uint64_t timeout = system_sleep_args.tout->ival[0];
-        fprintf(stderr, "Enable timer wakeup, timeout: %llums\n", timeout);
-        ESP_ERROR_CHECK( esp_sleep_enable_timer_wakeup(timeout * 1000) );
+    const char *mode = ARG_STR(system_sleep_args.mode, "light");
+    uint32_t tout_ms = ARG_INT(system_sleep_args.tout, 0);
+    if (tout_ms) {
+        fprintf(stderr, "Use timer wakeup, timeout: %ums\n", tout_ms);
+        uint64_t tout_us = (uint64_t)tout_ms * 1000;
+        ESP_ERROR_CHECK( esp_sleep_enable_timer_wakeup(tout_us) );
     }
     bool light = true;
-    if (system_sleep_args.mode->count) {
-        const char *mode = system_sleep_args.mode->sval[0];
-        if (strstr(mode, "deep")) {
-            light = false;
-        } else if (!strstr(mode, "light")) {
-            ESP_LOGE(TAG, "Unsupported sleep mode: %s", mode);
-            return ESP_ERR_INVALID_ARG;
-        }
+    if (strstr(mode, "deep")) {
+        light = false;
+    } else if (!strstr(mode, "light")) {
+        ESP_LOGE(TAG, "Unsupported sleep mode: %s", mode);
+        return ESP_ERR_INVALID_ARG;
     }
     esp_err_t err;
     if (light) {
-        if (system_sleep_args.pin->count) {
-            if (( err = enable_gpio_light_wakeup() )) return err;
-        }
 #ifdef CONFIG_USE_UART
-        fprintf(stderr, "Enable UART wakeup, num: %d\n", NUM_UART);
+        fprintf(stderr, "Use UART wakeup, num: %d\n", NUM_UART);
         ESP_ERROR_CHECK( uart_set_wakeup_threshold(NUM_UART, 3) );
         ESP_ERROR_CHECK( esp_sleep_enable_uart_wakeup(NUM_UART) );
 #endif
+        if (( err = enable_gpio_light_wakeup() )) return err;
     } else {
-        if (system_sleep_args.pin->count) {
-            if (( err = enable_gpio_deep_wakeup() )) return err;
-        }
+        if (( err = enable_gpio_deep_wakeup() )) return err;
     }
 
-    fprintf(stderr, "Turn to %s sleep mode\n", light ? "light" : "deep");
+    fprintf(stderr, "Turn to %s sleep mode\n", mode);
     fflush(stderr); fsync(fileno(stderr));
 #ifdef CONFIG_USE_UART
     uart_tx_wait_idle(NUM_UART);
@@ -185,8 +192,7 @@ static int system_sleep(int argc, char **argv) {
     }
     fprintf(stderr, "ESP32 is woken up from light sleep mode by %s\n",
             wakeup_reason_list[(int)esp_sleep_get_wakeup_cause()]);
-    esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
-    return ESP_OK;
+    return esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 }
 #endif // CONSOLE_SYSTEM_SLEEP
 
@@ -204,7 +210,7 @@ static struct {
     .url   = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
     .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
     .reset = arg_lit0("r", "reset", "clear OTA internal states"),
-    .end = arg_end(5)
+    .end   = arg_end(5)
 };
 
 static int system_update(int argc, char **argv) {
@@ -284,24 +290,24 @@ static struct {
 
 static int driver_gpio(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_gpio_args);
-    if (!driver_gpio_args.pin->count) {
-        gpio_table(driver_gpio_args.i2c->count, driver_gpio_args.spi->count);
-        return ESP_OK;
-    }
-    bool level;
-    uint32_t pin_num = driver_gpio_args.pin->ival[0];
     esp_err_t err = ESP_OK;
-    if (driver_gpio_args.lvl->count) {
-        err = gpioext_set_level(pin_num, driver_gpio_args.lvl->ival[0]);
+    int pin = ARG_INT(driver_gpio_args.pin, -1);
+    int lvl = ARG_INT(driver_gpio_args.lvl, -1);
+    if (pin < 0) {
+        gpio_table(driver_gpio_args.i2c->count, driver_gpio_args.spi->count);
+        return err;
+    }
+    bool level = lvl;
+    if (lvl < 0) {
+        err = gpioext_get_level(pin, &level, true);
     } else {
-        err = gpioext_get_level(pin_num, &level, true);
+        err = gpioext_set_level(pin, level);
     }
     if (err) {
-        printf("%s GPIO %d level error: %s\n",
-               driver_gpio_args.lvl->count ? "Set" : "Get",
-               pin_num, esp_err_to_name(err));
+        printf("%s GPIO %d level failed: %s\n",
+               lvl < 0 ? "Get" : "Set", pin, esp_err_to_name(err));
     } else {
-        printf("GPIO %d: %s\n", pin_num, level ? "HIGH" : "LOW");
+        printf("GPIO %d: %s\n", pin, level ? "HIGH" : "LOW");
     }
     return ESP_OK;
 }
@@ -309,46 +315,58 @@ static int driver_gpio(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_USB
 static struct {
-    struct arg_str *umt;
+    struct arg_str *mode;
     struct arg_lit *now;
     struct arg_str *key;
     struct arg_str *mse;
+    struct arg_str *dial;
+    struct arg_int *tout;
     struct arg_end *end;
 } driver_usb_args = {
-    .umt = arg_str0(NULL, NULL, "<0-6|S|C|M|H>", "specify USB mode"),
-    .now = arg_lit0(NULL, "now", "reboot now"),
-    .key = arg_str0(NULL, "key", "<CODE>", "HID report keypress"),
-    .mse = arg_str0(NULL, "mouse", "<B|XYVH>", "HID report mouse"),
-    .end = arg_end(4)
+    .mode = arg_str0(NULL, NULL, "<0-6|C|M|H|S>", "specify USB mode"),
+    .now  = arg_lit0(NULL, "now", "reboot now"),
+    .key  = arg_str0("k", NULL, "<CODE>", "HID report keypress"),
+    .mse  = arg_str0("m", NULL, "<B|XYVH>", "HID report mouse"),
+    .dial = arg_str0("d", NULL, "<B|LRUD>", "HID report S-Dial"),
+    .tout = arg_int0("t", NULL, "<65535>", "key/mouse timeout in ms"),
+    .end  = arg_end(5)
 };
 
 static int driver_usb(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_usb_args);
-    static const char *choices = "SCcMmHh", *c;
+    static const char *choices = "CcMmHhS", *c;
     esp_err_t err = ESP_OK;
     bool reboot = driver_usb_args.now->count;
-    const char *mode = ARG_STR(driver_usb_args.umt, "");
-    const char *press = ARG_STR(driver_usb_args.key, "");
-    const char *mouse = ARG_STR(driver_usb_args.mse, "");
-    if (driver_usb_args.mse->count) {
+    uint16_t tout_ms = ARG_INT(driver_usb_args.tout, 50);
+    const char *mode = ARG_STR(driver_usb_args.mode, NULL);
+    const char *dial = ARG_STR(driver_usb_args.dial, NULL);
+    const char *press = ARG_STR(driver_usb_args.key, NULL);
+    const char *mouse = ARG_STR(driver_usb_args.mse, NULL);
+    if (dial) {
+        switch (dial[0]) {
+            case 'l': case 'L': hid_report_dial(DIAL_L); break;
+            case 'r': case 'R': hid_report_dial(DIAL_R); break;
+            case 'u': case 'U': hid_report_dial(DIAL_UP); break;
+            case 'd': case 'D': hid_report_dial(DIAL_DN); break;
+            default: if (strbool(dial)) hid_report_dial_button(tout_ms);
+        }
+    } else if (mouse) {
         int num, vals[4] = { 0 };
-        if (!strcmp(mouse, "square")) {
-            hid_report_mouse(0, 20, 0, 0, 0); msleep(50);
-            hid_report_mouse(0, 0, 20, 0, 0); msleep(50);
-            hid_report_mouse(0, -20, 0, 0, 0); msleep(50);
-            hid_report_mouse(0, 0, -20, 0, 0); msleep(50);
+        if (!strcasecmp(mouse, "square")) {
+            hid_report_mouse_move(50, 0); msleep(250);
+            hid_report_mouse_move(0, 50); msleep(250);
+            hid_report_mouse_move(-50, 0); msleep(250);
+            hid_report_mouse_move(0, -50); msleep(250);
         } else if (!( num = parse_all(mouse, vals, sizeof(vals)) )) {
-            printf("Invalid mouse to report: `%s`\n", mouse);
-            err = ESP_ERR_INVALID_ARG;
-        } else if (num < 2) {
-            hid_report_mouse_button(vals[0]); msleep(25);
-            hid_report_mouse_button(0);
+            hid_report_mouse_click(mouse, tout_ms);
+        } else if (num == 1) {
+            hid_report_mouse_button(vals[0]);
         } else {
             hid_report_mouse(0, vals[0], vals[1], vals[2], vals[3]);
         }
-    } else if (driver_usb_args.key->count) {
-        hid_report_keypress(press, 50);
-    } else if (!driver_usb_args.umt->count) {
+    } else if (press) {
+        hid_report_keyboard_press(press, tout_ms);
+    } else if (!mode) {
         usbmode_status();
     } else if ('0' <= mode[0] && mode[0] <= '6') {
         err = usbmode_switch((usbmode_t)(mode[0] - '0'), reboot);
@@ -449,8 +467,8 @@ static struct {
     struct arg_int *addr;
     struct arg_int *reg;
     struct arg_int *val;
-    struct arg_lit *hex;
     struct arg_int *len;
+    struct arg_lit *hex;
     struct arg_end *end;
 } driver_i2c_args = {
     .bus = arg_int1(
@@ -468,8 +486,8 @@ static struct {
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
     .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "register value"),
-    .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
     .len = arg_int0(NULL, "len", "<num>", "read specified length of registers"),
+    .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
     .end = arg_end(6)
 };
 
@@ -522,7 +540,7 @@ static struct {
     struct arg_end *end;
 } driver_als_args = {
     .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
-    .rlt = arg_str0(NULL, "track", "<0|1|2|3|H|V|A>", "run light tracking"),
+    .rlt = arg_str0("t", NULL, "<0|1|2|3|H|V|A>", "run light tracking"),
     .end = arg_end(2)
 };
 
@@ -559,12 +577,12 @@ static int driver_als(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_ADC
 static struct {
-    struct arg_int *tdly;
+    struct arg_int *intv;
     struct arg_int *tout;
     struct arg_end *end;
 } driver_adc_args = {
-    .tdly = arg_int0("d", NULL, "<10-1000>", "delay in ms, default 500"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "loop until timeout in sec"),
+    .intv = arg_int0("i", NULL, "<10-1000>", "interval in ms, default 500"),
+    .tout = arg_int0("t", NULL, "<2^31>", "loop until timeout in ms"),
     .end = arg_end(2)
 };
 
@@ -573,13 +591,14 @@ static int driver_adc(int argc, char **argv) {
     if (!driver_adc_args.tout->count) {
         printf("ADC value: %4umV\n", adc_read());
     } else {
-        uint16_t delay_ms = ARG_INT(driver_adc_args.tdly, 500);
-        uint32_t timeout_ms = driver_adc_args.tout->ival[0] * 1000;
-        delay_ms = MAX(10, MIN(delay_ms, 1000));
-        while (timeout_ms >= delay_ms) {
-            fprintf(stderr, "\rADC value: %4umV", adc_read()); fflush(stderr);
-            msleep(delay_ms);
-            timeout_ms -= delay_ms;
+        uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.tdly, 500), 10, 1000);
+        uint32_t tout_ms = driver_adc_args.tout->ival[0];
+        while (tout_ms >= intv_ms) {
+            fprintf(stderr, "\rADC value: %4umV (remain %6ds)",
+                    adc_read(), tout_ms / 1000);
+            fflush(stderr);
+            msleep(intv_ms);
+            tout_ms -= intv_ms;
         }
         fputc('\n', stderr);
         fputc('\n', stdout);
@@ -593,31 +612,31 @@ static struct {
     struct arg_int *hdeg;
     struct arg_int *vdeg;
     struct arg_int *freq;
-    struct arg_int *pcent;
+    struct arg_int *pcnt;
     struct arg_end *end;
 } driver_pwm_args = {
     .hdeg = arg_int0("y", NULL, "<0-180>", "yaw degree"),
     .vdeg = arg_int0("p", NULL, "<0-160>", "pitch degree"),
     .freq = arg_int0("f", NULL, "<1-20000>", "tone frequency"),
-    .pcent = arg_int0("l", NULL, "<0-100>", "tone loudness (percentage)"),
-    .end = arg_end(4)
+    .pcnt = arg_int0("l", NULL, "<0-100>", "tone loudness (percentage)"),
+    .end  = arg_end(4)
 };
 
 static int driver_pwm(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_pwm_args);
     int hdeg = ARG_INT(driver_pwm_args.hdeg, -1),
         vdeg = ARG_INT(driver_pwm_args.vdeg, -1),
-        pcent = ARG_INT(driver_pwm_args.pcent, -1);
+        pcnt = ARG_INT(driver_pwm_args.pcnt, -1);
     uint32_t freq = ARG_INT(driver_pwm_args.freq, -1);
     if (hdeg >= 0 || vdeg >= 0)
         return pwm_set_degree(hdeg, vdeg);
-    if (freq != 0xFFFFFFFF || pcent >= 0)
-        return pwm_set_tone(freq, pcent);
+    if (freq != (uint32_t)-1 || pent >= 0)
+        return pwm_set_tone(freq, pcnt);
     esp_err_t err = ESP_OK;
     if (!( err = pwm_get_degree(&hdeg, &vdeg) ))
         printf("PWM Degree: %d %d\n", hdeg, vdeg);
-    if (!( err = pwm_get_tone(&freq, &pcent) ))
-        printf("PWM Tone: %dHz %d%%\n", freq, pcent);
+    if (!( err = pwm_get_tone(&freq, &pcnt) ))
+        printf("PWM Tone: %dHz %d%%\n", freq, pcnt);
     return err;
 }
 #endif // CONSOLE_DRIVER_PWM
@@ -671,7 +690,7 @@ static struct {
     struct arg_end *end;
 } utils_lstask_args = {
     .sort = arg_int0(NULL, NULL, "<0-6>", "sort by column index"),
-    .end = arg_end(1)
+    .end  = arg_end(1)
 };
 
 static int utils_lstask(int argc, char **argv) {
@@ -687,7 +706,7 @@ static struct {
     struct arg_end *end;
 } utils_lsmem_args = {
     .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
-    .end = arg_end(1)
+    .end     = arg_end(1)
 };
 
 static int utils_lsmem(int argc, char **argv) {
@@ -696,7 +715,6 @@ static int utils_lsmem(int argc, char **argv) {
         case 0:
             memory_info(); break;
         case 2:
-            // heap_caps_dump_all(); break; // Too much infomation
             heap_caps_print_heap_info(MALLOC_CAP_DMA);
             heap_caps_print_heap_info(MALLOC_CAP_EXEC);
             FALLTH;
@@ -722,8 +740,8 @@ static struct {
 
 static int utils_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_lsfs_args);
-    const char *dev = ARG_STR(utils_lsfs_args.dev, "flash");
     const char *dir = ARG_STR(utils_lsfs_args.dir, "/");
+    const char *dev = ARG_STR(utils_lsfs_args.dev, "flash");
     if (strstr(dev, "flash")) {
 #ifdef CONFIG_FFS_MP
         FFS.list(dir, stdout);
@@ -755,14 +773,14 @@ static struct {
     struct arg_lit *lall;
     struct arg_end *end;
 } utils_config_args = {
-    .key = arg_str0(NULL, NULL, "key", "specify config by key"),
-    .val = arg_str0(NULL, NULL, "value", "set config value"),
+    .key  = arg_str0(NULL, NULL, "key", "specify config by key"),
+    .val  = arg_str0(NULL, NULL, "value", "set config value"),
     .load = arg_lit0(NULL, "load", "load from NVS flash"),
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
     .list = arg_lit0(NULL, "list", "list config NVS entries"),
     .lall = arg_lit0(NULL, "list-all", "list all NVS entries"),
-    .end = arg_end(6)
+    .end  = arg_end(7)
 };
 
 static int utils_config(int argc, char **argv) {
@@ -815,8 +833,8 @@ static int utils_logging(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_logging_args);
     static const char *choices = "NEWIDV", *c;
     const char *tag = ARG_STR(utils_logging_args.tag, "*");
-    const char *lvl = ARG_STR(utils_logging_args.lvl, "");
-    if (utils_logging_args.lvl->count) {
+    const char *lvl = ARG_STR(utils_logging_args.lvl, NULL);
+    if (lvl) {
         if (!strcmp(tag, "*")) {
             printf("Invalid tag to set: `%s`\n", tag);
             return ESP_ERR_INVALID_ARG;
@@ -857,30 +875,30 @@ static struct {
 static int utils_hist(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_hist_args);
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    const char *subcmd = utils_hist_args.cmd->sval[0];
+    const char *cmd = utils_hist_args.cmd->sval[0];
     bool save = false, exists = false;
-    if (strstr(subcmd, "save")) {
+    if (strstr(cmd, "save")) {
         save = true;
-    } else if (!strstr(subcmd, "load")) {
-        printf("Invalid command: `%s`\n", subcmd);
+    } else if (!strstr(cmd, "load")) {
+        printf("Invalid command: `%s`\n", cmd);
         return err;
     }
     const char *dev = ARG_STR(utils_hist_args.dev, "flash");
     const char *dst = ARG_STR(utils_hist_args.dst, "history.txt");
-    char fullpath[CONFIG_SPIFFS_OBJ_NAME_LEN];
+    char path[CONFIG_SPIFFS_OBJ_NAME_LEN];
     if (strstr(dev, "flash")) {
 #ifdef CONFIG_FFS_MP
-        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+        snprintf(path, sizeof(path), "%s%s%s",
                 CONFIG_FFS_MP, Config.web.DIR_DATA, dst);
-        exists = FFS.exists(fullpath + strlen(CONFIG_FFS_MP));
+        exists = FFS.exists(path + strlen(CONFIG_FFS_MP));
 #else
         ESP_LOGW(TAG, "Flash File System not enabled");
 #endif // CONFIG_FFS_MP
     } else if (strstr(dev, "sdcard")) {
 #ifdef CONFIG_SDFS_MP
-        snprintf(fullpath, sizeof(fullpath), "%s%s%s",
+        snprintf(path, sizeof(path), "%s%s%s",
                 CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);
-        exists = SDFS.exists(fullpath + strlen(CONFIG_SDFS_MP));
+        exists = SDFS.exists(path + strlen(CONFIG_SDFS_MP));
 #else
         ESP_LOGW(TAG, "SDMMC File System not enabled");
 #endif // CONFIG_SDFS_MP
@@ -889,12 +907,11 @@ static int utils_hist(int argc, char **argv) {
         return err;
     }
     if (!exists && !save) {
-        printf("History file `%s` does not exist\n", fullpath);
+        printf("History file `%s` does not exist\n", path);
         err = ESP_ERR_NOT_FOUND;
     } else {
-        err = save ? linenoiseHistorySave(fullpath) : linenoiseHistoryLoad(fullpath);
-        printf("History file `%s` %s %s\n",
-                fullpath, subcmd, err ? "fail" : "done");
+        err = save ? linenoiseHistorySave(path) : linenoiseHistoryLoad(path);
+        printf("History file `%s` %s %s\n", path, cmd, err ? "fail" : "done");
     }
     return err;
 }
@@ -945,28 +962,26 @@ static struct {
     struct arg_int *tout;
     struct arg_end *end;
 } net_sta_args = {
-    .cmd = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
+    .cmd  = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
     .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
-    .tout = arg_int0("t", NULL, "<msec>", "timeout to wait"),
-    .end = arg_end(4)
+    .tout = arg_int0("t", NULL, "<65535>", "scan/join timeout in ms"),
+    .end  = arg_end(4)
 };
 
 static int net_sta(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_sta_args);
-    const char * subcmd = ARG_STR(net_sta_args.cmd, "");
-    if (strstr(subcmd, "scan")) {
-        const char *ssid = ARG_STR(net_sta_args.ssid, NULL);
-        uint16_t timeout_ms = ARG_INT(net_sta_args.tout, 0);
-        return wifi_sta_scan(ssid, 0, timeout_ms);
-    } else if (strstr(subcmd, "join")) {
+    const char * cmd = ARG_STR(net_sta_args.cmd, "");
+    uint16_t tout_ms = ARG_INT(net_sta_args.tout, 0);
+    if (strstr(cmd, "scan")) {
+        return wifi_sta_scan(ARG_STR(net_sta_args.ssid, NULL), 0, tout_ms);
+    } else if (strstr(cmd, "join")) {
         const char *ssid = ARG_STR(net_sta_args.ssid, NULL);
         const char *pass = ARG_STR(net_sta_args.pass, (ssid ? "" : NULL));
         esp_err_t err = wifi_sta_start(ssid, pass, NULL);
-        if (!err && net_sta_args.tout->count)
-            err = wifi_sta_wait(net_sta_args.tout->ival[0]);
+        if (!err && tout_ms) err = wifi_sta_wait(tout_ms);
         return err;
-    } else if (strstr(subcmd, "leave")) {
+    } else if (strstr(cmd, "leave")) {
         return wifi_sta_stop();
     }
     return wifi_sta_list_ap();
@@ -980,20 +995,20 @@ static struct {
     struct arg_str *pass;
     struct arg_end *end;
 } net_ap_args = {
-    .cmd = arg_str0(NULL, NULL, "<start|stop>", ""),
+    .cmd  = arg_str0(NULL, NULL, "<start|stop>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
     .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
-    .end = arg_end(3)
+    .end  = arg_end(3)
 };
 
 static int net_ap(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ap_args);
-    const char * subcmd = ARG_STR(net_ap_args.cmd, "");
-    if (strstr(subcmd, "start")) {
+    const char *cmd = ARG_STR(net_ap_args.cmd, "");
+    if (strstr(cmd, "start")) {
         const char *ssid = ARG_STR(net_ap_args.ssid, NULL);
         const char *pass = ARG_STR(net_ap_args.pass, (ssid ? "" : NULL));
         return wifi_ap_start(ssid, pass, NULL);
-    } else if (strstr(subcmd, "stop")) {
+    } else if (strstr(cmd, "stop")) {
         return wifi_ap_stop();
     }
     return wifi_ap_list_sta();
@@ -1006,35 +1021,35 @@ static struct {
     struct arg_str *ssid;
     struct arg_int *npkt;
     struct arg_int *tout;
-    struct arg_int *base;
     struct arg_str *ctrl;
+    struct arg_int *base;
     struct arg_end *end;
 } net_ftm_args = {
-    .cmd = arg_str1(NULL, NULL, "<REP|REQ>", "run as responder | initiator"),
-    .ssid = arg_str0(NULL, NULL, "<SSID>", "for initiator: target AP hostname"),
-    .npkt = arg_int0("c", NULL, "<0:8:32|64>", "for initiator: frame count"),
-    .tout = arg_int0("t", NULL, "<msec>", "for initiator: timeout in ms"),
-    .base = arg_int0("o", NULL, "<cm>", "for responder: T1 offset in cm"),
-    .ctrl = arg_str0("a", NULL, "<on|off>", "for responder: enable / disable"),
-    .end = arg_end(6)
+    .cmd  = arg_str1(NULL, NULL, "<REP|REQ>", "run as responder | initiator"),
+    .ssid = arg_str0(NULL, NULL, "<SSID>", "initiator target AP hostname"),
+    .npkt = arg_int0("n", NULL, "<0:8:32|64>", "initiator frame count"),
+    .tout = arg_int0("t", NULL, "<65535>", "initiator timeout in ms"),
+    .ctrl = arg_str0("c", NULL, "<on|off>", "responder enable / disable"),
+    .base = arg_int0("o", NULL, "<cm>", "responder T1 offset in cm"),
+    .end  = arg_end(6)
 };
 
 static int net_ftm(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ftm_args);
-    const char *subcmd = net_ftm_args.cmd->sval[0];
-    if (strstr(subcmd, "REP")) {
+    const char *cmd = net_ftm_args.cmd->sval[0];
+    if (strstr(cmd, "REP")) {
         int16_t base = net_ftm_args.base->ival[0];
         return ftm_respond(
             ARG_STR(net_ftm_args.ctrl, NULL),
             net_ftm_args.base->count ? &base : NULL);
-    } else if (strstr(subcmd, "REQ")) {
+    } else if (strstr(cmd, "REQ")) {
         uint8_t npkt = net_ftm_args.npkt->ival[0];
         return ftm_request(
             ARG_STR(net_ftm_args.ssid, NULL),
-            ARG_INT(net_ftm_args.tout, 0),
+            ARG_INT(net_ftm_args.tout, 1000),
             net_ftm_args.npkt->count ? &npkt : NULL);
     } else {
-        printf("Invalid command: `%s`\n", subcmd);
+        printf("Invalid command: `%s`\n", cmd);
         return ESP_ERR_INVALID_ARG;
     }
 }
@@ -1049,12 +1064,12 @@ static struct {
     struct arg_int *tout;
     struct arg_end *end;
 } net_mdns_args = {
-    .ctrl = arg_str0("a", NULL, "<on|off>", "for responder: enable / disable"),
-    .host = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
-    .serv = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
+    .ctrl  = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
+    .host  = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
+    .serv  = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
     .proto = arg_str0("p", NULL, "<_tcp>", "mDNS protocol to query"),
-    .tout = arg_int0("t", NULL, "<msec>", "time to wait for querying record"),
-    .end = arg_end(4)
+    .tout  = arg_int0("t", NULL, "<65535>", "query timeout in ms"),
+    .end   = arg_end(5)
 };
 
 static int net_mdns(int argc, char **argv) {
@@ -1078,10 +1093,10 @@ static struct {
     struct arg_end *end;
 } net_ping_args = {
     .host = arg_str1(NULL, NULL, "<host>", "target IP address"),
-    .tout = arg_int0("t", NULL, "<msec>", "time to wait for a response"),
+    .tout = arg_int0("t", NULL, "<65535>", "response timeout in ms"),
     .size = arg_int0("s", NULL, "<byte>", "number of data bytes to be sent"),
-    .npkt = arg_int0("c", NULL, "<num>", "stop after sending num packets"),
-    .end = arg_end(4)
+    .npkt = arg_int0("n", NULL, "<num>", "stop after sending num packets"),
+    .end  = arg_end(4)
 };
 
 static int net_ping(int argc, char **argv) {
@@ -1104,14 +1119,14 @@ static struct {
     struct arg_lit *udp;
     struct arg_end *end;
 } net_iperf_args = {
-    .host = arg_str0("c", NULL, "<host>", "run in client mode"),
+    .host = arg_str0("h", NULL, "<host>", "run in client mode"),
     .port = arg_int0("p", NULL, "<port>", "specify port number"),
     .size = arg_int0("l", NULL, "<bytes>", "read/write buffer size"),
     .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
     .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
     .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
-    .udp = arg_lit0("u", "udp", "use UDP rather than TCP"),
-    .end = arg_end(7)
+    .udp  = arg_lit0("u", "udp", "use UDP rather than TCP"),
+    .end  = arg_end(7)
 };
 
 static int net_iperf(int argc, char **argv) {

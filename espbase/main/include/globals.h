@@ -50,6 +50,9 @@ extern "C" {
 #define MAX(a, b)               ( (a) > (b) ? (a) : (b) )
 #define MIN(a, b)               ( (a) > (b) ? (b) : (a) )
 #endif
+#ifndef CONS
+#define CONS(v, l, h)           MAX((l), MIN((v), (h)))
+#endif
 
 #define EALLOC(v, l)                                                        \
         ( ((v) = (typeof (v)) malloc(l)) ? ESP_OK : ESP_ERR_NO_MEM )

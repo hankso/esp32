@@ -5,6 +5,7 @@
  */
 
 #include "drivers.h"
+#include "usbmode.h"
 
 #include "esp_attr.h"
 #include "esp_adc_cal.h"
@@ -482,10 +483,10 @@ esp_err_t pwm_get_degree(int *h, int *v) {
 // mapping 0-100 percent to 0%-50% of duty
 static float buzzer_scale = ((1 << RES_BUZZER) - 1) / 200;
 
-esp_err_t pwm_set_tone(uint32_t freq, int pcent) {
+esp_err_t pwm_set_tone(uint32_t freq, int pcnt) {
     esp_err_t err = ESP_OK;
-    if (!err && pcent >= 0) {
-        err = pwm_set_duty(LEDC_CHANNEL_3, pcent * buzzer_scale);
+    if (!err && pcnt >= 0) {
+        err = pwm_set_duty(LEDC_CHANNEL_3, pcnt * buzzer_scale);
     }
     if (!err && freq <= 20000) {
         err = ledc_set_freq(SPEED_MODE, LEDC_TIMER_2, freq);
@@ -493,9 +494,9 @@ esp_err_t pwm_set_tone(uint32_t freq, int pcent) {
     return err;
 }
 
-esp_err_t pwm_get_tone(uint32_t *freq, int *pcent) {
+esp_err_t pwm_get_tone(uint32_t *freq, int *pcnt) {
     *freq = ledc_get_freq(SPEED_MODE, LEDC_TIMER_2);
-    *pcent = (int)(ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_3) / buzzer_scale);
+    *pcnt = (int)(ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_3) / buzzer_scale);
     return ESP_OK;
 }
 
@@ -1006,15 +1007,26 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 #ifdef CONFIG_USE_BTN
 static button_handle_t btn;
 
-static void gpio_cb_single_click(void *arg, void *data) {
+static void cb_press_up(void *arg, void *data) {
+    ESP_LOGI(TAG, "BTN: %d RELEASE[%d]",
+            PIN_BTN, iot_button_get_ticks_time((button_handle_t)arg));
+    hid_report_dial(DIAL_UP);
+}
+
+static void cb_press_down(void *arg, void *data) {
+    ESP_LOGI(TAG, "BTN: %d PRESS", PIN_BTN);
+    hid_report_dial(DIAL_DN);
+}
+
+static void cb_single_click(void *arg, void *data) {
     ESP_LOGI(TAG, "BTN: %d single click", PIN_BTN);
 }
 
-static void gpio_cb_double_click(void *arg, void *data) {
+static void cb_double_click(void *arg, void *data) {
     ESP_LOGI(TAG, "BTN: %d double click", PIN_BTN);
 }
 
-static void gpio_cb_long_press(void *arg, void *data) {
+static void cb_long_press(void *arg, void *data) {
     ESP_LOGI(TAG, "BTN: %d long press", PIN_BTN);
 }
 #endif
@@ -1022,14 +1034,16 @@ static void gpio_cb_long_press(void *arg, void *data) {
 #ifdef CONFIG_USE_KNOB
 static knob_handle_t knob;
 
-static void gpio_cb_left_rotate(void *arg, void *data) {
+static void cb_left_rotate(void *arg, void *data) {
     ESP_LOGI(TAG, "Knob: left rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
+    hid_report_dial(DIAL_L);
 }
 
-static void gpio_cb_right_rotate(void *arg, void *data) {
+static void cb_right_rotate(void *arg, void *data) {
     ESP_LOGI(TAG, "Knob: right rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
+    hid_report_dial(DIAL_R);
 }
 #endif
 
@@ -1070,8 +1084,13 @@ static void gpio_initialize() {
     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
 #endif
 #ifdef CONFIG_USE_KNOB
-    knob_cb_t knob_funcs[] = { gpio_cb_left_rotate, gpio_cb_right_rotate };
-    knob_event_t knob_evts[] = { KNOB_LEFT, KNOB_RIGHT };
+    struct {
+        knob_event_t event;
+        knob_cb_t func;
+    } knob_cbs[] = {
+        { KNOB_LEFT,    cb_left_rotate  },
+        { KNOB_RIGHT,   cb_right_rotate },
+    };
     knob_config_t knob_conf = {
         .default_direction = 0,     // 0:positive; 1:negative
         .gpio_encoder_a = PIN_ENCA,
@@ -1079,28 +1098,32 @@ static void gpio_initialize() {
     };
     if (!( knob = iot_knob_create(&knob_conf) )) {
         ESP_LOGE(TAG, "Knob: bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
-    } else LOOPN(i, LEN(knob_evts)) {
-        iot_knob_register_cb(knob, knob_evts[i], knob_funcs[i], NULL);
+    } else LOOPN(i, LEN(knob_cbs)) {
+        iot_knob_register_cb(knob, knob_cbs[i].event, knob_cbs[i].func, NULL);
     }
 #endif
 #ifdef CONFIG_USE_BTN
-    button_cb_t btn_funcs[] = {
-        gpio_cb_single_click, gpio_cb_double_click, gpio_cb_long_press
-    };
-    button_event_t btn_evts[] = {
-        BUTTON_SINGLE_CLICK, BUTTON_DOUBLE_CLICK, BUTTON_LONG_PRESS_START
+    struct {
+        button_event_t event;
+        button_cb_t func;
+    } btn_cbs[] = {
+        { BUTTON_PRESS_UP,          cb_press_up     },
+        { BUTTON_PRESS_DOWN,        cb_press_down   },
+        { BUTTON_SINGLE_CLICK,      cb_single_click },
+        { BUTTON_DOUBLE_CLICK,      cb_double_click },
+        { BUTTON_LONG_PRESS_START,  cb_long_press   },
     };
     button_config_t btn_conf = {
         .type = BUTTON_TYPE_GPIO,
         .gpio_button_config = {
             .gpio_num = PIN_BTN,
-            .active_level = 1,
+            .active_level = 0,
         }
     };
     if (!( btn = iot_button_create(&btn_conf) )) {
         ESP_LOGE(TAG, "BTN: bind to GPIO%d failed", PIN_BTN);
-    } else LOOPN(i, LEN(btn_evts)) {
-        iot_button_register_cb(btn, btn_evts[i], btn_funcs[i], NULL);
+    } else LOOPN(i, LEN(btn_cbs)) {
+        iot_button_register_cb(btn, btn_cbs[i].event, btn_cbs[i].func, NULL);
     }
 #endif
 }

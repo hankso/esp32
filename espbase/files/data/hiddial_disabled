@@ -1,0 +1,486 @@
+[1-1-3] (7EP): Espressif Hankso ESP Base
+|---USB Serial Device (COM11)
+|---USB 大容量存储设备
+|   \---USB Device
+\---USB 输入设备
+    |---HID Keyboard Device
+    \---HID-compliant mouse
+
+    =========================== USB Port3 ===========================
+
+Connection Status        : 0x01 (Device is connected)
+Port Chain               : 1-1-3
+Properties               : 0x01
+ IsUserConnectable       : yes
+ PortIsDebugCapable      : no
+ PortHasMultiCompanions  : no
+ PortConnectorIsTypeC    : no
+ConnectionIndex          : 0x03 (Port 3)
+CompanionIndex           : 0
+ CompanionHubSymLnk      : USB#VID_05E3&PID_0626#5&2c705bfe&0&13#{f18a0e88-c30c-11d0-8815-00a0c906bed8}
+ CompanionPortNumber     : 0x03 (Port 3)
+ -> CompanionPortChain   : 1-13-3
+
+      ========================== Summary =========================
+Vendor ID                : 0x303A (Espressif Incorporated)
+Product ID               : 0x4007
+USB Version              : 2.0 -> but Device is Full-Speed only
+Port maximum Speed       : High-Speed (Companion Port 1-13-3 supports SuperSpeed)
+Device maximum Speed     : Full-Speed
+Device Connection Speed  : Full-Speed
+Self powered             : no
+Demanded Current         : 100 mA
+Used Endpoints           : 7
+
+      ======================== USB Device ========================
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Device Description       : USB Composite Device
+Device Path              : \\?\USB#VID_303A&PID_4007#AFB2F5#{a5dcbf10-6530-11d2-901f-00c04fb951ed} (GUID_DEVINTERFACE_USB_DEVICE)
+Kernel Name              : \Device\USBPDO-9
+Device ID                : USB\VID_303A&PID_4007\AFB2F5
+Hardware IDs             : USB\VID_303A&PID_4007&REV_0100 USB\VID_303A&PID_4007
+Driver KeyName           : {36fc9e60-c465-11cf-8056-444553540000}\0023 (GUID_DEVCLASS_USB)
+Driver                   : \SystemRoot\System32\drivers\usbccgp.sys (Version: 10.0.19041.4046  Date: 2024-02-14  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\usb.inf
+Legacy BusType           : PNPBus
+Class                    : USB
+Class GUID               : {36fc9e60-c465-11cf-8056-444553540000} (GUID_DEVCLASS_USB)
+Service                  : usbccgp
+Enumerator               : USB
+Location Info            : Port_#0003.Hub_#0003
+Address                  : 3
+Location IDs             : PCIROOT(0)#PCI(1400)#USBROOT(0)#USB(1)#USB(3), ACPI(_SB_)#ACPI(PCI0)#ACPI(XHC_)#ACPI(RHUB)#ACPI(HS01)#USB(3)
+Container ID             : {f9c9203e-0f54-551c-aa29-ac0de9a7ab06}
+Manufacturer Info        : (标准 USB 主控制器)
+Capabilities             : 0x94 (Removable, UniqueID, SurpriseRemovalOK)
+Status                   : 0x0180600A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_REMOVABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Address                  : 3
+Power State              : D0 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+
+        +++++++++++++++++ Registry USB Flags +++++++++++++++++
+HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\usbflags\303A40070100
+ osvc                    : REG_BINARY 00 00
+
+        ---------------- Connection Information ---------------
+Connection Index         : 0x03 (Port 3)
+Connection Status        : 0x01 (DeviceConnected)
+Current Config Value     : 0x01 (Configuration 1)
+Device Address           : 0x33 (51)
+Is Hub                   : 0x00 (no)
+Device Bus Speed         : 0x01 (Full-Speed)
+Number of open Pipes     : 0x06 (6 pipes to data endpoints)
+Pipe[0]                  : EndpointID=1  Direction=IN   ScheduleOffset=0  Type=Interrupt  wMaxPacketSize=0x8     bInterval=16  -> 196 Bits/ms = 24500 Bytes/s
+Pipe[1]                  : EndpointID=2  Direction=OUT  ScheduleOffset=0  Type=Bulk       wMaxPacketSize=0x40    bInterval=0  
+Pipe[2]                  : EndpointID=2  Direction=IN   ScheduleOffset=0  Type=Bulk       wMaxPacketSize=0x40    bInterval=0  
+Pipe[3]                  : EndpointID=3  Direction=OUT  ScheduleOffset=0  Type=Bulk       wMaxPacketSize=0x40    bInterval=0  
+Pipe[4]                  : EndpointID=3  Direction=IN   ScheduleOffset=0  Type=Bulk       wMaxPacketSize=0x40    bInterval=0  
+Pipe[5]                  : EndpointID=4  Direction=IN   ScheduleOffset=0  Type=Interrupt  wMaxPacketSize=0x10    bInterval=10  -> 270 Bits/ms = 33750 Bytes/s
+Data (HexDump)           : 03 00 00 00 12 01 00 02 EF 02 01 40 3A 30 07 40   ...........@:0.@
+                           00 01 01 02 03 01 01 01 00 33 00 06 00 00 00 01   .........3......
+                           00 00 00 07 05 81 03 08 00 10 00 00 00 00 07 05   ................
+                           02 02 40 00 00 00 00 00 00 07 05 82 02 40 00 00   ..@..........@..
+                           00 00 00 00 07 05 03 02 40 00 00 00 00 00 00 07   ........@.......
+                           05 83 02 40 00 00 00 00 00 00 07 05 84 03 10 00   ...@............
+                           0A 00 00 00 00                                    .....
+
+        --------------- Connection Information V2 -------------
+Connection Index         : 0x03 (3)
+Length                   : 0x10 (16 bytes)
+SupportedUsbProtocols    : 0x03
+ Usb110                  : 1 (yes, port supports USB 1.1)
+ Usb200                  : 1 (yes, port supports USB 2.0)
+ Usb300                  : 0 (no, port not supports USB 3.0) -> but Companion Port 1-13-3 does
+ ReservedMBZ             : 0x00
+Flags                    : 0x00
+ DevIsOpAtSsOrHigher     : 0 (Device is not operating at SuperSpeed or higher)
+ DevIsSsCapOrHigher      : 0 (Device is not SuperSpeed capable or higher)
+ DevIsOpAtSsPlusOrHigher : 0 (Device is not operating at SuperSpeedPlus or higher)
+ DevIsSsPlusCapOrHigher  : 0 (Device is not SuperSpeedPlus capable or higher)
+ ReservedMBZ             : 0x00
+Data (HexDump)           : 03 00 00 00 10 00 00 00 03 00 00 00 00 00 00 00   ................
+
+    ---------------------- Device Descriptor ----------------------
+bLength                  : 0x12 (18 bytes)
+bDescriptorType          : 0x01 (Device Descriptor)
+bcdUSB                   : 0x200 (USB Version 2.0) -> but device is Full-Speed only
+bDeviceClass             : 0xEF (Miscellaneous)
+bDeviceSubClass          : 0x02
+bDeviceProtocol          : 0x01 (IAD - Interface Association Descriptor)
+bMaxPacketSize0          : 0x40 (64 bytes)
+idVendor                 : 0x303A (Espressif Incorporated)
+idProduct                : 0x4007
+bcdDevice                : 0x0100
+iManufacturer            : 0x01 (String Descriptor 1)
+ Language 0x0409         : "Hankso"
+iProduct                 : 0x02 (String Descriptor 2)
+ Language 0x0409         : "ESP Base"
+iSerialNumber            : 0x03 (String Descriptor 3)
+ Language 0x0409         : "AFB2F5"
+bNumConfigurations       : 0x01 (1 Configuration)
+Data (HexDump)           : 12 01 00 02 EF 02 01 40 3A 30 07 40 00 01 01 02   .......@:0.@....
+                           03 01                                             ..
+
+    ------------------ Configuration Descriptor -------------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x02 (Configuration Descriptor)
+wTotalLength             : 0x007B (123 bytes)
+bNumInterfaces           : 0x04 (4 Interfaces)
+bConfigurationValue      : 0x01 (Configuration 1)
+iConfiguration           : 0x00 (No String Descriptor)
+bmAttributes             : 0xA0
+ D7: Reserved, set 1     : 0x01
+ D6: Self Powered        : 0x00 (no)
+ D5: Remote Wakeup       : 0x01 (yes)
+ D4..0: Reserved, set 0  : 0x00
+MaxPower                 : 0x32 (100 mA)
+Data (HexDump)           : 09 02 7B 00 04 01 00 A0 32 08 0B 00 02 02 02 00   ..{.....2.......
+                           00 09 04 00 00 01 02 02 00 04 05 24 00 20 01 05   ...........$. ..
+                           24 01 00 01 04 24 02 02 05 24 06 00 01 07 05 81   $....$...$......
+                           03 08 00 10 09 04 01 00 02 0A 00 00 00 07 05 02   ................
+                           02 40 00 00 07 05 82 02 40 00 00 09 04 02 00 02   .@......@.......
+                           08 06 50 05 07 05 03 02 40 00 00 07 05 83 02 40   ..P.....@......@
+                           00 00 09 04 03 00 01 03 00 00 06 09 21 11 01 00   ............!...
+                           01 22 90 00 07 05 84 03 10 00 0A                  .".........
+
+        ------------------- IAD Descriptor --------------------
+bLength                  : 0x08 (8 bytes)
+bDescriptorType          : 0x0B (Interface Association Descriptor)
+bFirstInterface          : 0x00 (Interface 0)
+bInterfaceCount          : 0x02 (2 Interfaces)
+bFunctionClass           : 0x02 (Communications and CDC Control)
+bFunctionSubClass        : 0x02
+bFunctionProtocol        : 0x00
+iFunction                : 0x00 (No String Descriptor)
+Data (HexDump)           : 08 0B 00 02 02 02 00 00                           ........
+
+        ---------------- Interface Descriptor -----------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x04 (Interface Descriptor)
+bInterfaceNumber         : 0x00 (Interface 0)
+bAlternateSetting        : 0x00
+bNumEndpoints            : 0x01 (1 Endpoint)
+bInterfaceClass          : 0x02 (Communications and CDC Control)
+bInterfaceSubClass       : 0x02 (Abstract Control Model)
+bInterfaceProtocol       : 0x00 (No class specific protocol required)
+iInterface               : 0x04 (String Descriptor 4)
+ Language 0x0409         : "ESP Base CDC Device"
+Data (HexDump)           : 09 04 00 00 01 02 02 00 04                        .........
+
+        -------------- CDC Interface Descriptor ---------------
+bFunctionLength          : 0x05 (5 bytes)
+bDescriptorType          : 0x24 (Interface)
+bDescriptorSubType       : 0x00 (Header Functional Descriptor)
+bcdCDC                   : 0x120 (CDC Version 1.20)
+Data (HexDump)           : 05 24 00 20 01                                    .$. .
+
+        -------------- CDC Interface Descriptor ---------------
+bFunctionLength          : 0x05 (5 bytes)
+bDescriptorType          : 0x24 (Interface)
+bDescriptorSubType       : 0x01 (Call Management Functional Descriptor)
+bmCapabilities           : 0x00
+ D7..2                   : 0x00 (Reserved)
+ D1                      : 0x00 (sends/receives call management information only over the Communication Class interface)
+ D0                      : 0x00 (does not handle call management itself)
+bDataInterface           : 0x01
+Data (HexDump)           : 05 24 01 00 01                                    .$...
+
+        -------------- CDC Interface Descriptor ---------------
+bFunctionLength          : 0x04 (4 bytes)
+bDescriptorType          : 0x24 (Interface)
+bDescriptorSubType       : 0x02 (Abstract Control Management Functional Descriptor)
+bmCapabilities           : 0x02
+ D7..4                   : 0x00 (Reserved)
+ D3                      : 0x00 (not supports the notification Network_Connection)
+ D2                      : 0x00 (not supports the request Send_Break)
+ D1                      : 0x01 (supports the request combination of Set_Line_Coding, Set_Control_Line_State, Get_Line_Coding, and the notification Serial_State)
+ D0                      : 0x00 (not supports the request combination of Set_Comm_Feature, Clear_Comm_Feature, and Get_Comm_Feature)
+Data (HexDump)           : 04 24 02 02                                       .$..
+
+        -------------- CDC Interface Descriptor ---------------
+bFunctionLength          : 0x05 (5 bytes)
+bDescriptorType          : 0x24 (Interface)
+bDescriptorSubType       : 0x06 (Union Functional Descriptor)
+bControlInterface        : 0x00
+bSubordinateInterface[0] : 0x01
+Data (HexDump)           : 05 24 06 00 01                                    .$...
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x81 (Direction=IN EndpointID=1)
+bmAttributes             : 0x03 (TransferType=Interrupt)
+wMaxPacketSize           : 0x0008 (8 bytes)
+bInterval                : 0x10 (16 ms)
+Data (HexDump)           : 07 05 81 03 08 00 10                              .......
+
+        ---------------- Interface Descriptor -----------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x04 (Interface Descriptor)
+bInterfaceNumber         : 0x01 (Interface 1)
+bAlternateSetting        : 0x00
+bNumEndpoints            : 0x02 (2 Endpoints)
+bInterfaceClass          : 0x0A (CDC-Data)
+bInterfaceSubClass       : 0x00
+bInterfaceProtocol       : 0x00
+iInterface               : 0x00 (No String Descriptor)
+Data (HexDump)           : 09 04 01 00 02 0A 00 00 00                        .........
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x02 (Direction=OUT EndpointID=2)
+bmAttributes             : 0x02 (TransferType=Bulk)
+wMaxPacketSize           : 0x0040 (64 bytes)
+bInterval                : 0x00 (ignored)
+Data (HexDump)           : 07 05 02 02 40 00 00                              ....@..
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x82 (Direction=IN EndpointID=2)
+bmAttributes             : 0x02 (TransferType=Bulk)
+wMaxPacketSize           : 0x0040 (64 bytes)
+bInterval                : 0x00 (ignored)
+Data (HexDump)           : 07 05 82 02 40 00 00                              ....@..
+
+        ---------------- Interface Descriptor -----------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x04 (Interface Descriptor)
+bInterfaceNumber         : 0x02 (Interface 2)
+bAlternateSetting        : 0x00
+bNumEndpoints            : 0x02 (2 Endpoints)
+bInterfaceClass          : 0x08 (Mass Storage)
+bInterfaceSubClass       : 0x06 (SCSI transparent command set)
+bInterfaceProtocol       : 0x50 (Bulk-Only Transport)
+iInterface               : 0x05 (String Descriptor 5)
+ Language 0x0409         : "ESP Base MSC Device"
+Data (HexDump)           : 09 04 02 00 02 08 06 50 05                        .......P.
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x03 (Direction=OUT EndpointID=3)
+bmAttributes             : 0x02 (TransferType=Bulk)
+wMaxPacketSize           : 0x0040 (64 bytes)
+bInterval                : 0x00 (ignored)
+Data (HexDump)           : 07 05 03 02 40 00 00                              ....@..
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x83 (Direction=IN EndpointID=3)
+bmAttributes             : 0x02 (TransferType=Bulk)
+wMaxPacketSize           : 0x0040 (64 bytes)
+bInterval                : 0x00 (ignored)
+Data (HexDump)           : 07 05 83 02 40 00 00                              ....@..
+
+        ---------------- Interface Descriptor -----------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x04 (Interface Descriptor)
+bInterfaceNumber         : 0x03 (Interface 3)
+bAlternateSetting        : 0x00
+bNumEndpoints            : 0x01 (1 Endpoint)
+bInterfaceClass          : 0x03 (HID - Human Interface Device)
+bInterfaceSubClass       : 0x00 (None)
+bInterfaceProtocol       : 0x00 (None)
+iInterface               : 0x06 (String Descriptor 6)
+ Language 0x0409         : "ESP Base HID Device"
+Data (HexDump)           : 09 04 03 00 01 03 00 00 06                        .........
+
+        ------------------- HID Descriptor --------------------
+bLength                  : 0x09 (9 bytes)
+bDescriptorType          : 0x21 (HID Descriptor)
+bcdHID                   : 0x0111 (HID Version 1.11)
+bCountryCode             : 0x00 (00 = not localized)
+bNumDescriptors          : 0x01
+Data (HexDump)           : 09 21 11 01 00 01 22 90 00                        .!...."..
+Descriptor 1:
+bDescriptorType          : 0x22 (Class=Report)
+wDescriptorLength        : 0x0090 (144 bytes)
+Error reading descriptor : ERROR_INVALID_PARAMETER (due to a obscure limitation of the Win32 USB API, see F1 Help)
+
+        ----------------- Endpoint Descriptor -----------------
+bLength                  : 0x07 (7 bytes)
+bDescriptorType          : 0x05 (Endpoint Descriptor)
+bEndpointAddress         : 0x84 (Direction=IN EndpointID=4)
+bmAttributes             : 0x03 (TransferType=Interrupt)
+wMaxPacketSize           : 0x0010 (16 bytes)
+bInterval                : 0x0A (10 ms)
+Data (HexDump)           : 07 05 84 03 10 00 0A                              .......
+
+    ----------------- Device Qualifier Descriptor -----------------
+Error                    : ERROR_GEN_FAILURE  (because the device is Full-Speed only)
+
+      -------------------- String Descriptors -------------------
+             ------ String Descriptor 0 ------
+bLength                  : 0x04 (4 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language ID[0]           : 0x0409 (English - United States)
+Data (HexDump)           : 04 03 09 04                                       ....
+             ------ String Descriptor 1 ------
+bLength                  : 0x0E (14 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "Hankso"
+Data (HexDump)           : 0E 03 48 00 61 00 6E 00 6B 00 73 00 6F 00         ..H.a.n.k.s.o.
+             ------ String Descriptor 2 ------
+bLength                  : 0x12 (18 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "ESP Base"
+Data (HexDump)           : 12 03 45 00 53 00 50 00 20 00 42 00 61 00 73 00   ..E.S.P. .B.a.s.
+                           65 00                                             e.
+             ------ String Descriptor 3 ------
+bLength                  : 0x0E (14 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "AFB2F5"
+Data (HexDump)           : 0E 03 41 00 46 00 42 00 32 00 46 00 35 00         ..A.F.B.2.F.5.
+             ------ String Descriptor 4 ------
+bLength                  : 0x28 (40 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "ESP Base CDC Device"
+Data (HexDump)           : 28 03 45 00 53 00 50 00 20 00 42 00 61 00 73 00   (.E.S.P. .B.a.s.
+                           65 00 20 00 43 00 44 00 43 00 20 00 44 00 65 00   e. .C.D.C. .D.e.
+                           76 00 69 00 63 00 65 00                           v.i.c.e.
+             ------ String Descriptor 5 ------
+bLength                  : 0x28 (40 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "ESP Base MSC Device"
+Data (HexDump)           : 28 03 45 00 53 00 50 00 20 00 42 00 61 00 73 00   (.E.S.P. .B.a.s.
+                           65 00 20 00 4D 00 53 00 43 00 20 00 44 00 65 00   e. .M.S.C. .D.e.
+                           76 00 69 00 63 00 65 00                           v.i.c.e.
+             ------ String Descriptor 6 ------
+bLength                  : 0x28 (40 bytes)
+bDescriptorType          : 0x03 (String Descriptor)
+Language 0x0409          : "ESP Base HID Device"
+Data (HexDump)           : 28 03 45 00 53 00 50 00 20 00 42 00 61 00 73 00   (.E.S.P. .B.a.s.
+                           65 00 20 00 48 00 49 00 44 00 20 00 44 00 65 00   e. .H.I.D. .D.e.
+                           76 00 69 00 63 00 65 00                           v.i.c.e.
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Friendly Name            : USB Serial Device (COM11)
+Device Description       : USB 串行设备
+Device Path              : \\?\USB#VID_303A&PID_4007&MI_00#7&18b345a&0&0000#{86e0d1e0-8089-11d0-9ce4-08003e301f73} (GUID_DEVINTERFACE_COMPORT)
+Kernel Name              : \Device\000001fd
+Device ID                : USB\VID_303A&PID_4007&MI_00\7&18B345A&0&0000
+Hardware IDs             : USB\VID_303A&PID_4007&REV_0100&MI_00 USB\VID_303A&PID_4007&MI_00
+Driver KeyName           : {4d36e978-e325-11ce-bfc1-08002be10318}\0008 (GUID_DEVCLASS_PORTS)
+Driver                   : \SystemRoot\System32\drivers\usbser.sys (Version: 10.0.19041.3636  Date: 2023-11-16  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\usbser.inf
+Legacy BusType           : PNPBus
+Class                    : Ports
+Class GUID               : {4d36e978-e325-11ce-bfc1-08002be10318} (GUID_DEVCLASS_PORTS)
+Service                  : usbser
+Enumerator               : USB
+Location Info            : 0000.0014.0000.001.003.000.000.000.000
+Address                  : 3
+Manufacturer Info        : Microsoft
+Capabilities             : 0x80 (SurpriseRemovalOK)
+Status                   : 0x0180200A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Power State              : D0 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+COM-Port                 : COM11 (\Device\USBSER000)
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Device Description       : USB 大容量存储设备
+Device ID                : USB\VID_303A&PID_4007&MI_02\7&18B345A&0&0002
+Hardware IDs             : USB\VID_303A&PID_4007&REV_0100&MI_02 USB\VID_303A&PID_4007&MI_02
+Driver KeyName           : {36fc9e60-c465-11cf-8056-444553540000}\0024 (GUID_DEVCLASS_USB)
+Driver                   : \SystemRoot\System32\drivers\USBSTOR.SYS (Version: 10.0.19041.3636  Date: 2023-11-16  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\usbstor.inf
+Legacy BusType           : PNPBus
+Class                    : USB
+Class GUID               : {36fc9e60-c465-11cf-8056-444553540000} (GUID_DEVCLASS_USB)
+Service                  : USBSTOR
+Enumerator               : USB
+Location Info            : 0000.0014.0000.001.003.000.000.000.000
+Address                  : 5
+Manufacturer Info        : 兼容 USB 存储设备
+Capabilities             : 0x80 (SurpriseRemovalOK)
+Status                   : 0x0180200A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Address                  : 5
+Power State              : D0 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Friendly Name            : USB Device
+Device Description       : 磁盘驱动器
+Device ID                : USBSTOR\DISK&VEN_&PROD_&REV_\8&DAA9425&0&AFB2F5&0
+Hardware IDs             : USBSTOR\Disk____________________________ USBSTOR\Disk________________________ USBSTOR\Disk________ USBSTOR\_________________________ _________________________ USBSTOR\GenDisk GenDisk
+Driver KeyName           : {4d36e967-e325-11ce-bfc1-08002be10318}\0010 (GUID_DEVCLASS_DISKDRIVE)
+Driver                   : System32\drivers\disk.sys (Version: 10.0.19041.3636  Date: 2023-11-16  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\disk.inf
+Legacy BusType           : Internal
+Class                    : DiskDrive
+Class GUID               : {4d36e967-e325-11ce-bfc1-08002be10318} (GUID_DEVCLASS_DISKDRIVE)
+Service                  : disk
+Enumerator               : USBSTOR
+Location Info            : -
+Address                  : 5
+Manufacturer Info        : (标准磁盘驱动器)
+Capabilities             : 0x00 (-)
+Status                   : 0x0180200A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Power State              : D0 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Device Description       : USB 输入设备
+Device ID                : USB\VID_303A&PID_4007&MI_03\7&18B345A&0&0003
+Hardware IDs             : USB\VID_303A&PID_4007&REV_0100&MI_03 USB\VID_303A&PID_4007&MI_03
+Driver KeyName           : {745a17a0-74d3-11d0-b6fe-00a0c90f57da}\0060 (GUID_DEVCLASS_HIDCLASS)
+Driver                   : \SystemRoot\System32\drivers\hidusb.sys (Version: 10.0.19041.3636  Date: 2023-11-16  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\input.inf
+Legacy BusType           : PNPBus
+Class                    : HIDClass
+Class GUID               : {745a17a0-74d3-11d0-b6fe-00a0c90f57da} (GUID_DEVCLASS_HIDCLASS)
+Service                  : HidUsb
+Enumerator               : USB
+Location Info            : 0000.0014.0000.001.003.000.000.000.000
+Address                  : 6
+Manufacturer Info        : (标准系统设备)
+Capabilities             : 0x80 (SurpriseRemovalOK)
+Status                   : 0x0180200A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+SelectiveSuspendEnabled  : 0
+EnhancedPowerMgmtEnabled : 1
+Power State              : D0 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Device Description       : HID Keyboard Device
+Device ID                : HID\VID_303A&PID_4007&MI_03&COL01\8&20DAB063&1&0000
+Hardware IDs             : HID\VID_303A&PID_4007&REV_0100&MI_03&Col01 HID\VID_303A&PID_4007&MI_03&Col01 HID\VID_303A&UP:0001_U:0006 HID_DEVICE_SYSTEM_KEYBOARD HID_DEVICE_UP:0001_U:0006 HID_DEVICE
+Driver KeyName           : {4d36e96b-e325-11ce-bfc1-08002be10318}\0006 (GUID_DEVCLASS_KEYBOARD)
+Driver                   : \SystemRoot\System32\drivers\kbdhid.sys (Version: 10.0.19041.1  Date: 2019-12-07  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\keyboard.inf
+Legacy BusType           : PNPBus
+Class                    : Keyboard
+Class GUID               : {4d36e96b-e325-11ce-bfc1-08002be10318} (GUID_DEVCLASS_KEYBOARD)
+Service                  : kbdhid
+Enumerator               : HID
+Location Info            : -
+Address                  : 1
+Manufacturer Info        : (标准键盘)
+Capabilities             : 0xA0 (SilentInstall, SurpriseRemovalOK)
+Status                   : 0x0180000A (DN_DRIVER_LOADED, DN_STARTED, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Power State              : D3 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)
+
+        +++++++++++++++++ Device Information ++++++++++++++++++
+Device Description       : HID-compliant mouse
+Device ID                : HID\VID_303A&PID_4007&MI_03&COL02\8&20DAB063&1&0001
+Hardware IDs             : HID\VID_303A&PID_4007&REV_0100&MI_03&Col02 HID\VID_303A&PID_4007&MI_03&Col02 HID\VID_303A&UP:0001_U:0002 HID_DEVICE_SYSTEM_MOUSE HID_DEVICE_UP:0001_U:0002 HID_DEVICE
+Driver KeyName           : {4d36e96f-e325-11ce-bfc1-08002be10318}\0005 (GUID_DEVCLASS_MOUSE)
+Driver                   : \SystemRoot\System32\drivers\mouhid.sys (Version: 10.0.19041.1  Date: 2019-12-07  Company: Microsoft Corporation)
+Driver Inf               : C:\windows\inf\msmouse.inf
+Legacy BusType           : PNPBus
+Class                    : Mouse
+Class GUID               : {4d36e96f-e325-11ce-bfc1-08002be10318} (GUID_DEVCLASS_MOUSE)
+Service                  : mouhid
+Enumerator               : HID
+Location Info            : -
+Address                  : 2
+Manufacturer Info        : Microsoft
+Capabilities             : 0xA0 (SilentInstall, SurpriseRemovalOK)
+Status                   : 0x0180200A (DN_DRIVER_LOADED, DN_STARTED, DN_DISABLEABLE, DN_NT_ENUMERATOR, DN_NT_DRIVER)
+Problem Code             : 0
+Power State              : D3 (supported: D0, D1, D2, D3, wake from D0, wake from D1, wake from D2)

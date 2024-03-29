@@ -448,8 +448,8 @@ esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 static const char * HID = "HID Host";
 
 // HID_ASCII_TO_KEYCODE & KEYCODE_TO_ASCII (defined in tinyusb/class/hid/hid.h)
-// occupies 512 bytes and does not provide info of keycodes above 0x7F. Here
-// is a minimal implementation of conversion between ASCII and KEYCODE.
+// occupies 512 bytes and does not provide info of keycodes above 0x7F.
+// Here is our minimal implementation of conversion between ASCII and KEYCODE.
 
 static const struct {
     uint8_t code;           // see usb_host_hid/usb/hid_usage_keyboard.h
@@ -627,8 +627,9 @@ static void hid_event_cb(
     }
     if (event != HID_HOST_INTERFACE_EVENT_INPUT_REPORT) return;
     if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
-        printf("%s %s", HID, hid_protocol_str(HID_PROTOCOL_NONE));
-        hexdump(buf, size, 79); // assuming console with 80 width
+        const char * proto_str = hid_protocol_str(HID_PROTOCOL_NONE);
+        printf("%s %s", HID, proto_str);
+        hexdump(buf, size, 80 - strlen(HID) - 1 - strlen(proto_str));
     } else if (params.proto == HID_PROTOCOL_MOUSE) {
         if (size < sizeof(hid_mouse_input_report_boot_t)) return;
         hid_mouse_input_report_boot_t *report = \
@@ -636,10 +637,11 @@ static void hid_event_cb(
         static int x = 0, y = 0;
         x += report->x_displacement;
         y += report->y_displacement;
-        printf("%s %s X: %06d Y: %06d |%c|%c|\n",
+        printf("%s %s X: %06d Y: %06d |%c|%c|%c|\n",
             HID, hid_protocol_str(params.proto), x, y,
             report->buttons.button1 ? 'o' : ' ',
-            report->buttons.button2 ? 'o' : ' ');
+            report->buttons.button2 ? 'o' : ' ',
+            report->buttons.button3 ? 'o' : ' ');
     } else if (params.proto == HID_PROTOCOL_KEYBOARD) {
         if (size < sizeof(hid_keyboard_input_report_boot_t)) return;
         hid_keyboard_input_report_boot_t *report = \

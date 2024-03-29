@@ -585,6 +585,7 @@ esp_err_t ftm_respond(const char *ctrl, int16_t *offset_cm) {
         ESP_LOGI(TAG, "AP set FTM responder to %s",
                 config_ap.ap.ftm_responder ? "ON" : "OFF");
     }
+    // TODO: ftm_respond
     return err;
 }
 
@@ -623,8 +624,9 @@ esp_err_t ftm_request(const char *ssid, uint16_t timeout_ms, uint8_t *count)
         return err;
     EventBits_t want = FTM_REPORT_BIT | FTM_FAILURE_BIT;
     EventBits_t bits = xEventGroupWaitBits(
-        evtgrp, want, pdFALSE, pdFALSE, timeout_ms / portTICK_PERIOD_MS);
+        evtgrp, want, pdFALSE, pdFALSE, TIMEOUT(timeout_ms));
     if (bits & FTM_REPORT_BIT)
+    // TODO: ftm_request
         return ESP_OK;
     if (bits & FTM_FAILURE_BIT)
         return ESP_FAIL;

@@ -174,6 +174,10 @@ menu "ESP Base Configuration"
         help
             Enable usbmode_xxx functions. Add about 62.7Kb to firmware.
     if USE_USB
+        config USB_CDC_HOST
+            bool "Enable USB CDC host mode"
+            default y
+
         config USB_CDC_DEVICE
             bool "Enable USB CDC slave mode"
             select TINYUSB_CDC_ENABLED
@@ -188,8 +192,8 @@ menu "ESP Base Configuration"
                 bool "Act as console device"
         endchoice
 
-        config USB_CDC_HOST
-            bool "Enable USB CDC host mode"
+        config USB_MSC_HOST
+            bool "Enable USB MSC host mode"
             default y
 
         config USB_MSC_DEVICE
@@ -199,8 +203,8 @@ menu "ESP Base Configuration"
             imply USE_SDFS
             default y
 
-        config USB_MSC_HOST
-            bool "Enable USB MSC host mode"
+        config USB_HID_HOST
+            bool "Enable USB HID host mode"
             default y
 
         config USB_HID_DEVICE
@@ -208,9 +212,9 @@ menu "ESP Base Configuration"
             select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4+
             select TINYUSB_HID_COUNT    # for ESP-IDF v5.0+
             default y
-
-        config USB_HID_HOST
-            bool "Enable USB HID host mode"
+        config USB_HID_DEVICE_TASK
+            bool "Create a task for HID reports"
+            depends on USB_HID_DEVICE
             default y
     endif
 
