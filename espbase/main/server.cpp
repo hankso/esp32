@@ -370,7 +370,7 @@ static void onWebSocketData(
         if (info->index == 0) {
             // We are starting this only frame
             ctx->len = ((info->opcode == WS_TEXT) ? 1 : 2) * info->len + 1;
-            if (!( ctx->buf = (char *)malloc(ctx->len) )) goto clean;
+            if (EALLOC(ctx->buf, ctx->len)) goto clean;
             ctx->idx = 0;
         } else if (!ctx->buf) {
             ESP_LOGW(TAG, "%s error: lost first packets. Skip", ctx->name);
@@ -384,7 +384,7 @@ static void onWebSocketData(
         size_t len = ((info->message_opcode == WS_TEXT) ? 1 : 2) * info->len;
         if (info->num == 0) {
             // Starting the first frame
-            if (!( ctx->buf = (char *)malloc(ctx->len = len + 1) )) goto clean;
+            if (EALLOC(ctx->buf, ctx->len = len + 1)) goto clean;
             ctx->idx = 0;
         } else if (!ctx->buf) {
             ESP_LOGW(TAG, "%s error: lost first frame. Skip", ctx->name);
@@ -431,10 +431,11 @@ static void onWebSocket(
     wsdata_ctx_t *ctx;
     server->cleanupClients();
     if (!( ctx = (wsdata_ctx_t *)client->_tempObject )) {
-        if (!( ctx = (wsdata_ctx_t *)calloc(1, sizeof(wsdata_ctx_t)) )) {
+        if (EALLOC(ctx, sizeof(wsdata_ctx_t))) {
             ESP_LOGE(TAG, "Could not allocate context for websocket");
             return client->close();
         }
+        memset(ctx, 0, sizeof(wsdata_ctx_t));
         ctx->client = client;
         snprintf(ctx->name, sizeof(ctx->name), "ws#%u %s:%d",
                  client->id(), client->remoteIP().toString().c_str(),

@@ -37,7 +37,6 @@
 #define BIT_CLIENT_EXIT     BIT3
 #define BIT_DEVICE_INIT     BIT4
 #define BIT_DEVICE_EXIT     BIT5
-#define BIT_ALL             0xFF
 
 static const char *TAG = "USBHost";
 
@@ -50,7 +49,7 @@ static struct {
         uint8_t address;
         uint32_t vid_pid;
     };
-    EventGroupHandle_t event;
+    EventGroupHandle_t evtgrp;
 } ctx = { ESP_OK, false, NULL, { 0 }, NULL };
 
 /******************************************************************************
@@ -68,15 +67,23 @@ void usbmodeh_status(usbmode_t mode) {
     NOTUSED(mode);
 }
 
-static bool acquire(EventBits_t bits, uint32_t ms) {
-    if (!ctx.event) return false;
+static bool waitBits(EventBits_t bits, uint32_t ms) {
+    if (!ctx.evtgrp) return false;
     // ClearOnExit = true, WaitForAllBits = false
     return xEventGroupWaitBits(
-        ctx.event, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits;
+        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits;
 }
 
-static bool release(EventBits_t bits) {
-    return ctx.event ? xEventGroupSetBits(ctx.event, bits) : false;
+static bool getBits(EventBits_t bits) {
+    return ctx.evtgrp ? xEventGroupGetBits(ctx.evtgrp) & bits : false;
+}
+
+static bool setBits(EventBits_t bits) {
+    return ctx.evtgrp ? xEventGroupSetBits(ctx.evtgrp, bits) : false;
+}
+
+static void clearBits(EventBits_t bits) {
+    if (ctx.evtgrp) xEventGroupClearBits(ctx.evtgrp, bits);
 }
 
 static uint32_t usb_dev_vid_pid(void *dev_hdl) {
@@ -136,7 +143,7 @@ static void usb_lib_task(void *arg) {
         ctx.running = false;
         goto exit;
     }
-    release(BIT_USBLIB_INIT); // host library is installed
+    setBits(BIT_USBLIB_INIT); // host library is installed
     msleep(TIMEOUT_IDLE); // let client task spin up
     bool has_clients = ctx.running, has_devices = ctx.running;
     while (has_clients || has_devices) {
@@ -162,15 +169,14 @@ static void usb_lib_task(void *arg) {
     ESP_LOGI(TAG, "USB LIB no more clients and devices");
     usb_host_uninstall();
 exit:
-    release(BIT_USBLIB_EXIT); // host library is uninstalled
+    setBits(BIT_USBLIB_EXIT); // host library is uninstalled
     vTaskDelete(NULL);
 }
 
 static esp_err_t usbh_common_init(void (*client)(void *), const char *cname) {
     if (ctx.running) return ESP_OK;
-    if (!ctx.event) ctx.event = xEventGroupCreate();
-    release(BIT_ALL);
-    acquire(BIT_ALL, 1); // reset event group
+    if (!ctx.evtgrp) ctx.evtgrp = xEventGroupCreate();
+    clearBits(0xFFF); // EventBits_t accepts 24 bits
     ctx.running = true;
     if (xTaskCreate(usb_lib_task, "USB-LIB", 4096, NULL, 10, NULL) != pdPASS) {
         ctx.err = ESP_ERR_NO_MEM;
@@ -180,16 +186,16 @@ static esp_err_t usbh_common_init(void (*client)(void *), const char *cname) {
         char taskname[16];
         snprintf(taskname, sizeof(taskname), "USB-%s", cname);
         xTaskCreate(client, taskname, 4096, NULL, 6, NULL);
-        acquire(BIT_CLIENT_INIT, TIMEOUT_IDLE + TIMEOUT_WAIT);
+        waitBits(BIT_CLIENT_INIT, TIMEOUT_IDLE + TIMEOUT_WAIT);
     }
     return ctx.err;
 }
 
 static esp_err_t usbh_common_exit() {
     ctx.running = false;
-    if (!acquire(BIT_CLIENT_EXIT, TIMEOUT_WAIT))
+    if (!waitBits(BIT_CLIENT_EXIT, TIMEOUT_WAIT))
         return ctx.err ?: ESP_ERR_TIMEOUT;
-    if (!acquire(BIT_USBLIB_EXIT, TIMEOUT_WAIT)) {
+    if (!waitBits(BIT_USBLIB_EXIT, TIMEOUT_WAIT)) {
         ESP_LOGE(TAG, "USB LIB stop failed");
         if (!ctx.err) ctx.err = ESP_ERR_TIMEOUT;
     }
@@ -227,23 +233,24 @@ static void cdc_acm_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
                 ESP_LOGI(TAG, "%s lost device", CDC);
             }
             cdc_acm_host_close(event->data.cdc_hdl);
-            release(BIT_DEVICE_EXIT);
+            setBits(BIT_DEVICE_EXIT);
             break;
         default: ESP_LOGW(TAG, "%s unhandled event: %d", CDC, event->type);
     }
 }
 
 static void cdc_host_cb(usb_device_handle_t dev) {
-    print_devinfo(dev);
     const usb_device_desc_t *desc;
     if (!usb_host_get_device_descriptor(dev, &desc) && usbmoded_device(desc)) {
         ctx.vid_pid = desc->idVendor << 16 | desc->idProduct;
-        release(BIT_DEVICE_INIT);
+        setBits(BIT_DEVICE_INIT);
+    } else {
+        print_devinfo(dev);
     }
 }
 
 static void cdc_host_task(void *arg) {
-    if (!acquire(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
+    if (!waitBits(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
     const cdc_acm_host_driver_config_t driver_conf = {
         .driver_task_stack_size = 4096,
         .driver_task_priority = 5,
@@ -262,7 +269,7 @@ static void cdc_host_task(void *arg) {
         ctx.running = false;
         goto exit;
     }
-    release(BIT_CLIENT_INIT);
+    setBits(BIT_CLIENT_INIT);
     while (1) {
         if (!ctx.running) {
             ESP_LOGI(TAG, "%s trying to uninstall client", CDC);
@@ -270,7 +277,8 @@ static void cdc_host_task(void *arg) {
             ESP_LOGE(TAG, "%s uninstall failed: continue running", CDC);
             ctx.running = true;
         }
-        if (!acquire(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        if (!waitBits(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        clearBits(BIT_DEVICE_EXIT);
 
         cdc_acm_dev_hdl_t dev;
         cdc_acm_line_coding_t line_coding;
@@ -284,26 +292,39 @@ static void cdc_host_task(void *arg) {
             goto close;
         }
 
-        ESP_LOGI(TAG, "%s opened device %s %u,%u%c%u",
+        ESP_LOGI(TAG, "%s opened device %s %u,%u%c%c",
                 CDC, vid_pid_str(ctx.vid_pid),
                 line_coding.dwDTERate,
                 line_coding.bDataBits,
                 "NOEMS"[line_coding.bParityType],
                 "1H2"[line_coding.bCharFormat]);
         cdc_acm_host_desc_print(dev);
-        const uint8_t TXSTR[6] = "help\r\n";
-        cdc_acm_host_data_tx_blocking(dev, TXSTR, 6, TIMEOUT_WAIT);
+
         msleep(TIMEOUT_WAIT);
-        bool dtr = true, rts = false;
-        cdc_acm_host_set_control_line_state(dev, dtr, rts);
-        ESP_LOGI(TAG, "%s set DTR %d RTS %d", CDC, dtr, rts);
+
+        if (!getBits(BIT_DEVICE_EXIT)) {
+            const uint8_t TXSTR[5] = "help\0";
+            cdc_acm_host_data_tx_blocking(
+                dev, TXSTR, sizeof(TXSTR), TIMEOUT_WAIT);
+            ESP_LOGI(TAG, "%s sent message `%s`", CDC, (const char *)TXSTR);
+        }
+
+        msleep(TIMEOUT_WAIT);
+
+        if (!getBits(BIT_DEVICE_EXIT)) {
+            bool dtr = true, rts = false;
+            cdc_acm_host_set_control_line_state(dev, dtr, rts);
+            ESP_LOGI(TAG, "%s set DTR %d RTS %d", CDC, dtr, rts);
+        }
         continue;
 close:
-        if (dev) cdc_acm_host_close(dev);
-        release(BIT_DEVICE_EXIT);
+        if (dev && !getBits(BIT_DEVICE_EXIT)) {
+            cdc_acm_host_close(dev);
+            setBits(BIT_DEVICE_EXIT);
+        }
     }
 exit:
-    release(BIT_CLIENT_EXIT); // client is deregistered
+    setBits(BIT_CLIENT_EXIT); // client is deregistered
     vTaskDelete(NULL);
 }
 
@@ -332,7 +353,7 @@ static void msc_host_cb(const msc_host_event_t *event, void *arg) {
     switch (event->event) {
         case MSC_DEVICE_CONNECTED:
             ctx.address = event->device.address;
-            release(BIT_DEVICE_INIT);
+            setBits(BIT_DEVICE_INIT);
             break;
         case MSC_DEVICE_DISCONNECTED:
             dev = event->device.handle;
@@ -347,14 +368,14 @@ static void msc_host_cb(const msc_host_event_t *event, void *arg) {
                 ctx.vfs_hdl = NULL;
             }
             msc_host_uninstall_device(dev);
-            release(BIT_DEVICE_EXIT);
+            setBits(BIT_DEVICE_EXIT);
             break;
         default: ESP_LOGW(TAG, "%s unhandled event: %d", MSC, event->event);
     }
 }
 
 static void msc_host_task(void *arg) {
-    if (!acquire(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
+    if (!waitBits(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
     const msc_host_driver_config_t driver_conf = {
         .create_backround_task = true,
         .stack_size = 4096,
@@ -371,7 +392,7 @@ static void msc_host_task(void *arg) {
         ctx.running = false;
         goto exit;
     }
-    release(BIT_CLIENT_INIT);
+    setBits(BIT_CLIENT_INIT);
     while (1) {
         if (!ctx.running) {
             ESP_LOGI(TAG, "%s trying to uninstall client", MSC);
@@ -379,7 +400,8 @@ static void msc_host_task(void *arg) {
             ESP_LOGE(TAG, "%s uninstall failed: continue running", MSC);
             ctx.running = true;
         }
-        if (!acquire(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        if (!waitBits(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        clearBits(BIT_DEVICE_EXIT);
 
         msc_host_device_info_t info;
         msc_host_device_handle_t dev;
@@ -421,11 +443,13 @@ static void msc_host_task(void *arg) {
         ESP_LOGI(TAG, "%s mounted to %s", MSC, MMP);
         continue;
 close:
-        if (dev) msc_host_uninstall_device(dev);
-        release(BIT_DEVICE_EXIT);
+        if (dev && !getBits(BIT_DEVICE_EXIT)) {
+            msc_host_uninstall_device(dev);
+            setBits(BIT_DEVICE_EXIT);
+        }
     }
 exit:
-    release(BIT_CLIENT_EXIT); // client is deregistered
+    setBits(BIT_CLIENT_EXIT); // client is deregistered
     vTaskDelete(NULL);
 }
 
@@ -568,6 +592,8 @@ extern const char * hid_keycode_str(uint8_t modifier, uint8_t keycode[6]) {
         if (keycode[i]) {
             size += snprintf(buf + size, blen - size, "%s%s",
                 i ? " | " : "", keycode2str(keycode[i], HAS_SHIFT(modifier)));
+        } else {
+            buf[size] = '\0';
         }
     }
     return buf;
@@ -584,6 +610,8 @@ extern const char * hid_modifier_str(uint8_t modifier) {
         if (modifier & (1 << i)) {
             size += snprintf(buf + size, blen - size, "%s%s",
                 i ? " | " : "", MODIFIER_STR[i]);
+        } else {
+            buf[size] = '\0';
         }
     }
     return buf;
@@ -621,7 +649,7 @@ static void hid_event_cb(
                 ESP_LOGI(TAG, "%s lost device", HID);
             }
             hid_host_device_close(dev);
-            release(BIT_DEVICE_EXIT);
+            setBits(BIT_DEVICE_EXIT);
             break;
         default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
     }
@@ -679,14 +707,14 @@ static void hid_host_cb(
     switch (event) {
         case HID_HOST_DRIVER_EVENT_CONNECTED:
             ctx.dev_hdl = dev;
-            release(BIT_DEVICE_INIT);
+            setBits(BIT_DEVICE_INIT);
             break;
         default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
     }
 }
 
 static void hid_host_task(void *arg) {
-    if (!acquire(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
+    if (!waitBits(BIT_USBLIB_INIT, TIMEOUT_WAIT) || !ctx.running) goto exit;
     const hid_host_driver_config_t driver_conf = {
         .create_background_task = true,
         .stack_size = 4096,
@@ -699,7 +727,7 @@ static void hid_host_task(void *arg) {
         ctx.running = false;
         goto exit;
     }
-    release(BIT_CLIENT_INIT);
+    setBits(BIT_CLIENT_INIT);
     while (1) {
         if (!ctx.running) {
             ESP_LOGI(TAG, "%s trying to uninstall client", HID);
@@ -707,7 +735,8 @@ static void hid_host_task(void *arg) {
             ESP_LOGE(TAG, "%s uninstall failed: continue running", HID);
             ctx.running = true;
         }
-        if (!acquire(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        if (!waitBits(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
+        clearBits(BIT_DEVICE_EXIT);
 
         hid_host_dev_info_t info;
         hid_host_dev_params_t params;
@@ -724,7 +753,7 @@ static void hid_host_task(void *arg) {
             goto close;
         }
 
-        ESP_LOGI(TAG, "%s opened device: %d", HID, params.addr);
+        ESP_LOGI(TAG, "%s opened device %d", HID, params.addr);
         if (wcslen(info.iManufacturer))
             wprintf(L"Manufacturer %ls\n", info.iManufacturer);
         if (wcslen(info.iProduct))
@@ -748,11 +777,13 @@ static void hid_host_task(void *arg) {
         ESP_LOGI(TAG, "%s start awaiting interface events", HID);
         continue;
 close:
-        if (dev) hid_host_device_close(dev);
-        release(BIT_DEVICE_EXIT);
+        if (dev && !getBits(BIT_DEVICE_EXIT)) {
+            hid_host_device_close(dev);
+            setBits(BIT_DEVICE_EXIT);
+        }
     }
 exit:
-    release(BIT_CLIENT_EXIT); // client is deregistered
+    setBits(BIT_CLIENT_EXIT); // client is deregistered
     vTaskDelete(NULL);
 }
 

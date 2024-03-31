@@ -206,10 +206,10 @@ static struct {
     struct arg_end *end;
 } system_update_args = {
     .cmd   = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
-    .part  = arg_str0(NULL, "part", "<label>", "partition to boot from"),
-    .url   = arg_str0(NULL, "url", "<url>", "specify URL to fetch"),
-    .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
-    .reset = arg_lit0("r", "reset", "clear OTA internal states"),
+    .part  = arg_str0("p", NULL, "<label>", "partition to boot from"),
+    .url   = arg_str0("u", NULL, "<url>", "specify URL to fetch"),
+    .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
+    .reset = arg_lit0(NULL, "reset", "clear OTA internal states"),
     .end   = arg_end(5)
 };
 
@@ -323,7 +323,7 @@ static struct {
     struct arg_int *tout;
     struct arg_end *end;
 } driver_usb_args = {
-    .mode = arg_str0(NULL, NULL, "<0-6|C|M|H|S>", "specify USB mode"),
+    .mode = arg_str0(NULL, NULL, "<0-6|CMH|S>", "specify USB mode"),
     .now  = arg_lit0(NULL, "now", "reboot now"),
     .key  = arg_str0("k", NULL, "<CODE>", "HID report keypress"),
     .mse  = arg_str0("m", NULL, "<B|XYVH>", "HID report mouse"),
@@ -397,8 +397,8 @@ static struct {
         ">", "LED index"
     ),
     .lgt = arg_str0("l", NULL, "<0-255|on|off>", "set lightness"),
-    .clr = arg_str0("c", NULL, "<0xAABBCC>", "set RGB color"),
-    .blk = arg_int0("b", NULL, "<-1-7>", "set blink effect"),
+    .clr = arg_str0("c", NULL, "<uint24>", "set RGB color"),
+    .blk = arg_int0("b", NULL, "<-1-6>", "set blink effect"),
     .end = arg_end(4)
 };
 
@@ -487,7 +487,7 @@ static struct {
     .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "register value"),
     .len = arg_int0(NULL, "len", "<num>", "read specified length of registers"),
-    .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
+    .hex = arg_lit0(NULL, "word", "read/write in word (16-bit) mode"),
     .end = arg_end(6)
 };
 
@@ -824,7 +824,7 @@ static struct {
     struct arg_end *end;
 } utils_logging_args = {
     .tag = arg_str0(NULL, NULL, "TAG", "specify tag of the log entries"),
-    .lvl = arg_str0(NULL, NULL, "<0-5|N|E|W|I|D|V>", "set logging level"),
+    .lvl = arg_str0(NULL, NULL, "<0-5|NEWIDV>", "set logging level"),
     .log = arg_lit0(NULL, "test", "test logging with specified tag"),
     .end = arg_end(3)
 };
@@ -1027,7 +1027,7 @@ static struct {
 } net_ftm_args = {
     .cmd  = arg_str1(NULL, NULL, "<REP|REQ>", "run as responder | initiator"),
     .ssid = arg_str0(NULL, NULL, "<SSID>", "initiator target AP hostname"),
-    .npkt = arg_int0("n", NULL, "<0:8:32|64>", "initiator frame count"),
+    .npkt = arg_int0("n", NULL, "<0-32|64>", "initiator frame count"),
     .tout = arg_int0("t", NULL, "<65535>", "initiator timeout in ms"),
     .ctrl = arg_str0("c", NULL, "<on|off>", "responder enable / disable"),
     .base = arg_int0("o", NULL, "<cm>", "responder T1 offset in cm"),
@@ -1125,7 +1125,7 @@ static struct {
     .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
     .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
     .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
-    .udp  = arg_lit0("u", "udp", "use UDP rather than TCP"),
+    .udp  = arg_lit0(NULL, "udp", "use UDP rather than TCP"),
     .end  = arg_end(7)
 };
 

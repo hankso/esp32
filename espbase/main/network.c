@@ -193,53 +193,50 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
     }
 }
 
+static esp_err_t wifi_get_ap_records(uint16_t *nap, wifi_ap_record_t **paps) {
+    wifi_ap_record_t *aps = NULL;
+    esp_err_t err = esp_wifi_scan_get_ap_num(nap);
+    if (!err) err = *nap ? ESP_OK : ESP_ERR_NOT_FOUND;
+    if (!err) err = EALLOC(aps, *nap * sizeof(wifi_ap_record_t));
+    if (!err) err = esp_wifi_scan_get_ap_records(nap, aps);
+    if (!err) { *paps = aps; } else { TRYFREE(aps); }
+    return err;
+}
+
 static void wifi_print_aplist() {
     uint16_t nap = 0;
-    wifi_ap_record_t *aps;
-    esp_err_t err = esp_wifi_scan_get_ap_num(&nap);
+    wifi_ap_record_t *aps = NULL;
+    esp_err_t err = wifi_get_ap_records(&nap, &aps);
     if (err) {
-        ESP_LOGE(TAG, "STA scan failed: %s", esp_err_to_name(err));
-    } else if (!nap) {
-        ESP_LOGE(TAG, "STA no AP found");
-    } else if (!( aps = malloc(nap * sizeof(wifi_ap_record_t)) )) {
-        ESP_LOGE(TAG, "STA found %d AP. Failed to malloc buffer", nap);
+        ESP_LOGE(TAG, "STA get AP failed: %s", esp_err_to_name(err));
     } else {
-        if (( err = esp_wifi_scan_get_ap_records(&nap, aps) )) {
-            ESP_LOGE(TAG, "STA get AP failed: %s", esp_err_to_name(err));
-        } else {
-            ESP_LOGI(TAG, "STA found %d AP", nap);
-            wifi_print_apinfo(aps, nap);
-        }
-        free(aps);
+        ESP_LOGI(TAG, "STA found %d AP", nap);
+        wifi_print_apinfo(aps, nap);
+        TRYFREE(aps);
     }
 }
 
-static esp_err_t wifi_find_ap(const char *ssid, uint8_t *bssid, wifi_ap_record_t *record) {
-    esp_err_t err;
-    wifi_ap_record_t *aps;
+static esp_err_t wifi_find_ap(
+    const char *ssid, uint8_t *bssid, wifi_ap_record_t *record
+) {
+    uint16_t nap = 0, found = 0;
+    wifi_ap_record_t *aps = NULL;
     wifi_scan_config_t scan_config = { .ssid = (uint8_t *)ssid };
     xEventGroupSetBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
-    uint16_t nap = 0, found = 0;
-    if (
-        ( err = esp_wifi_scan_start(&scan_config, true) ) ||
-        ( err = esp_wifi_scan_get_ap_num(&nap) ) || !nap ||
-        !( aps = malloc(nap * sizeof(wifi_ap_record_t)) )
-    )
-        return err ?: ESP_ERR_NOT_FOUND;
-    if (!( err = esp_wifi_scan_get_ap_records(&nap, aps) )) {
-        LOOPN(i, nap) {
-            if (
-                (ssid && !strcmp((char *)aps[i].ssid, ssid)) ||
-                (bssid && !memcmp(aps[i].bssid, bssid, sizeof(aps[i].bssid)))
-            ) {
-                *record = aps[i]; // copy whole structure
-                found = true;
-                break;
-            }
+    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
+    if (!err) err = wifi_get_ap_records(&nap, &aps);
+    LOOPN(i, err ? 0 : nap) {
+        if (
+            (ssid && !strcmp((char *)aps[i].ssid, ssid)) ||
+            (bssid && !memcmp(aps[i].bssid, bssid, sizeof(aps[i].bssid)))
+        ) {
+            *record = aps[i]; // copy whole structure
+            found = true;
+            break;
         }
     }
-    free(aps);
-    return found ? ESP_OK : ESP_ERR_NOT_FOUND;
+    TRYFREE(aps);
+    return err ?: (found ? ESP_OK : ESP_ERR_NOT_FOUND);
 }
 
 static esp_err_t wifi_mode_check(wifi_interface_t interface) {
@@ -873,4 +870,9 @@ esp_err_t iperf_command(
             sip, config.sport, dip, config.dport,
             config.interval, config.time);
     return iperf_start(&config);
+}
+
+esp_err_t socket_command() {
+    // TODO: socket
+    return ESP_ERR_NOT_SUPPORTED;
 }

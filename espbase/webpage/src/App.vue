@@ -21,7 +21,7 @@ if (process.env.SRC_VER) {
     desc += '-' + process.env.SRC_VER
 }
 
-const theme = useTheme()
+const theme = useTheme().global
 const { lg } = useDisplay()
 
 const title = `${name} WebUI`
@@ -58,7 +58,7 @@ const staonly = parseLink('STA mode', [
 ])
 
 function toggleTheme() {
-    theme.global.name.value = theme.global.current.value.dark ? 'light' : 'dark'
+    theme.name.value = theme.current.value.dark ? 'light' : 'dark'
 }
 
 const progbar = ref(false)

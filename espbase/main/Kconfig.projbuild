@@ -188,7 +188,7 @@ menu "ESP Base Configuration"
             default USB_CDC_DEVICE_SERIAL
             config USB_CDC_DEVICE_SERIAL
                 bool "Act as serial device"
-            config USB_CDC_DEVICE_STDOUT
+            config USB_CDC_DEVICE_CONSOLE
                 bool "Act as console device"
         endchoice
 

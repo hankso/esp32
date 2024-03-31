@@ -81,6 +81,7 @@ extern "C" {
 
 // Hotfix for board specified MACROs
 #define BOARD_ESP32S3_LUATOS
+// #define BOARD_ESP32S3_NOLOGO
 
 #ifdef BOARD_ESP32S3_LUATOS
 #   undef   CONFIG_GPIO_SPI_CS0
@@ -96,7 +97,9 @@ extern "C" {
 #   define  CONFIG_GPIO_RXD 16
 #endif
 #ifdef BOARD_ESP32S3_NOLOGO
-    // TODO
+#   undef   CONFIG_LED_MODE_GPIO
+#   undef   CONFIG_LED_MODE_LEDC
+#   define  CONFIG_LED_MODE_RMT
 #endif
 
 // Utilities (implemented in utils.c)

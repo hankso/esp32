@@ -1,4 +1,4 @@
-import { type, deepcopy } from '@/utils'
+import { type, deepcopy, isEmpty } from '@/utils'
 
 export const WebSerial = navigator.serial !== undefined
 
@@ -176,7 +176,8 @@ export default class SerialController {
     }
 
     async setSignals(opt = {}) {
-        return await this.port?.setSignals(Object.assign({}, this?.sigs, opt))
+        if (isEmpty(opt) || !toValue(this.opened)) return
+        return await this.port?.setSignals(Object.assign(this.signals, opt))
     }
 
     async setCTS(val) {

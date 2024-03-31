@@ -25,26 +25,50 @@
 #   define WITH_U8G2
 #endif
 
-#if defined(CONFIG_VLX_SENSOR) && __has_include("vl53l0x.h")
-#    include "vl53l0x.h"
-#    define WITH_VLX
+#ifdef CONFIG_VLX_SENSOR
+#   if __has_include("vl53l0x.h")
+#       include "vl53l0x.h"
+#   else
+#       warning "Run `git clone https://github.com/revk/ESP32-VL53L0X`"
+#       undef CONFIG_VLX_SENSOR
+#   endif
+#endif
+
+#ifndef CONFIG_LED_INDICATOR
+#   include "led_strip.h"
+#elif __has_include("led_indicator.h")
+#   include "led_indicator.h"
+#else
+#   warning "Run `idf.py add-dependency espressif/led_indicator`"
+#   undef CONFIG_LED_INDICATOR
 #endif
 
 #ifdef CONFIG_USE_BTN
-#   include "iot_button.h"
+#   if __has_include("iot_button.h")
+#       include "iot_button.h"
+#   else
+#       warning "Run `idf.py add-dependency espressif/button`"
+#       undef CONFIG_USE_BTN
+#   endif
 #endif
 
 #ifdef CONFIG_USE_KNOB
-#   include "iot_knob.h"
+#   if __has_include("iot_knob.h")
+#       include "iot_knob.h"
+#   else
+#       warning "Run `idf.py add-dependency espressif/button`"
+#       undef CONFIG_USE_KNOB
+#   endif
 #endif
 
 static const char *TAG = "Driver";
 
-// LED Controller and Indicator
+/******************************************************************************
+ * LED Controller and Indicator
+ */
 
 #ifdef CONFIG_LED_INDICATOR
 
-#   include "led_indicator.h"
 static led_indicator_handle_t led_handle;
 
 static void led_initialize() {
@@ -80,13 +104,13 @@ static void led_initialize() {
         },
         .led_strip_driver = LED_STRIP_RMT,
         .led_strip_rmt_cfg = {
-#       if TARGET_IDF_4
+#       ifdef TARGET_IDF_4
             .rmt_channel = 0,
 #       else
             .clk_src = RMT_CLK_SRC_DEFAULT,
             .resolution_hz = 10 * 1000 * 1000,  // 10MHz
-            .flags.with_dma = false,
 #       endif
+            .flags.with_dma = false,
         },
     };
     led_indicator_config_t led_conf = {
@@ -97,21 +121,17 @@ static void led_initialize() {
     ESP_LOGI(TAG, "LED: disabled by CONFIG_LED_MODE_XXX");
     return;
 #   endif // CONFIG_LED_MODE_XXX
-    // #include "led_indicator_blink_default.h"
-    // led_conf.blinnk_lists = default_led_indicator_blink_lists;
-    // led_conf.blinnk_lists_num = DEFAULT_BLINK_LIST_NUM;
     if (!( led_handle = led_indicator_create(&led_conf) )) {
         ESP_LOGW(TAG, "LED: initialize indicator failed");
-#ifdef CONFIG_LED_MODE_GPIO
+#   ifdef CONFIG_LED_MODE_GPIO
     } else {
         gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT); // gpio_get_level
-#endif
+#   endif
     }
 }
 
 #else // CONFIG_LED_INDICATOR
 
-#   include "led_strip.h"
 typedef struct { uint8_t p, r, g, b; } led_color_t;
 typedef struct {
     led_color_t *color;
@@ -287,10 +307,8 @@ esp_err_t led_set_blink(int blink_type) {
     if (!led_handle) return ESP_ERR_INVALID_STATE;
 #ifdef CONFIG_LED_INDICATOR
     esp_err_t err = ESP_OK;
-    if (blink_type == last)
-        return err;
-    if (blink_type >= 0)
-        err = led_indicator_start(led_handle, blink_type);
+    if (blink_type == last) return err;
+    if (blink_type >= 0) err = led_indicator_start(led_handle, blink_type);
     if (!err) {
         if (last >= 0)
             led_indicator_stop(led_handle, last);
@@ -301,7 +319,9 @@ esp_err_t led_set_blink(int blink_type) {
     return ESP_ERR_INVALID_STATE;
 }
 
-// ADC analog in
+/******************************************************************************
+ * ADC analog in
+ */
 
 #ifdef CONFIG_USE_ADC
 static esp_adc_cal_characteristics_t adc_chars;
@@ -376,7 +396,9 @@ uint32_t adc_read() {
 #endif
 }
 
-// PWM by LEDC
+/******************************************************************************
+ * PWM by LEDC
+ */
 
 #define SPEED_MODE  LEDC_LOW_SPEED_MODE
 #define RES_SERVO   LEDC_TIMER_10_BIT
@@ -509,7 +531,9 @@ esp_err_t pwm_get_tone(uint32_t *f, int *p) {
 }
 #endif
 
-// I2C GPIO Expander
+/******************************************************************************
+ * I2C GPIO Expander
+ */
 
 static esp_err_t i2c_master_config(int bus, int sda, int scl, int speed) {
     i2c_config_t master_conf = {
@@ -698,18 +722,16 @@ esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
 #endif // CONFIG_USE_I2C_GPIOEXP
 }
 
+/******************************************************************************
+ * Distance Measurement
+ */
 
-// I2C Distance Measurement
-
-
-#ifdef WITH_VLX
+#ifdef CONFIG_VLX_SENSOR
 static vl53l0x_t *vlx;
-#endif
 
 static void vlx_initialize() {
     uint8_t addr = 0x29;
     if (smbus_probe(NUM_I2C, addr)) return;
-#ifdef WITH_VLX
     vlx = vl53l0x_config(NUM_I2C, PIN_SCL, PIN_SDA, -1, addr, 0);
     const char *err = vl53l0x_init(vlx);
     if (err) {
@@ -717,13 +739,9 @@ static void vlx_initialize() {
         vl53l0x_end(vlx);
         vlx = NULL;
     }
-#else
-    ESP_LOGE(TAG, "VLX: sensor is not supported");
-#endif // WITH_VLX
 }
 
 uint16_t vlx_probe() {
-#ifdef WITH_VLX
     TickType_t tick_start = xTaskGetTickCount();
     uint16_t result_mm = vl53l0x_readRangeSingleMillimeters(vlx);
     int took_ms = ((int)xTaskGetTickCount() - tick_start) * portTICK_PERIOD_MS;
@@ -733,14 +751,15 @@ uint16_t vlx_probe() {
         printf("VLX: failed to measure range");
     }
     return result_mm;
-#else
-    return 0;
-#endif // WITH_VLX
 }
+#else
+static void vlx_initialize() { ESP_LOGE(TAG, "VLX: sensor is not supported"); }
+uint16_t vlx_probe() { return 0; }
+#endif
 
-
-// I2C OLED Screen
-
+/******************************************************************************
+ * LCD/OLED Screen
+ */
 
 #ifdef WITH_U8G2
 
@@ -791,8 +810,9 @@ void scn_progbar(uint8_t percent) { ; }
 
 #endif // WITH_U8G2
 
-
-// I2C Ambient Light and Temperature Sensor
+/******************************************************************************
+ * Ambient Light and Temperature Sensor
+ */
 
 typedef struct {
     uint32_t brightness;
@@ -928,9 +948,10 @@ esp_err_t als_tracking(als_track_t idx, int *hdeg, int *vdeg) {
     return ESP_ERR_NOT_FOUND;
 }
 
-// SPI GPIO Expander
-// If transmitted data is 32bits or less, spi_transaction_t can use tx_data.
-// Here we have no more than 4 chips, thus SPI_TRANS_USE_TXDATA.
+/******************************************************************************
+ * SPI GPIO Expander
+ */
+
 #ifdef CONFIG_USE_SPI_GPIOEXP
 static spi_device_handle_t spi_pin_hdl;
 static spi_transaction_t spi_pin_trans;
@@ -969,6 +990,9 @@ static void spi_initialize() {
         .post_cb = NULL
     };
     ESP_ERROR_CHECK( spi_bus_add_device(NUM_SPI, &dev_conf, &spi_pin_hdl) );
+    // If the transmitted data is 32bits or less, it is preferred to use
+    // tx_data in spi_transaction_t. Here we have no more than 4 chips,
+    // so point tx_buffer to spi_pin_data & SPI_TRANS_USE_TXDATA.
     spi_pin_trans.length = LEN(spi_pin_data) * 8; // in bits;
     spi_pin_trans.tx_buffer = spi_pin_data;
 #endif // CONFIG_USE_SPI_GPIOEXP
@@ -1002,7 +1026,9 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 #endif // CONFIG_USE_SPI_GPIOEXP
 }
 
-// GPIO Interrupt
+/******************************************************************************
+ * GPIO Interrupt (inc. button & knob)
+ */
 
 #ifdef CONFIG_USE_BTN
 static button_handle_t btn;
@@ -1274,6 +1300,10 @@ static void uart_initialize() {
 #endif
 }
 
+/******************************************************************************
+ * Task Watchdog
+ */
+
 static void twdt_initialize() {
 #if defined(CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0) \
  || defined(CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1)
@@ -1302,10 +1332,8 @@ esp_err_t twdt_feed() {
 }
 
 void driver_initialize() {
-    esp_log_level_set("gpio", ESP_LOG_WARN);
-    esp_log_level_set("Knob", ESP_LOG_WARN);
-    esp_log_level_set("button", ESP_LOG_WARN);
-    esp_log_level_set("led_indicator", ESP_LOG_WARN);
+    const char * tags[] = { "gpio", "Knob", "button", "led_indicator" };
+    LOOPN(i, LEN(tags)) { esp_log_level_set(tags[i], ESP_LOG_WARN); }
 
     pwm_initialize();
     adc_initialize();

@@ -104,6 +104,13 @@ bool usbmoded_device(const void *arg) {
     );
 }
 
+#ifdef CONFIG_USB_CDC_DEVICE
+// mute error `tusb_cdc: Interface is not initialized.`
+static esp_err_t hotfix_cdc_init();
+#else
+static esp_err_t hotfix_cdc_init() { return ESP_OK; }
+#endif
+
 static esp_err_t usbd_common_init() {
     // see esp-idf-4.4/components/tinyusb/additions/src/usb_descriptors.c
     // see esp_tinyusb/usb_descriptors.c
@@ -133,7 +140,8 @@ static esp_err_t usbd_common_init() {
     LOOP(i, 1, err ? 0 : LEN(desc_str)) {
         ESP_LOGI(TAG, "Desc[%d] %s", i, desc_str[i]);
     }
-    if (!err) inited = true;
+    if (!err) err = hotfix_cdc_init();
+    inited = !err;
     return err;
 }
 
@@ -174,9 +182,11 @@ void tud_suspend_cb(bool en) {
 // see esp-idf-4.4/examples/peripherals/usb/tusb_console
 // see esp-idf-4.4/examples/peripherals/usb/tusb_serial_device
 
-// TODO: mute error `tusb_cdc: Interface is not initialized.`
+#ifdef CONFIG_USB_CDC_DEVICE
 
-#ifdef CONFIG_USB_CDC_DEVICE_SERIAL
+static bool cdc_enabled = false;
+
+#   ifdef CONFIG_USB_CDC_DEVICE_SERIAL
 static void cdc_device_cb(int itf, cdcacm_event_t *event) {
     static uint8_t buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE + 1];
     if (event->type == CDC_EVENT_RX) {
@@ -184,7 +194,7 @@ static void cdc_device_cb(int itf, cdcacm_event_t *event) {
         esp_err_t err = tinyusb_cdcacm_read(itf, buf, sizeof(buf) - 1, &size);
         if (err) {
             ESP_LOGE(TAG, "CDC read error %s", esp_err_to_name(err));
-        } else {
+        } else if (cdc_enabled) {
             ESP_LOGD(TAG, "CDC got data[%u]", size);
             ESP_LOG_BUFFER_HEXDUMP(TAG, buf, size, ESP_LOG_DEBUG);
             tinyusb_cdcacm_write_queue(itf, buf, size); // echo
@@ -205,11 +215,9 @@ static void cdc_device_cb(int itf, cdcacm_event_t *event) {
                 "NOEMS"[ptr->parity], "1H2"[ptr->stop_bits]);
     }
 }
-#endif // CONFIG_USB_CDC_DEVICE_SERIAL
+#   endif
 
-#ifdef CONFIG_USB_CDC_DEVICE
-esp_err_t cdc_device_init() {
-    esp_err_t err = usbd_common_init();
+static esp_err_t hotfix_cdc_init() {
     tinyusb_config_cdcacm_t acm_conf = {
         .usb_dev = TINYUSB_USBDEV_0,
         .cdc_port = TINYUSB_CDC_ACM_0,
@@ -223,15 +231,22 @@ esp_err_t cdc_device_init() {
         .callback_line_coding_changed = cdc_device_cb,
 #   endif
     };
-    if (!err) err = tusb_cdc_acm_init(&acm_conf);
+    esp_err_t err = tusb_cdc_acm_init(&acm_conf);
 #   ifdef CONFIG_USB_CDC_DEVICE_CONSOLE
     if (!err) err = esp_tusb_init_console(TINYUSB_CDC_ACM_0);
 #   endif
     return err;
 }
 
+esp_err_t cdc_device_init() {
+    esp_err_t err = cdc_enabled ? ESP_OK : usbd_common_init();
+    cdc_enabled = !err;
+    return err;
+}
+
 esp_err_t cdc_device_exit() {
     esp_err_t err = ESP_OK;
+    if (!cdc_enabled) return err;
 #   ifdef CONFIG_USB_CDC_DEVICE_CONSOLE
     if (!err) err = esp_tusb_deinit_console(TINYUSB_CDC_ACM_0);
 #   endif
@@ -239,6 +254,7 @@ esp_err_t cdc_device_exit() {
     if (!err) err = tusb_cdc_acm_deinit(TINYUSB_CDC_ACM_0);
 #   endif
     if (!err) err = usbd_common_exit();
+    cdc_enabled = false;
     return err;
 }
 
@@ -256,7 +272,7 @@ esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 // see esp-idf-5.2/examples/peripherals/usb/device/tusb_msc
 // see esp-iot-solution/examples/usb/device/usb_msc_wireless_disk
 
-#if defined(CONFIG_USB_MSC_DEVICE) && defined(TARGET_IDF_4)
+#ifdef CONFIG_USB_MSC_DEVICE
 
 static bool msc_enabled = false;
 
@@ -272,6 +288,8 @@ static bool msc_enabled = false;
             return retval;                                                  \
         }                                                                   \
     }
+
+#   ifdef TARGET_IDF_4
 
 void tud_msc_inquiry_cb(
     uint8_t lun, uint8_t vid[8], uint8_t pid[16], uint8_t rev[4]
@@ -365,9 +383,8 @@ int32_t tud_msc_scsi_cb(
     tud_msc_set_sense(lun, SCSI_SENSE_ILLEGAL_REQUEST, 0x20, 0x00);
     return -1;
 }
-#endif // CONFIG_USB_MSC_DEVICE && TARGET_IDF_4
 
-#ifdef CONFIG_USB_MSC_DEVICE
+#   endif // TARGET_IDF_4
 
 static esp_err_t probe_disks() {
     esp_err_t err = ESP_OK;
@@ -399,6 +416,7 @@ static esp_err_t probe_disks() {
 }
 
 esp_err_t msc_device_init() {
+    if (msc_enabled) return ESP_OK;
     esp_err_t err = usbd_common_init();
     if (!err) err = probe_disks();
     msc_enabled = !err;
@@ -406,6 +424,7 @@ esp_err_t msc_device_init() {
 }
 
 esp_err_t msc_device_exit() {
+    if (!msc_enabled) return ESP_OK;
 #   ifdef TARGET_IDF_5
     tinyusb_msc_storage_deinit();
 #   endif
@@ -559,6 +578,7 @@ uint8_t const * tud_hid_descriptor_report_cb(uint8_t instance) {
 #endif // TARGET_IDF_4
 
 esp_err_t hid_device_init() {
+    if (hid_enabled) return ESP_OK;
     esp_err_t err = usbd_common_init();
 #ifdef TARGET_IDF_4
     if (!err) err = hid_idf4_init();
@@ -568,6 +588,7 @@ esp_err_t hid_device_init() {
 }
 
 esp_err_t hid_device_exit() {
+    if (!hid_enabled) return ESP_OK;
 #ifdef TARGET_IDF_4
     TRYNULL(hid.task, vTaskDelete); // avoid memory leak and enable reentry
     TRYNULL(hid.queue, vQueueDelete);
@@ -606,6 +627,8 @@ static const char * hid_btncode_str(uint8_t buttons) {
         if (buttons & (1 << i)) {
             size += snprintf(buf + size, blen - size, "%s%s",
                 i ? " | " : "", BUTTON_STR[i]);
+        } else {
+            buf[size] = '\0';
         }
     }
     return buf;

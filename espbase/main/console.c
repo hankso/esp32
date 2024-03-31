@@ -98,7 +98,7 @@ void console_initialize() {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
-        ESP_LOGW(TAG, "Try use PuTTY/Miniterm.py/idf_monitor.py.");
+        ESP_LOGW(TAG, "Try use Miniterm.py / PuTTY / SecureCRT.");
     }
     esp_console_config_t console_config = {
         .max_cmdline_length = 256,
@@ -307,7 +307,7 @@ char * console_handle_rpc(const char *json) {
     ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
     tmp = console_handle_command(cmd, false);
     if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
-        ret = rpc_response(cJSON_GetObjectItem(obj ,"id"), tmp ? tmp : "");
+        ret = rpc_response(cJSON_GetObjectItem(obj, "id"), tmp ?: "");
 exit:
     TRYFREE(tmp);
     TRYFREE(cmd);
