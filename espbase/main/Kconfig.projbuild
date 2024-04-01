@@ -215,7 +215,7 @@ menu "ESP Base Configuration"
         config USB_HID_DEVICE_TASK
             bool "Create a task for HID reports"
             depends on USB_HID_DEVICE
-            default y
+            default n
     endif
 
     config USE_GPIOEXP
@@ -354,10 +354,18 @@ menu "ESP Base Configuration"
         bool "Enable OTA updation from URL"
         default n
         help
-            Enable ota_updation_url function. Add about 263KB to firmware.
+            Enable ota_updation_url function. Add about 140KB to firmware.
 
     config USE_CONSOLE
         bool "Enable console based on linenoise"
         default y
+        help
+            Enable console_xxx and commands. Add about 110KB to firmware.
+
+    config USE_WEBSERVER
+        bool "Enable web server on port 80"
+        default y
+        help
+            Enable server_loop_xxx functions. Add about 80KB to firmware.
 
 endmenu

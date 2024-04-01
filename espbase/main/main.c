@@ -1,5 +1,5 @@
 /*
- * File: main.cpp
+ * File: main.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-13 18:03:04
  */
@@ -46,7 +46,7 @@ void loopTask(void *pvParameters) {
     }
 }
 
-extern "C" void app_main(void) {
+void app_main(void) {
     //                      function  task name  stacksize param prio hdlr cpu
     xTaskCreatePinnedToCore(loopTask, "mainloop", 1024 * 4, NULL, 1, NULL, 1);
 }

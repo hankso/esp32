@@ -51,34 +51,4 @@ void server_set_logging(bool);
 
 #ifdef __cplusplus
 }
-
-#if __has_include("ESPAsyncWebServer.h")
-#   include <AsyncTCP.h>
-#   include <ESPAsyncWebServer.h>
-#   define WITH_ESPASYNC
-#elif __has_include("PsychicHttp.h")
-#   include <PsychicHttp.h>
-#   define WITH_PSYCHIC
-#else
-#   warning "No HTTP/S Server framework found!"
-#endif
-
-class WebServerClass {
-private:
-#if defined(WITH_ESPASYNC)
-    AsyncWebServer _server = AsyncWebServer(80);
-    AsyncWebSocket _socket = AsyncWebSocket("/ws");
-#elif defined(WITH_PSYCHIC)
-    PsychicHttpServer _server = PsychicHttpServer(80);
-    PsychicWebSocketHandler _socket = PsychicWebSocketHandler("/ws");
-#endif
-    bool _started;
-public:
-    WebServerClass(): _started(false) {}
-    ~WebServerClass() { _started = false; end(); }
-
-    void begin();                   // run server in LWIP thread
-    void end() { _server.end(); }   // stop AsyncWebServer
-};
-
 #endif // __cplusplus

@@ -11,6 +11,26 @@
 #include "console.h"
 #include "filesys.h"
 
+#ifdef CONFIG_USE_WEBSERVER
+#   if __has_include("ESPAsyncWebServer.h") && __has_include("AsyncTCP.h")
+#       include <AsyncTCP.h>
+#       include <ESPAsyncWebServer.h>
+#   else
+#       warning "Run `git clone git@github.com:me-no-dev/ESPAsyncWebServer`"
+#       warning "Run `git clone git@github.com:me-no-dev/AsyncTCP`"
+#       undef CONFIG_USE_WEBSERVER
+#   endif
+#endif
+
+#ifndef CONFIG_USE_WEBSERVER
+
+void server_loop_begin() {}
+void server_loop_end() {}
+bool server_get_logging() { return false; }
+void server_set_logging(bool l) { NOTUSED(l); }
+
+#else
+
 static const char
 *TAG = "Server",
 *TYPE_HTML = "text/html",
@@ -43,7 +63,7 @@ static const char
 "<body>"
 "</html>";
 
-static bool log_request = true;
+static bool started = false, log_request = true;
 
 void log_msg(AsyncWebServerRequest *req, const char *msg = "") {
     if (!log_request) return;
@@ -465,9 +485,8 @@ static void onWebSocket(
     }
 }
 
-
 /******************************************************************************
- * Class public members
+ * Web Server implementation
  */
 
 class APIRewrite : public AsyncWebRewrite {
@@ -481,55 +500,56 @@ class APIRewrite : public AsyncWebRewrite {
         }
 };
 
-void WebServerClass::begin() {
-    if (_started) return _server.begin();
-    _server.reset();
-    _server.addRewrite(new APIRewrite());
+static AsyncWebServer webserver = AsyncWebServer(80);
+static AsyncWebSocket websocket = AsyncWebSocket("/ws");
+
+void server_loop_begin() {
+    if (started) return;
+    webserver.reset();
+    webserver.addRewrite(new APIRewrite());
 
     // STA APIs
-    _server.on("/cmd", HTTP_POST, onCommand);
-    _server.on("/alive", HTTP_ANY, onSuccess);
+    webserver.on("/cmd", HTTP_POST, onCommand);
+    webserver.on("/alive", HTTP_ANY, onSuccess);
     // AP APIs
-    _server.on("/apmode", HTTP_ANY, onSuccess).setFilter(ON_AP_FILTER);
-    _server.on("/edit", HTTP_GET, onEdit).setFilter(ON_AP_FILTER);
-    _server.on("/editc", HTTP_ANY, onCreate).setFilter(ON_AP_FILTER);
-    _server.on("/editd", HTTP_ANY, onDelete).setFilter(ON_AP_FILTER);
-    _server.on("/editu", HTTP_POST, onSuccess, onUpload)
+    webserver.on("/apmode", HTTP_ANY, onSuccess).setFilter(ON_AP_FILTER);
+    webserver.on("/edit", HTTP_GET, onEdit).setFilter(ON_AP_FILTER);
+    webserver.on("/editc", HTTP_ANY, onCreate).setFilter(ON_AP_FILTER);
+    webserver.on("/editd", HTTP_ANY, onDelete).setFilter(ON_AP_FILTER);
+    webserver.on("/editu", HTTP_POST, onSuccess, onUpload)
         .setFilter(ON_AP_FILTER);
-    _server.on("/config", HTTP_ANY, onConfig).setFilter(ON_AP_FILTER);
-    _server.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
-    _server.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
+    webserver.on("/config", HTTP_ANY, onConfig).setFilter(ON_AP_FILTER);
+    webserver.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
+    webserver.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
         .setFilter(ON_AP_FILTER);
     // WebSocket API
-    _socket.onEvent(onWebSocket);
-    _socket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
-    _server.addHandler(&_socket);
+    websocket.onEvent(onWebSocket);
+    websocket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
+    webserver.addHandler(&websocket);
     // Static files
-    _server.serveStatic("/data/", FFS, Config.web.DIR_DATA);
-    _server.serveStatic("/docs/", FFS, Config.web.DIR_DOCS);
-    _server.serveStatic("/", FFS, Config.web.DIR_ROOT)
+    webserver.serveStatic("/data/", FFS, Config.web.DIR_DATA);
+    webserver.serveStatic("/docs/", FFS, Config.web.DIR_DOCS);
+    webserver.serveStatic("/", FFS, Config.web.DIR_ROOT)
         .setDefaultFile("index.html")
         .setCacheControl("max-age=3600")
         .setLastModified(__DATE__ " " __TIME__ " GMT")
         .setAuthentication(Config.web.HTTP_NAME, Config.web.HTTP_PASS);
-    _server.onFileUpload(onUploadStrict);
-    _server.onNotFound(onError);
+    webserver.onFileUpload(onUploadStrict);
+    webserver.onNotFound(onError);
 
-    DefaultHeaders::Instance()
-        .addHeader("Access-Control-Allow-Origin", "*");
-    _server.begin();
-    _started = true;
-}
-
-WebServerClass WebServer;
-
-void server_loop_begin() {
-    WebServer.begin();
+    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
+    webserver.begin();
+    started = true;
 }
 
 void server_loop_end() {
-    WebServer.end();
+    if (started) {
+        webserver.end();
+        started = false;
+    }
 }
 
 bool server_get_logging() { return log_request; }
 void server_set_logging(bool val) { log_request = val; }
+
+#endif // CONFIG_USE_WEBSERVER

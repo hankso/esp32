@@ -29,7 +29,7 @@
 #   if __has_include("vl53l0x.h")
 #       include "vl53l0x.h"
 #   else
-#       warning "Run `git clone https://github.com/revk/ESP32-VL53L0X`"
+#       warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
 #       undef CONFIG_VLX_SENSOR
 #   endif
 #endif

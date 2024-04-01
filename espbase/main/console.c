@@ -333,5 +333,3 @@ void console_loop_begin(int x) { return; NOTUSED(x); }
 char * console_handle_rpc(const char *j) { return NULL; NOTUSED(j); }
 
 #endif // CONFIG_USE_CONSOLE
-
-// THE END

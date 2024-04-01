@@ -36,6 +36,9 @@ typedef enum {
     SERIAL_JTAG,
 } usbmode_t;
 
+#define ISDEV(m) ( (m) == CDC_DEVICE || (m) == MSC_DEVICE || (m) == HID_DEVICE )
+#define ISHOST(m) ( (m) == CDC_HOST || (m) == MSC_HOST || (m) == HID_HOST )
+
 esp_err_t usbmode_switch(usbmode_t mode, bool reboot_now);
 
 void usbmode_initialize();

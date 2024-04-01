@@ -49,8 +49,8 @@ static esp_err_t serial_jtag_exit() {
 
 static struct {
     usbmode_t mode;
-    esp_err_t (*init)();
-    esp_err_t (*exit)();
+    esp_err_t (*init)(usbmode_t prev);
+    esp_err_t (*exit)(usbmode_t next);
 } modes[] = {
     { SERIAL_JTAG,  serial_jtag_init,   serial_jtag_exit },
     { CDC_DEVICE,   cdc_device_init,    cdc_device_exit },
@@ -91,22 +91,22 @@ esp_err_t usbmode_switch(usbmode_t mode, bool restart) {
         if (mode != modes[i].mode) continue;
         LOOPN(j, LEN(modes)) {
             if (state != modes[j].mode || !modes[j].exit) continue;
-            if (( err = modes[j].exit() )) {
+            if (( err = modes[j].exit(mode) )) {
                 ESP_LOGE(TAG, "USB mode %s exit failed: %s",
                         usbmode_str(state), esp_err_to_name(err));
             } else {
                 exited = true;
             }
         }
-        config_set("app.usb.mode", usbmode_str(modes[i].mode));
+        config_set("app.usb.mode", usbmode_str(mode));
         if (!exited) {
             if (restart) esp_restart(); // reboot here
             state = -ESP_ERR_PENDING_REBOOT;
             ESP_LOGI(TAG, "USB mode set to %s (pending)", usbmode_str(mode));
             return err;
         }
-        if (!( err = modes[i].init ? modes[i].init() : ESP_OK )) {
-            state = modes[i].mode;
+        if (!( err = modes[i].init ? modes[i].init(state) : ESP_OK )) {
+            state = mode;
             ESP_LOGI(TAG, "USB mode set to %s", usbmode_str(mode));
         } else {
             ESP_LOGE(TAG, "USB mode set to %s failed: %s",
@@ -135,10 +135,8 @@ void usbmode_initialize() {
 
 void usbmode_status() {
     printf("USB mode is %s (%d)\n", usbmode_str(-1), ABS(state));
-    if (state == CDC_HOST || state == MSC_HOST || state == HID_HOST)
-        usbmodeh_status(state);
-    if (state == CDC_DEVICE || state == MSC_DEVICE || state == HID_DEVICE)
-        usbmoded_status(state);
+    if (ISHOST(state)) usbmodeh_status(state);
+    if (ISDEV(state))  usbmoded_status(state);
 }
 
 #else // CONFIG_USE_USB
