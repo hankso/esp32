@@ -16,7 +16,7 @@
 
 #include <Arduino.h>
 
-static const char * TAG = "filesys";
+static const char * TAG = "Filesys";
 
 static SemaphoreHandle_t lock[2]; // for FFS & SDFS
 

@@ -59,6 +59,14 @@ extern "C" {
 
 // Aliases
 
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#   define TARGET_IDF_5
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
+#   define TARGET_IDF_4
+#else
+#   warning "This project has only been tested on ESP-IDF v4.4.x & v5.x"
+#endif
+
 #if defined(CONFIG_IDF_TARGET_ESP32)
 #   define TARGET_ESP32
 #elif defined(CONFIG_IDF_TARGET_ESP32S2)
@@ -71,19 +79,10 @@ extern "C" {
 #   warning "This project has only been tested on ESP32 & ESP32-Sn chips"
 #endif
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-#   define TARGET_IDF_5
-#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
-#   define TARGET_IDF_4
-#else
-#   warning "This project has only been tested on ESP-IDF v4.4.x & v5.x"
-#endif
+// Hotfix for board specified configs
 
-// Hotfix for board specified MACROs
-#define BOARD_ESP32S3_LUATOS
-// #define BOARD_ESP32S3_NOLOGO
-
-#ifdef BOARD_ESP32S3_LUATOS
+#if defined(TARGET_ESP32S3)
+#   define  BOARD_ESP32S3_LUATOS
 #   undef   CONFIG_GPIO_SPI_CS0
 #   define  CONFIG_GPIO_SPI_CS0 9
 #   undef   CONFIG_GPIO_LED
@@ -95,11 +94,10 @@ extern "C" {
 #   define  CONFIG_GPIO_TXD 15
 #   undef   CONFIG_GPIO_RXD
 #   define  CONFIG_GPIO_RXD 16
-#endif
-#ifdef BOARD_ESP32S3_NOLOGO
-#   undef   CONFIG_LED_MODE_GPIO
-#   undef   CONFIG_LED_MODE_LEDC
-#   define  CONFIG_LED_MODE_RMT
+// #   define  BOARD_ESP32S3_NOLOGO
+// #   undef   CONFIG_LED_MODE_GPIO
+// #   undef   CONFIG_LED_MODE_LEDC
+// #   define  CONFIG_LED_MODE_RMT
 #endif
 
 // Utilities (implemented in utils.c)

@@ -11,18 +11,28 @@
 #include "esp_adc_cal.h"
 #include "esp_task_wdt.h"
 #include "esp_intr_alloc.h"
-#include "soc/soc.h"
-#include "sys/param.h"
 #include "driver/adc.h"
 #include "driver/ledc.h"
 #include "driver/sdspi_host.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#if defined(CONFIG_USE_SCREEN) && __has_include("u8g2_esp32_hal.h")
-#   include "u8g2.h"
-#   include "u8g2_esp32_hal.h"
-#   define WITH_U8G2
+#if defined(CONFIG_USE_SCREEN)
+#   include "esp_lcd_panel_io.h"
+#   include "esp_lcd_panel_ops.h"
+#   include "esp_lcd_panel_vendor.h"
+#   if __has_include("esp_lvgl_port.h")
+#       include "esp_lvgl_port.h"
+#       define WITH_LVGL
+#   elif __has_include("u8g2_esp32_hal.h")
+#       include "u8g2.h"
+#       include "u8g2_esp32_hal.h"
+#       define WITH_U8G2
+#   else
+#       warning "Run `git clone git@github.com:olikraus/u8g2.git`"
+#       warning "Run `git clone git@github.com:mkfrey/u8g2-hal-esp-idf.git`"
+#       warning "Run `idf.py add-dependency lvgl/lvgl`"
+#   endif
 #endif
 
 #ifdef CONFIG_VLX_SENSOR
@@ -118,7 +128,7 @@ static void led_initialize() {
         .led_indicator_strips_config = &rmt_conf,
     };
 #   else // CONFIG_LED_MODE_XXX
-    ESP_LOGI(TAG, "LED: disabled by CONFIG_LED_MODE_XXX");
+    ESP_LOGW(TAG, "LED: disabled by CONFIG_LED_MODE_XXX");
     return;
 #   endif // CONFIG_LED_MODE_XXX
     if (!( led_handle = led_indicator_create(&led_conf) )) {
@@ -194,7 +204,7 @@ static void led_initialize() {
     }
     led_strip_clear(local.strip);
 #   else // CONFIG_LED_MODE_XXX
-    ESP_LOGI(TAG, "LED: disabled by CONFIG_LED_MODE_XXX");
+    ESP_LOGW(TAG, "LED: disabled by CONFIG_LED_MODE_XXX");
     return;
 #   endif // CONFIG_LED_MODE_XXX
     led_handle = &local;
@@ -401,14 +411,21 @@ uint32_t adc_read() {
  */
 
 #define SPEED_MODE  LEDC_LOW_SPEED_MODE
+
+#define TMR_SERVO   LEDC_TIMER_1
 #define RES_SERVO   LEDC_TIMER_10_BIT
+#define CH_SERVOH   LEDC_CHANNEL_1
+#define CH_SERVOV   LEDC_CHANNEL_2
+
+#define TMR_BUZZER  LEDC_TIMER_2
 #define RES_BUZZER  LEDC_TIMER_10_BIT
+#define CH_BUZZER   LEDC_CHANNEL_3
 
 static void pwm_initialize() {
 #ifdef CONFIG_USE_SERVO
     ledc_timer_config_t servo_conf = {
         .speed_mode         = SPEED_MODE,
-        .timer_num          = LEDC_TIMER_1,
+        .timer_num          = TMR_SERVO,
         .duty_resolution    = RES_SERVO,
         .freq_hz            = 50, // 20ms
         .clk_cfg            = LEDC_AUTO_CLK
@@ -417,16 +434,16 @@ static void pwm_initialize() {
     ledc_channel_config_t channel0_conf = {
         .gpio_num           = PIN_SVOH,
         .speed_mode         = SPEED_MODE,
-        .channel            = LEDC_CHANNEL_1,
-        .timer_sel          = LEDC_TIMER_1,
+        .channel            = CH_SERVOH,
+        .timer_sel          = TMR_SERVO,
         .hpoint             = 0,
         .duty               = 0
     };
     ledc_channel_config_t channel1_conf = {
         .gpio_num           = PIN_SVOV,
         .speed_mode         = SPEED_MODE,
-        .channel            = LEDC_CHANNEL_2,
-        .timer_sel          = LEDC_TIMER_1,
+        .channel            = CH_SERVOV,
+        .timer_sel          = TMR_SERVO,
         .hpoint             = 0,
         .duty               = 0
     };
@@ -436,17 +453,17 @@ static void pwm_initialize() {
 #ifdef CONFIG_USE_BUZZER
     ledc_timer_config_t buzzer_conf = {
         .speed_mode         = SPEED_MODE,
-        .timer_num          = LEDC_TIMER_2,
+        .timer_num          = TMR_BUZZER,
         .duty_resolution    = RES_BUZZER,
-        .freq_hz            = 1,
+        .freq_hz            = 5000, // 0-5kHz is commonlly used
         .clk_cfg            = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK(ledc_timer_config(&buzzer_conf));
     ledc_channel_config_t channel2_conf = {
         .gpio_num           = PIN_BUZZ,
         .speed_mode         = SPEED_MODE,
-        .channel            = LEDC_CHANNEL_3,
-        .timer_sel          = LEDC_TIMER_2,
+        .channel            = CH_BUZZER,
+        .timer_sel          = TMR_BUZZER,
         .hpoint             = 0,
         .duty               = 0
     };
@@ -469,35 +486,29 @@ esp_err_t pwm_set_degree(int hdeg, int vdeg) {
     esp_err_t err = ESP_OK;
     if (!err && hdeg >= 0) {
         // calibration: convert 0-180 to real 14-180 degree
-        hdeg = 166 * hdeg / 180 + 14;
-        err = pwm_set_duty(
-            LEDC_CHANNEL_1,
-            MIN(hdeg, 180) * servo_scale + servo_offset
-        );
+        hdeg = MIN(180, 166 * hdeg / 180 + 14);
+        err = pwm_set_duty(CH_SERVOH, hdeg * servo_scale + servo_offset);
     }
     if (!err && vdeg >= 0) {
-        err = pwm_set_duty(
-            LEDC_CHANNEL_2,
-            MIN(vdeg, 160) * servo_scale + servo_offset
-        );
+        vdeg = MIN(160, vdeg);
+        err = pwm_set_duty(CH_SERVOV, vdeg * servo_scale + servo_offset);
     }
     return err;
 }
 
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg) {
-    int hduty = ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_1),
-        vduty = ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_2);
+    int hduty = ledc_get_duty(SPEED_MODE, CH_SERVOH),
+        vduty = ledc_get_duty(SPEED_MODE, CH_SERVOV);
     *hdeg = (int)((hduty - servo_offset) / servo_scale);
     *vdeg = (int)((vduty - servo_offset) / servo_scale);
     return ESP_OK;
 }
-
 #else
 esp_err_t pwm_set_degree(int h, int v) {
-    return ESP_ERR_NOT_FOUND; NOTUSED(h); NOTUSED(v);
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(v);
 }
 esp_err_t pwm_get_degree(int *h, int *v) {
-    return ESP_ERR_NOT_FOUND; NOTUSED(h); NOTUSED(v);
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(v);
 }
 #endif
 
@@ -505,29 +516,25 @@ esp_err_t pwm_get_degree(int *h, int *v) {
 // mapping 0-100 percent to 0%-50% of duty
 static float buzzer_scale = ((1 << RES_BUZZER) - 1) / 200;
 
-esp_err_t pwm_set_tone(uint32_t freq, int pcnt) {
-    esp_err_t err = ESP_OK;
-    if (!err && pcnt >= 0) {
-        err = pwm_set_duty(LEDC_CHANNEL_3, pcnt * buzzer_scale);
-    }
-    if (!err && freq <= 20000) {
-        err = ledc_set_freq(SPEED_MODE, LEDC_TIMER_2, freq);
-    }
+esp_err_t pwm_set_tone(int freq, int pcnt) {
+    esp_err_t err = freq > 20000 ? ESP_ERR_INVALID_ARG : ESP_OK;
+    if (freq == 0) pcnt = 0;
+    if (!err && freq > 0)  err = ledc_set_freq(SPEED_MODE, TMR_BUZZER, freq);
+    if (!err && pcnt >= 0) err = pwm_set_duty(CH_BUZZER, pcnt * buzzer_scale);
     return err;
 }
 
-esp_err_t pwm_get_tone(uint32_t *freq, int *pcnt) {
-    *freq = ledc_get_freq(SPEED_MODE, LEDC_TIMER_2);
-    *pcnt = (int)(ledc_get_duty(SPEED_MODE, LEDC_CHANNEL_3) / buzzer_scale);
+esp_err_t pwm_get_tone(int *freq, int *pcnt) {
+    *freq = ledc_get_freq(SPEED_MODE, TMR_BUZZER);
+    *pcnt = (int)(ledc_get_duty(SPEED_MODE, CH_SERVOH) / buzzer_scale);
     return ESP_OK;
 }
-
 #else
-esp_err_t pwm_set_tone(uint32_t f, int p) {
-    return ESP_ERR_NOT_FOUND; NOTUSED(f); NOTUSED(p);
+esp_err_t pwm_set_tone(int f, int p) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(f); NOTUSED(p);
 }
-esp_err_t pwm_get_tone(uint32_t *f, int *p) {
-    return ESP_ERR_NOT_FOUND; NOTUSED(f); NOTUSED(p);
+esp_err_t pwm_get_tone(int *f, int *p) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(f); NOTUSED(p);
 }
 #endif
 
@@ -541,16 +548,16 @@ static esp_err_t i2c_master_config(int bus, int sda, int scl, int speed) {
         .sda_io_num = sda,
         .sda_pullup_en = GPIO_PULLUP_ENABLE,
         .scl_io_num = scl,
-        .scl_pullup_en = GPIO_PULLUP_ENABLE
+        .scl_pullup_en = GPIO_PULLUP_ENABLE,
+        .master.clk_speed = speed,
     };
-    master_conf.master.clk_speed = speed;
     return i2c_param_config(bus, &master_conf);
 }
 
 static void i2c_initialize() {
 #ifdef CONFIG_USE_I2C
-    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, I2C_MODE_MASTER, 0, 0, 0) );
     ESP_ERROR_CHECK( i2c_master_config(NUM_I2C, PIN_SDA, PIN_SCL, 50000) );
+    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, I2C_MODE_MASTER, 0, 0, 0) );
 #endif
 }
 
@@ -559,12 +566,14 @@ esp_err_t smbus_probe(int bus, uint8_t addr) {
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
     i2c_master_stop(cmd);
-    esp_err_t err = i2c_master_cmd_begin(bus, cmd, pdMS_TO_TICKS(50));
+    esp_err_t err = i2c_master_cmd_begin(bus, cmd, TIMEOUT(50));
     i2c_cmd_link_delete(cmd);
     return err;
 }
 
-esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t * val, size_t len) {
+static esp_err_t smbus_wregs(
+    int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len
+) {
     // SMBus Write protocol:
     //      S | (ADDR | W) | ACK | REG | ACK | (DATA | ACK) * n | P
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
@@ -578,7 +587,9 @@ esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t * val, size_t 
     return err;
 }
 
-esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len) {
+static esp_err_t smbus_rregs(
+    int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len
+) {
     // SMBus Read protocol:
     //      S | (ADDR | W) | ACK | REG | ACK |
     //      S | (ADDR | R) | ACK | (DATA | A) * n - 1 | (DATA | N) | P
@@ -660,6 +671,7 @@ void i2c_detect(int bus) {
             default:
                 printf(" --");
         }
+        fflush(stdout);
     }
 }
 
@@ -702,7 +714,7 @@ esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin_num, bool level) {
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return i2c_trans(NUM_I2C, i2c_pin_addr[idx], I2C_MASTER_WRITE, datp, 1);
 #else
-    return ESP_ERR_NOT_FOUND;
+    return ESP_ERR_NOT_SUPPORTED;
 #endif // CONFIG_USE_I2C_GPIOEXP
 }
 
@@ -718,7 +730,7 @@ esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin_num, bool * level, bool sync) {
         *level = *datp & mask;
     return err;
 #else
-    return ESP_ERR_NOT_FOUND;
+    return ESP_ERR_NOT_SUPPORTED;
 #endif // CONFIG_USE_I2C_GPIOEXP
 }
 
@@ -753,7 +765,7 @@ uint16_t vlx_probe() {
     return result_mm;
 }
 #else
-static void vlx_initialize() { ESP_LOGE(TAG, "VLX: sensor is not supported"); }
+static void vlx_initialize() {}
 uint16_t vlx_probe() { return 0; }
 #endif
 
@@ -761,23 +773,43 @@ uint16_t vlx_probe() { return 0; }
  * LCD/OLED Screen
  */
 
-#ifdef WITH_U8G2
+#define PARALLEL_LINES  16
+#define SCREEN_H_RES    128
+#define SCREEN_V_RES    64
+#define SCREEN_DEPTH    1
+#define SCREEN_PIXELS   ( SCREEN_H_RES * SCREEN_V_RES )
 
+static bool scn_probed = false;
+
+#if defined(WITH_U8G2)
 static u8g2_t scn;
-static bool scn_init = false;
+#else
+static esp_lcd_panel_handle_t scn;
+static esp_lcd_panel_io_handle_t scn_io;
+#   if defined(WITH_LVGL)
+static lv_disp_t *scn_disp;
+void lvgl_ui(lv_disp_t *disp); // implemented in scngui.c
+#   endif
+#endif
 
 static void scn_initialize() {
-    // MACROs defined in u8g2_esp32_hal.h
+#ifndef CONFIG_USE_SCREEN
+    ESP_LOGE(TAG, "Screen is not supported");
+    return;
+#endif
+    uint8_t addr = 0x3C;
+    int bus = I2C_NUM_1, speed = 400 * 1000; // 400KHz
+    if (bus != NUM_I2C) {
+        ESP_ERROR_CHECK( i2c_master_config(bus, PIN_SDA1, PIN_SCL1, speed) );
+        ESP_ERROR_CHECK( i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0) );
+    }
+    if (!( scn_probed = smbus_probe(bus, addr) == ESP_OK )) return;
+#ifdef WITH_U8G2
+    // Defined in u8g2_esp32_hal.h
     //  - I2C_MASTER_NUM = I2C_NUM_1
     //  - I2C_MASTER_FREQ_HZ = 50000
-    int addr = 0x3C, bus = I2C_MASTER_NUM, speed = I2C_MASTER_FREQ_HZ;
-    if (bus != NUM_I2C)
-        ESP_ERROR_CHECK( i2c_driver_install(bus, I2C_MODE_MASTER, 0, 0, 0) );
-    scn_init = i2c_master_config(bus, PIN_SDA1, PIN_SCL1, speed) == ESP_OK;
-    scn_init = scn_init && smbus_probe(bus, addr) == ESP_OK;
-    if (!scn_init) return;
-    i2c_driver_delete(bus);
-
+    i2c_driver_delete(I2C_MASTER_NUM);
+    esp_log_level_set("u8g2_hal", ESP_LOG_WARN);
     u8g2_esp32_hal_t u8g2_esp32_hal = U8G2_ESP32_HAL_DEFAULT;
     u8g2_esp32_hal.sda = PIN_SDA1;
     u8g2_esp32_hal.scl = PIN_SCL1;
@@ -790,45 +822,119 @@ static void scn_initialize() {
     u8g2_SetFont(&scn, u8g2_font_ncenB08_tr);
     u8g2_InitDisplay(&scn);
     u8g2_SetPowerSave(&scn, 0);
-}
-
-void scn_progbar(uint8_t percent) {
-    if (!scn_init) return;
-    static char buf[16];
-    snprintf(buf, sizeof(buf), "%d %%", percent);
-    u8g2_ClearBuffer(&scn);
-    u8g2_DrawFrame(&scn, 0, 20, 128, 6);
-    u8g2_DrawBox(&scn, 0, 20, 128 * percent / 100, 6);
-    u8g2_DrawStr(&scn, (128 - u8g2_GetStrWidth(&scn, buf)) / 2, 28 + 8, buf);
-    u8g2_SendBuffer(&scn);
-}
-
 #else
+    esp_err_t err = ESP_OK;
+    esp_lcd_i2c_bus_handle_t _bus = (esp_lcd_i2c_bus_handle_t)bus;
+    esp_lcd_panel_io_i2c_config_t io_conf = {
+        .dev_addr = addr,
+        .control_phase_bytes = 1,
+        .dc_bit_offset = 6,
+        .lcd_cmd_bits = 8,
+        .lcd_param_bits = 8,
+    };
+    esp_lcd_panel_dev_config_t dev_conf = {
+        .bits_per_pixel = 1,
+        .color_space = ESP_LCD_COLOR_SPACE_MONOCHROME,
+        .reset_gpio_num = -1,
+    };
+    if (!err) err = esp_lcd_new_panel_io_i2c(_bus, &io_conf, &scn_io);
+    if (!err) err = esp_lcd_new_panel_ssd1306(scn_io, &dev_conf, &scn);
+    if (!err) err = esp_lcd_panel_reset(scn);
+    if (!err) err = esp_lcd_panel_init(scn);
+    if (!err) err = esp_lcd_panel_mirror(scn, true, true);
+    if (!err) err = esp_lcd_panel_disp_on_off(scn, true);
+#   ifdef WITH_LVGL
+    const lvgl_port_cfg_t lvgl_conf = ESP_LVGL_PORT_INIT_CONFIG();
+    const lvgl_port_display_cfg_t disp_conf = {
+        .io_handle = scn_io,
+        .panel_handle = scn,
+        .buffer_size = SCREEN_PIXELS,
+        .double_buffer = true,
+        .hres = SCREEN_H_RES,
+        .vres = SCREEN_V_RES,
+        .monochrome = true, // bit depth = 1
+    };
+    if (!err) err = lvgl_port_init(&lvgl_conf);
+    if (!err && ( scn_disp = lvgl_port_add_disp(&disp_conf) )) {
+        lv_disp_set_rotation(scn_disp, LV_DISP_ROT_180);
+        if (lvgl_port_lock(0)) {
+            lvgl_ui(scn_disp);
+            lvgl_port_unlock();
+        }
+    } else if (!err) { err = ESP_FAIL; }
+#   else
+    uint8_t pattern[32] = {
+        0x00, 0x7E, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00,
+        0x00, 0x7E, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00,
+        0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81,
+        0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81,
+    };
+    LOOPN(i, err ? 0 : (SCREEN_H_RES / 16)) {
+        LOOPN(j, SCREEN_V_RES / 8) {
+            err = esp_lcd_panel_draw_bitmap(
+                scn, i * 16, j * 8,
+                i * 16 + 16, j * 8 + 8,
+                pattern + ((i & 1) * 16));
+        }
+    }
+#   endif
+    if (err) {
+        ESP_LOGE(TAG, "Screen initialize failed: %s", esp_err_to_name(err));
+#   ifdef WITH_LVGL
+        TRYNULL(scn_disp, lvgl_port_remove_disp);
+#   endif
+        TRYNULL(scn_io, esp_lcd_panel_io_del);
+        TRYNULL(scn, esp_lcd_panel_del);
+        scn_probed = false;
+    }
+#endif
+}
 
-static void scn_initialize() { ESP_LOGE(TAG, "Screen is not supported"); }
-void scn_progbar(uint8_t percent) { ; }
-
-#endif // WITH_U8G2
+esp_err_t scn_progbar(uint8_t pcnt) {
+#define XS 0
+#define XE SCREEN_H_RES
+#define YS ( SCREEN_V_RES * 7 / 16 )
+#define YE ( SCREEN_V_RES * 9 / 16 )
+    if (!scn_probed) return ESP_ERR_NOT_FOUND;
+#ifdef WITH_LVGL
+    return ESP_ERR_INVALID_STATE;
+#endif
+    esp_err_t err = ESP_OK;
+    int x = XS + (XE - XS) * pcnt / 100;
+#ifdef WITH_U8G2
+    static char buf[16];
+    snprintf(buf, sizeof(buf), "%d %%", pcnt);
+    int middle = MAX(XS, XE + XS - u8g2_GetStrWidth(&scn, buf)) / 2;
+    u8g2_ClearBuffer(&scn);
+    u8g2_DrawFrame(&scn, XS, YS, XE - XS, YE - YS);
+    u8g2_DrawBox(&scn, XS, YS, x, YE - YS);
+    u8g2_DrawStr(&scn, middle, YE + 10, buf);
+    u8g2_SendBuffer(&scn);
+#else
+    static uint8_t cbuf[(XE - XS) * (YE - YS) * SCREEN_DEPTH / 8];
+    if (!err && x > XS) {
+        memset(cbuf, 0xFF, sizeof(cbuf)); // foreground
+        err = esp_lcd_panel_draw_bitmap(scn, XS, YS, x, YE, cbuf);
+    }
+    if (!err && x < XE) {
+        memset(cbuf, 0x00, sizeof(cbuf)); // background
+        err = esp_lcd_panel_draw_bitmap(scn, x, YS, XE, YE, cbuf);
+    }
+#endif
+    return err;
+}
 
 /******************************************************************************
  * Ambient Light and Temperature Sensor
  */
 
-typedef struct {
-    uint32_t brightness;
-    uint16_t temperature;
-    uint32_t atmosphere;
-    uint16_t humidity;
-    uint16_t altitude;
-} gy39_payload_t; // TODO check_endian
-
 esp_err_t gy39_measure(gy39_data_t *d) {
-    esp_err_t err;
-    uint8_t addr = 0x5B, b[0x0D];
-    if (( err = smbus_rregs(NUM_I2C, addr, 0x00, b, sizeof(b)) )) return err;
+    uint8_t addr = 0x5B, b[0x0E];
+    esp_err_t err = smbus_rregs(NUM_I2C, addr, 0x00, b, sizeof(b));
+    if (err) return err;
     d->brightness = 1e-2 * ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
     d->temperature = 1e-2 * ((b[4] << 8) | b[5]);
-    d->atmosphere = 1e-2 * ((b[6] << 24) | (b[7] << 16) | (b[8] << 8) | b[9]);
+    d->atmosphere = 1e-5 * ((b[6] << 24) | (b[7] << 16) | (b[8] << 8) | b[9]);
     d->humidity = 1e-2 * ((b[10] << 8) | b[11]);
     d->altitude = (b[12] << 8) | b[13];
     return err;
@@ -1006,7 +1112,7 @@ esp_err_t spi_gpio_set_level(spi_pin_num_t pin_num, bool level) {
     *datp = level ? (*datp | mask) : (*datp & ~mask);
     return spi_device_polling_transmit(spi_pin_hdl, &spi_pin_trans);
 #else
-    return ESP_ERR_NOT_FOUND;
+    return ESP_ERR_NOT_SUPPORTED;
 #endif // CONFIG_USE_SPI_GPIOEXP
 }
 
@@ -1022,7 +1128,7 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
         *level = spi_pin_data[idx] & mask;
     return err;
 #else
-    return ESP_ERR_NOT_FOUND;
+    return ESP_ERR_NOT_SUPPORTED;
 #endif // CONFIG_USE_SPI_GPIOEXP
 }
 
@@ -1034,26 +1140,26 @@ esp_err_t spi_gpio_get_level(spi_pin_num_t pin_num, bool * level, bool sync) {
 static button_handle_t btn;
 
 static void cb_press_up(void *arg, void *data) {
-    ESP_LOGI(TAG, "BTN: %d RELEASE[%d]",
+    ESP_LOGD(TAG, "BTN: %d RELEASE[%d]",
             PIN_BTN, iot_button_get_ticks_time((button_handle_t)arg));
     hid_report_dial(DIAL_UP);
 }
 
 static void cb_press_down(void *arg, void *data) {
-    ESP_LOGI(TAG, "BTN: %d PRESS", PIN_BTN);
+    ESP_LOGD(TAG, "BTN: %d PRESS", PIN_BTN);
     hid_report_dial(DIAL_DN);
 }
 
 static void cb_single_click(void *arg, void *data) {
-    ESP_LOGI(TAG, "BTN: %d single click", PIN_BTN);
+    ESP_LOGD(TAG, "BTN: %d single click", PIN_BTN);
 }
 
 static void cb_double_click(void *arg, void *data) {
-    ESP_LOGI(TAG, "BTN: %d double click", PIN_BTN);
+    ESP_LOGD(TAG, "BTN: %d double click", PIN_BTN);
 }
 
 static void cb_long_press(void *arg, void *data) {
-    ESP_LOGI(TAG, "BTN: %d long press", PIN_BTN);
+    ESP_LOGD(TAG, "BTN: %d long press", PIN_BTN);
 }
 #endif
 
@@ -1061,13 +1167,13 @@ static void cb_long_press(void *arg, void *data) {
 static knob_handle_t knob;
 
 static void cb_left_rotate(void *arg, void *data) {
-    ESP_LOGI(TAG, "Knob: left rotate %d",
+    ESP_LOGD(TAG, "Knob: left rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
     hid_report_dial(DIAL_L);
 }
 
 static void cb_right_rotate(void *arg, void *data) {
-    ESP_LOGI(TAG, "Knob: right rotate %d",
+    ESP_LOGD(TAG, "Knob: right rotate %d",
             iot_knob_get_count_value((button_handle_t)arg));
     hid_report_dial(DIAL_R);
 }

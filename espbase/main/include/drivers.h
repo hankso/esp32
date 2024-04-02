@@ -109,8 +109,8 @@ esp_err_t gpioext_get_level(int pin, bool * level, bool sync);
 
 esp_err_t pwm_set_degree(int hdeg, int vdeg);
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
-esp_err_t pwm_set_tone(uint32_t freq, int pcent);
-esp_err_t pwm_get_tone(uint32_t *freq, int *pcent);
+esp_err_t pwm_set_tone(int freq, int pcent);
+esp_err_t pwm_get_tone(int *freq, int *pcent);
 
 esp_err_t twdt_feed();
 
@@ -140,9 +140,10 @@ typedef struct {
 
 esp_err_t gy39_measure(gy39_data_t *dat);
 
-void scn_progbar(uint8_t percent);
+esp_err_t scn_progbar(uint8_t percent);
 
 void i2c_detect(int bus);
+
 esp_err_t smbus_probe(int bus, uint8_t addr);
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg_start, uint8_t reg_end);
 esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val);

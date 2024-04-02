@@ -740,16 +740,15 @@ const char * hid_keycode_str(uint8_t mod, uint8_t keycode[6]) {
 }
 #endif // !CONFIG_USB_HID_HOST
 
-bool hid_report_dial(hid_dial_keycode_t k) {
+#endif // CONFIG_USE_USB
+
 #ifdef CONFIG_USB_HID_DEVICE
+bool hid_report_dial(hid_dial_keycode_t k) {
     tinyusb_hid_report_t report = {
         .report_id = REPORT_ID_DIAL,
         .dial = { k, (k == DIAL_L || k == DIAL_LF) ? 0xFF : 0 }
     };
     return send_report(&report, false, 100);
-#else
-    return false; NOTUSED(k);
-#endif
 }
 
 bool hid_report_dial_button(uint32_t ms) {
@@ -762,15 +761,11 @@ bool hid_report_dial_button(uint32_t ms) {
 }
 
 bool hid_report_mouse(uint8_t b, int8_t x, int8_t y, int8_t v, int8_t h) {
-#ifdef CONFIG_USB_HID_DEVICE
     tinyusb_hid_report_t report = {
         .report_id = REPORT_ID_MOUSE,
         .mouse = { b, x, y, v, h },
     };
     return send_report(&report, false, 100);
-#else
-    return false; NOTUSED(b); NOTUSED(x); NOTUSED(y); NOTUSED(v); NOTUSED(h);
-#endif
 }
 
 bool hid_report_mouse_click(const char *str, uint32_t ms) {
@@ -783,17 +778,13 @@ bool hid_report_mouse_click(const char *str, uint32_t ms) {
     return sent;
 }
 
-bool hid_report_keyboard(uint8_t mod, const uint8_t *src, size_t len) {
-#ifdef CONFIG_USB_HID_DEVICE
+bool hid_report_keyboard(uint8_t mod, const uint8_t *keycode, size_t len) {
     tinyusb_hid_report_t report = {
         .report_id = REPORT_ID_KEYBOARD,
         .keyboard = { .modifier = mod, .keycode = { 0 } },
     };
-    memcpy(report.keyboard.keycode, src, MIN(len, 6));
+    memcpy(report.keyboard.keycode, keycode, MIN(len, 6));
     return send_report(&report, false, 100);
-#else
-    return false; NOTUSED(mod); NOTUSED(src); NOTUSED(len);
-#endif
 }
 
 bool hid_report_keyboard_press(const char *str, uint32_t ms) {
@@ -805,5 +796,19 @@ bool hid_report_keyboard_press(const char *str, uint32_t ms) {
     }
     return sent;
 }
-
-#endif // CONFIG_USE_USB
+#else // CONFIG_USB_HID_DEVICE
+bool hid_report_dial(hid_dial_keycode_t k) { return false; NOTUSED(k); }
+bool hid_report_dial_button(uint32_t m) { return false; NOTUSED(m); }
+bool hid_report_mouse(uint8_t b, int8_t x, int8_t y, int8_t v, int8_t h) {
+    return false; NOTUSED(b); NOTUSED(x); NOTUSED(y); NOTUSED(v); NOTUSED(h);
+}
+bool hid_report_mouse_click(const char *s, uint32_t m) {
+    return false; NOTUSED(s); NOTUSED(m);
+}
+bool hid_report_keyboard(uint8_t m, const uint8_t *k, size_t l) {
+    return false; NOTUSED(m); NOTUSED(k); NOTUSED(l);
+}
+bool hid_report_keyboard_press(const char *s, uint32_t m) {
+    return false; NOTUSED(s); NOTUSED(m);
+}
+#endif // CONFIG_USB_HID_DEVICE

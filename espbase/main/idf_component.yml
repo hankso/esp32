@@ -1,29 +1,27 @@
-## IDF Component Manager Manifest File
+# IDF Component Manager Manifest File
+# See https://docs.espressif.com/projects/idf-component-manager/en/latest/reference/manifest_file.html
+
 dependencies:
   idf: ">=4.4"
-  espressif/knob: "=*"
-  espressif/button: "=*"
-  espressif/led_indicator: "=*"
-  espressif/tinyusb:
+
+  knob: "*"
+  button: "*"
+  led_indicator: "*"
+
+  tinyusb:
     version: ">=0.15.0~2"
     rules:
       - if: "idf_version >=5.0"
-  espressif/usb_host_cdc_acm: "*"
-  espressif/usb_host_msc: "*"
-  espressif/usb_host_hid: "*"
-  # leeebo/tinyusb_src:
-  #   version: ">=0.15.0~6"
-  #   rules:
-  #     - if: "idf_version >=4.4,<5.0"
+      - if: "target in [esp32s2, esp32s3]"
+  usb_host_cdc_acm:
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
+  usb_host_msc:
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
+  usb_host_hid:
+    rules:
+      - if: "target in [esp32s2, esp32s3]"
 
-# # Put list of dependencies here
-# # For components maintained by Espressif:
-# component: "~1.0.0"
-# # For 3rd party components:
-# username/component: ">=1.0.0,<2.0.0"
-# username2/component2:
-#   version: "~1.0.0"
-#   # For transient dependencies `public` flag can be set.
-#   # `public` flag doesn't have an effect dependencies of the `main` component.
-#   # All dependencies of `main` are public by default.
-#   public: true
+  lvgl/lvgl: "~8.3.0"
+  esp_lvgl_port: "~2.0.0"

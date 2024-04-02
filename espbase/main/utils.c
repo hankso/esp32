@@ -10,7 +10,6 @@
 
 #include "nvs.h"
 #include "esp_system.h"
-#include "esp_ota_ops.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "esp_image_format.h"
@@ -225,14 +224,12 @@ void task_info(uint8_t sort_attr) {
 }
 
 void version_info() {
-    const esp_app_desc_t *desc = esp_ota_get_app_description();
     printf("ESP-IDF  %s\n"
            "FreeRTOS %s\n"
-           "Firmware %s%s%s\n"
+           "Firmware %s\n"
            "Compiled %s %s\n",
            esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
-           Config.info.VER, strlen(Config.info.VER) ? " " : "",
-           desc->version, __DATE__, __TIME__);
+           Config.info.VER, __DATE__, __TIME__);
 }
 
 static uint32_t memory_types[] = {

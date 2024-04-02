@@ -2,7 +2,6 @@ key,            type,       encoding,   value
 
 info,           namespace,
 counter,        data,       u32,        0
-name,           data,       string,     {NAME}
 uid,            data,       string,     {UID}
 
 config,         namespace,

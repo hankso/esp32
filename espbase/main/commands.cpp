@@ -11,11 +11,14 @@
 #include "filesys.h"
 #include "network.h"
 #include "usbmode.h"
+#include "timesync.h"
 
 #include "esp_sleep.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "rom/uart.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
 
@@ -53,7 +56,7 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
 #define ARG_PARSE(c, v, t)                                                  \
         do {                                                                \
             if (!arg_noerror((c), (v), (void **)(t)))                       \
-            return ESP_ERR_INVALID_ARG;                                     \
+                return ESP_ERR_INVALID_ARG;                                 \
         } while (0)
 
 #define ESP_CMD(d, c, h)                                                    \
@@ -79,7 +82,49 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
  */
 
 #ifdef CONSOLE_SYSTEM_RESTART
-static int system_restart(int c, char **v) { esp_restart(); return ESP_OK; }
+static struct {
+    struct arg_lit *halt;
+    struct arg_lit *cxel;
+    struct arg_int *tout;
+    struct arg_end *end;
+} system_restart_args = {
+    .halt = arg_lit0("h", NULL, "shutdown instead of reboot"),
+    .cxel = arg_lit0("c", NULL, "cancel pending reboot (if available)"),
+    .tout = arg_int0("t", NULL, "<65535>", "reboot timeout in ms"),
+    .end  = arg_end(3)
+};
+
+static void system_restart_task(void *arg) {
+    int tout_ms = arg ? *(int *)arg : 0;
+    if (tout_ms) {
+        ESP_LOGW(TAG, "Will restart in %ums ...", ABS(tout_ms));
+        msleep(ABS(tout_ms));
+    }
+    if (tout_ms < 0) {
+        esp_system_abort("Manually shutdown");
+    } else {
+        esp_restart();
+    }
+}
+
+static esp_err_t system_restart(int argc, char **argv) {
+    static TaskHandle_t task = NULL;
+    static int end_ms, tout_ms;
+    ARG_PARSE(argc, argv, &system_restart_args);
+    if (system_restart_args.cxel->count) {
+        if (task) puts("Restart cancelled");
+        TRYNULL(task, vTaskDelete);
+    } else if (task) {
+        printf("Restart pending: %.0fms", end_ms - get_timestamp(0) * 1e3);
+    } else {
+        tout_ms = ARG_INT(system_restart_args.tout, 0);
+        end_ms = (int)(get_timestamp(0) * 1e3) + tout_ms;
+        if (system_restart_args.halt->count) tout_ms = -tout_ms;
+        xTaskCreate(system_restart_task, "restart", 4096, &tout_ms, 99, &task);
+        if (!task) system_restart_task(NULL);
+    }
+    return ESP_OK;
+}
 #endif
 
 #ifdef CONSOLE_SYSTEM_SLEEP
@@ -247,7 +292,7 @@ static int system_update(int argc, char **argv) {
 static void register_system() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_SYSTEM_RESTART
-        ESP_CMD(system, restart, "Software reset of ESP32"),
+        ESP_CMD_ARG(system, restart, "Software reset of ESP32"),
 #endif
 #ifdef CONSOLE_SYSTEM_SLEEP
         ESP_CMD_ARG(system, sleep, "Turn ESP32 into light/deep sleep mode"),
@@ -471,43 +516,39 @@ static struct {
     struct arg_lit *hex;
     struct arg_end *end;
 } driver_i2c_args = {
-    .bus = arg_int1(
-        NULL, NULL,
-        "<"
-#   if defined(CONFIG_USE_I2C1) && CONFIG_I2C_NUM > 1
-        "1|"
+#   ifndef CONFIG_USE_I2C1
+    .bus = arg_int0(NULL, NULL, "<" STR(CONFIG_I2C_NUM) ">", "I2C bus"),
+#   elif CONFIG_I2C_NUM > 1
+    .bus = arg_int1(NULL, NULL, "<1|" STR(CONFIG_I2C_NUM) ">", "I2C bus"),
+#   else
+    .bus = arg_int1(NULL, NULL, "<" STR(CONFIG_I2C_NUM) "|1>", "I2C bus"),
 #   endif
-        STR(CONFIG_I2C_NUM)
-#   if defined(CONFIG_USE_I2C1) && CONFIG_I2C_NUM < 1
-        "|1"
-#   endif
-        ">", "I2C bus number"
-    ),
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
     .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "register value"),
-    .len = arg_int0(NULL, "len", "<num>", "read specified length of registers"),
+    .len = arg_int0(NULL, "len", "<uint8>", "read specified length of regs"),
     .hex = arg_lit0(NULL, "word", "read/write in word (16-bit) mode"),
     .end = arg_end(6)
 };
 
 static int driver_i2c(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_i2c_args);
-    int bus = driver_i2c_args.bus->ival[0];
+    int bus = ARG_INT(driver_i2c_args.bus, CONFIG_I2C_NUM);
+    int addr = ARG_INT(driver_i2c_args.addr, -1);
     if (0 > bus || bus > 1) {
         printf("Invalid I2C bus number: %d\n", bus);
         return ESP_ERR_INVALID_ARG;
     }
-    if (!driver_i2c_args.addr->count) {
-        i2c_detect(bus);
-        return ESP_OK;
-    }
-    uint8_t addr = driver_i2c_args.addr->ival[0];
     if (addr > 0x7F) {
         printf("Invalid I2C address: 0x%02X\n", addr);
         return ESP_ERR_INVALID_ARG;
     }
+    if (addr < 0) {
+        i2c_detect(bus);
+        return ESP_OK;
+    }
     uint8_t reg = ARG_INT(driver_i2c_args.reg, 0);
+    uint8_t len = ARG_INT(driver_i2c_args.len, 0);
     if (driver_i2c_args.val->count) {
         if (driver_i2c_args.hex->count) {
             uint16_t val = driver_i2c_args.val->ival[0];
@@ -522,16 +563,33 @@ static int driver_i2c(int argc, char **argv) {
         uint16_t val;
         if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
         printf("I2C %d-%02X REG 0x%02X = %04X\n", bus, addr, reg, val);
-    } else if (!driver_i2c_args.len->count) {
+    } else if (!len) {
         uint8_t val;
         if (( err = smbus_read_byte(bus, addr, reg, &val) )) return err;
         printf("I2C %d-%02X REG 0x%02X = %02X\n", bus, addr, reg, val);
     } else {
-        err = smbus_dump(bus, addr, reg, driver_i2c_args.len->ival[0]);
+        err = smbus_dump(bus, addr, reg, len);
     }
     return err;
 }
 #endif // CONSOLE_DRIVER_I2C
+
+#ifdef CONSOLE_DRIVER_SCN
+static struct {
+    struct arg_int *bar;
+    struct arg_end *end;
+} driver_scn_args = {
+    .bar = arg_int0("p", NULL, "<0-100>", "draw progress bar on screen"),
+    .end = arg_end(2)
+};
+
+static int driver_scn(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &driver_scn_args);
+    int bar = ARG_INT(driver_scn_args.bar, -1);
+    if (bar >= 0) return scn_progbar(CONS(bar, 0, 100));
+    return ESP_OK;
+}
+#endif // CONSOLE_DRIVER_SCN
 
 #ifdef CONSOLE_DRIVER_ALS
 static struct {
@@ -548,10 +606,10 @@ static int driver_als(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_als_args);
     static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
     static const char *choices = "0123HVA", *c;
-    const char *method = ARG_STR(driver_als_args.rlt, "");
-    int index = ARG_INT(driver_als_args.idx, -1);
+    const char *method = ARG_STR(driver_als_args.rlt, NULL);
+    int idx = ARG_INT(driver_als_args.idx, -1);
     esp_err_t err = ESP_OK;
-    if (driver_als_args.rlt->count) {
+    if (method) {
         if (!( c = strchr(choices, method[0]) )) {
             printf("Invalid tracking method: %s\n", method);
             return ESP_ERR_INVALID_ARG;
@@ -567,7 +625,7 @@ static int driver_als(int argc, char **argv) {
     } else {
         gy39_data_t dat;
         if (!( err = gy39_measure(&dat) ))
-            printf("GY39 %.2f lux, %.2f degC, %.2f Pa, %.2f %%, %.2f m\n",
+            printf("GY39 %.2f lux, %.2f degC, %.3f kPa, %.2f %%, %.2f m\n",
                     dat.brightness, dat.temperature,
                     dat.atmosphere, dat.humidity, dat.altitude);
     }
@@ -590,19 +648,19 @@ static int driver_adc(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_adc_args);
     if (!driver_adc_args.tout->count) {
         printf("ADC value: %4umV\n", adc_read());
-    } else {
-        uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.tdly, 500), 10, 1000);
-        uint32_t tout_ms = driver_adc_args.tout->ival[0];
-        while (tout_ms >= intv_ms) {
-            fprintf(stderr, "\rADC value: %4umV (remain %6ds)",
-                    adc_read(), tout_ms / 1000);
-            fflush(stderr);
-            msleep(intv_ms);
-            tout_ms -= intv_ms;
-        }
-        fputc('\n', stderr);
-        fputc('\n', stdout);
+        return ESP_OK;
     }
+    uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.intv, 500), 10, 1000);
+    uint32_t tout_ms = driver_adc_args.tout->ival[0];
+    while (tout_ms >= intv_ms) {
+        fprintf(stderr, "\rADC value: %4umV (remain %6ds)",
+                adc_read(), tout_ms / 1000);
+        fflush(stderr);
+        msleep(intv_ms);
+        tout_ms -= intv_ms;
+    }
+    fputc('\n', stderr);
+    fputc('\n', stdout);
     return ESP_OK;
 }
 #endif
@@ -617,7 +675,7 @@ static struct {
 } driver_pwm_args = {
     .hdeg = arg_int0("y", NULL, "<0-180>", "yaw degree"),
     .vdeg = arg_int0("p", NULL, "<0-160>", "pitch degree"),
-    .freq = arg_int0("f", NULL, "<1-20000>", "tone frequency"),
+    .freq = arg_int0("f", NULL, "<0-5000>", "tone frequency"),
     .pcnt = arg_int0("l", NULL, "<0-100>", "tone loudness (percentage)"),
     .end  = arg_end(4)
 };
@@ -626,11 +684,11 @@ static int driver_pwm(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_pwm_args);
     int hdeg = ARG_INT(driver_pwm_args.hdeg, -1),
         vdeg = ARG_INT(driver_pwm_args.vdeg, -1),
-        pcnt = ARG_INT(driver_pwm_args.pcnt, -1);
-    uint32_t freq = ARG_INT(driver_pwm_args.freq, -1);
+        pcnt = ARG_INT(driver_pwm_args.pcnt, -1),
+        freq = ARG_INT(driver_pwm_args.freq, -1);
     if (hdeg >= 0 || vdeg >= 0)
         return pwm_set_degree(hdeg, vdeg);
-    if (freq != (uint32_t)-1 || pent >= 0)
+    if (freq >= 0 || pcnt >= 0)
         return pwm_set_tone(freq, pcnt);
     esp_err_t err = ESP_OK;
     if (!( err = pwm_get_degree(&hdeg, &vdeg) ))
@@ -654,6 +712,9 @@ static void register_driver() {
 #endif
 #ifdef CONSOLE_DRIVER_I2C
         ESP_CMD_ARG(driver, i2c, "Detect alive I2C slaves on the bus line"),
+#endif
+#ifdef CONSOLE_DRIVER_SCN
+        ESP_CMD_ARG(driver, scn, "Control screen drawing"),
 #endif
 #ifdef CONSOLE_DRIVER_ALS
         ESP_CMD_ARG(driver, als, "Get ALS sensor values and light tracking"),

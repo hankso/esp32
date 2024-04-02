@@ -876,3 +876,8 @@ esp_err_t socket_command() {
     // TODO: socket
     return ESP_ERR_NOT_SUPPORTED;
 }
+
+esp_err_t sntp_command() {
+    // TODO: sntp
+    return ESP_ERR_NOT_SUPPORTED;
+}

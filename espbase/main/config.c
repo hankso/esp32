@@ -10,6 +10,7 @@
 #include "cJSON.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "esp_ota_ops.h"
 #include "esp_partition.h"
 
 #define NAMESPACE_INFO "info"
@@ -47,21 +48,9 @@ config_t Config = {
         .PROMPT    = "esp32> ",
     },
     .info = {
-#ifdef PROJECT_NAME
-        .NAME  = PROJECT_NAME,
-#else
-        .NAME  = "",
-#endif
-#ifdef PROJECT_VERSION
-        .VER   = PROJECT_VERSION,
-#else
-        .VER   = "",
-#endif
-#ifdef CHIP_UID
-        .UID   = CHIP_UID,
-#else
-        .UID   = "",
-#endif
+        .NAME      = "",
+        .VER       = "",
+        .UID       = "",
     }
 };
 
@@ -105,8 +94,9 @@ static config_entry_t rwlst[] = {       // read/write entries
 };
 
 static config_entry_t rolst[] = {       // readonly entries
-    {"uid",  &Config.info.UID,  NULL},
     {"name", &Config.info.NAME, NULL},
+    {"ver",  &Config.info.VER,  NULL},
+    {"uid",  &Config.info.UID,  NULL},
 };
 
 static uint16_t rwlen = LEN(rwlst);
@@ -522,27 +512,23 @@ void config_initialize() {
     esp_err_t err;
     config_nvs_init();
 
-    // load readonly values
-    if (config_nvs_open(NAMESPACE_INFO, true) == ESP_OK) {
+    // startup times counter test
+    if (config_nvs_open(NAMESPACE_INFO, false) == ESP_OK) {
+        uint32_t counter = 0;
+        if (( err = nvs_get_u32(ctx.handle, "counter", &counter) ))
+            ESP_LOGE(TAG, "get u32 `counter` fail: %s", esp_err_to_name(err));
+        counter++;
+        ESP_LOGI(TAG, "Current run times: %u", counter);
+        if (( err = nvs_set_u32(ctx.handle, "counter", counter) ))
+            ESP_LOGE(TAG, "set u32 `counter` fail: %s", esp_err_to_name(err));
+        const esp_app_desc_t *desc = esp_ota_get_app_description();
+        Config.info.NAME = desc->project_name;
+        Config.info.VER = desc->version;
         LOOPN(i, LEN(rolst)) {
             if (( err = nvs_load_str(rolst + i) )) {
                 ESP_LOGD(TAG, "get nvs `%s` failed: %s",
                         rolst[i].key, esp_err_to_name(err));
             }
-        }
-        config_nvs_close();
-    }
-
-    // startup times counter test
-    if (config_nvs_open(NAMESPACE_INFO, false) == ESP_OK) {
-        uint32_t counter = 0;
-        if (( err = nvs_get_u32(ctx.handle, "counter", &counter) )) {
-            ESP_LOGE(TAG, "get u32 `counter` fail: %s", esp_err_to_name(err));
-        }
-        counter++;
-        ESP_LOGI(TAG, "Current run times: %u", counter);
-        if (( err = nvs_set_u32(ctx.handle, "counter", counter) )) {
-            ESP_LOGE(TAG, "set u32 `counter` fail: %s", esp_err_to_name(err));
         }
         config_nvs_close();
     }

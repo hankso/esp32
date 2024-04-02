@@ -47,8 +47,8 @@ typedef struct config_application_t {
 
 // Information is readonly after initialization
 typedef struct config_information_t {
-    const char * NAME;      // Program name (PROJECT_NAME if defined)
-    const char * VER;       // Program version (PROJECT_VER if defined)
+    const char * NAME;      // Program name
+    const char * VER;       // Program version
     const char * UID;       // Unique serial number
 } config_info_t;
 

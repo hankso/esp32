@@ -14,8 +14,11 @@
 #include "config.h"
 #include "server.h"
 
+#include "esp_system.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 void setup() {
     driver_initialize();
@@ -29,11 +32,10 @@ void setup() {
     led_set_blink(0);
     server_loop_begin();    // Core 0 (i.e. Pro CPU)
     console_loop_begin(1);  // Core 1 (i.e. App CPU)
+    esp_register_shutdown_handler(shutdown);
 }
 
 void loop() {
-    static uint8_t count = 0;
-    scn_progbar((count += 2) / 255.0 * 100);
     twdt_feed();
     asleep(500);
 }

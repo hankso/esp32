@@ -240,7 +240,7 @@ menu "ESP Base Configuration"
             range 1 10 if IDF_TARGET_ESP32S3
             range 0 48
             default 2 if IDF_TARGET_ESP32S3
-            default 35
+            default 36
     endif
 
     menuconfig USE_BTN
@@ -251,7 +251,7 @@ menu "ESP Base Configuration"
             int "Button pin number"
             range 0 48
             default 4 if IDF_TARGET_ESP32S3
-            default 36
+            default 35
 
         config BTN_ACTIVE_LOW
             bool "Button active low"
@@ -346,6 +346,7 @@ menu "ESP Base Configuration"
 
     config VLX_SENSOR
         bool "Enable VLX distance measurement input"
+        depends on USE_I2C
         default n
         help
             Enable vlx_probe function. Add about 5.0KB to firmware.
