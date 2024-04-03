@@ -4,6 +4,45 @@
  * Create: 2020-05-15 19:43:15
  */
 
+#pragma once
+
+#include "globals.h"
+
+#include "diskio_impl.h"            // for FF_DRV_NOT_USED
+#include "wear_levelling.h"         // for wl_handle_t
+#include "driver/sdmmc_types.h"     // for sdmmc_card_t
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef enum {
+    FILESYS_FLASH,              // if defined CONFIG_USE_FFS
+    FILESYS_SDCARD,             // if defined CONFIG_USE_SDFS
+} filesys_type_t;
+
+typedef struct {
+    uint64_t used;
+    uint64_t total;
+    size_t blkcnt;
+    size_t blksize;
+    int pdrv;                   // available if FAT Flash or FAT SDCard
+    union {
+        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
+        sdmmc_card_t *card;
+    };
+    filesys_type_t type;
+} filesys_info_t;
+
+void filesys_initialize();
+bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
+bool filesys_release(filesys_type_t);                 // give write lock
+bool filesys_get_info(filesys_type_t, filesys_info_t *);
+
+#ifdef __cplusplus
+}
+#endif
+
 /* Framework EspAsyncWebServer depends on Arduino FS libraries, so we have to
  * implement our file system based on Arduino FS instead of native ESP32 VFS.
  *
@@ -40,50 +79,12 @@
  * Note: File system adds about 108 KB to the final firmware.
  */
 
-#pragma once
-
-#include "globals.h"
+#ifdef __cplusplus
 
 #include "dirent.h"                 // for DIR
-#include "wear_levelling.h"         // for wl_handle_t
-#include "diskio_impl.h"            // for FF_DRV_NOT_USED
 #include "sys/stat.h"               // for struct stat
-#include "driver/sdmmc_types.h"     // for sdmmc_card_t
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-typedef enum {
-    FILESYS_FLASH,              // if defined CONFIG_USE_FFS
-    FILESYS_SDCARD,             // if defined CONFIG_USE_SDFS
-} filesys_type_t;
-
-typedef struct {
-    uint64_t used;
-    uint64_t total;
-    size_t blkcnt;
-    size_t blksize;
-    int pdrv;                   // available if FAT Flash or FAT SDCard
-    union {
-        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
-        sdmmc_card_t *card;
-    };
-    filesys_type_t type;
-} filesys_info_t;
-
-void filesys_initialize();
-bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
-bool filesys_release(filesys_type_t);                 // give write lock
-bool filesys_get_info(filesys_type_t, filesys_info_t *);
-
-#ifdef __cplusplus
-}
-#endif
-
-#ifdef __cplusplus
-
-#include <FS.h>
+#include <FS.h>                     // arduino-esp32/libraries/FS
 #include <FSImpl.h>
 
 namespace fs {

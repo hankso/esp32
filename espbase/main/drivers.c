@@ -788,7 +788,9 @@ static esp_lcd_panel_handle_t scn;
 static esp_lcd_panel_io_handle_t scn_io;
 #   if defined(WITH_LVGL)
 static lv_disp_t *scn_disp;
-void lvgl_ui(lv_disp_t *disp); // implemented in scngui.c
+void lvgl_ui_label(lv_disp_t *); // implemented in scngui.c
+void lvgl_ui_image(lv_disp_t *);
+bool lvgl_ui_progbar(uint8_t);
 #   endif
 #endif
 
@@ -858,7 +860,7 @@ static void scn_initialize() {
     if (!err && ( scn_disp = lvgl_port_add_disp(&disp_conf) )) {
         lv_disp_set_rotation(scn_disp, LV_DISP_ROT_180);
         if (lvgl_port_lock(0)) {
-            lvgl_ui(scn_disp);
+            lvgl_ui_label(scn_disp);
             lvgl_port_unlock();
         }
     } else if (!err) { err = ESP_FAIL; }
@@ -896,22 +898,22 @@ esp_err_t scn_progbar(uint8_t pcnt) {
 #define YS ( SCREEN_V_RES * 7 / 16 )
 #define YE ( SCREEN_V_RES * 9 / 16 )
     if (!scn_probed) return ESP_ERR_NOT_FOUND;
-#ifdef WITH_LVGL
-    return ESP_ERR_INVALID_STATE;
-#endif
     esp_err_t err = ESP_OK;
-    int x = XS + (XE - XS) * pcnt / 100;
-#ifdef WITH_U8G2
+#if defined(WITH_U8G2)
     static char buf[16];
     snprintf(buf, sizeof(buf), "%d %%", pcnt);
+    int x = XS + (XE - XS) * pcnt / 100;
     int middle = MAX(XS, XE + XS - u8g2_GetStrWidth(&scn, buf)) / 2;
     u8g2_ClearBuffer(&scn);
     u8g2_DrawFrame(&scn, XS, YS, XE - XS, YE - YS);
     u8g2_DrawBox(&scn, XS, YS, x, YE - YS);
     u8g2_DrawStr(&scn, middle, YE + 10, buf);
     u8g2_SendBuffer(&scn);
+#elif defined(WITH_LVGL)
+    err = lvgl_ui_progbar(pcnt) ? ESP_OK : ESP_ERR_NO_MEM;
 #else
     static uint8_t cbuf[(XE - XS) * (YE - YS) * SCREEN_DEPTH / 8];
+    int x = XS + (XE - XS) * pcnt / 100;
     if (!err && x > XS) {
         memset(cbuf, 0xFF, sizeof(cbuf)); // foreground
         err = esp_lcd_panel_draw_bitmap(scn, XS, YS, x, YE, cbuf);
