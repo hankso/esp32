@@ -5,7 +5,15 @@
  */
 
 #include "timesync.h"
+
 #include <sys/time.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 /* Time Sync timestamp helper functions */
 
@@ -111,20 +119,25 @@ struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout) {
  * See more about specification at https://github.com/hankso/timesync
  */
 
-#if 0
-#ifdef TIMESYNC_THREAD_SAFE
+static SemaphoreHandle_t lock = NULL;
 
-static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
+static void lock_acquire() { if (lock) xSemaphoreTake(lock, portMAX_DELAY); }
+static void lock_release() { if (lock) xSemaphoreGive(lock); }
 
-void lock_acquire() { pthread_mutex_lock(&lock); }
-void lock_release() { pthread_mutex_unlock(&lock); }
+static void log_error(const char *tag, const int sock, const char *msg) {
+    if (sock < 0) {
+        ESP_LOGE(tag, "%s errno=%d %s", msg ?: "", errno, strerror(errno));
+    } else {
+        ESP_LOGE(tag, "%s sock=%d errno=%d %s",
+                 msg ?: "", sock, errno, strerror(errno));
+    }
+}
 
-#else
-
-void lock_acquire() {}
-void lock_release() {}
-
-#endif // TIMESYNC_THREAD_SAFE
+// Convert timesync packtype to bytearray and vice versa
+static union d2b_t {
+    TIMESYNC_PACKTYPE d;
+    char b[sizeof(TIMESYNC_PACKTYPE)];
+} ts_convert;
 
 typedef struct {
     double offset; // timestamp offset between server and client
@@ -133,11 +146,12 @@ typedef struct {
 } timesync_result_t;
 
 typedef struct {
-    timesync_result_t results[3];   // latest three results
-    uint32_t count; // synchronization timescounter
+    int fd;         // client's file descriptor
     double offset;  // average value: sum(offsets) / count
     double rtript;  // round-trip transfer time
-    int fd;         // client's file descriptor
+    uint32_t count; // synchronization times counter
+    timesync_result_t results[3];   // latest three results
+    char addr[INET_ADDRSTRLEN + 6]; // socket remote address
 } timesync_client_t;
 
 typedef struct {
@@ -145,148 +159,146 @@ typedef struct {
     uint16_t port;
 } timesync_addr_t;
 
-static int server = 0;
-static epoll_t poller = epoll_failed;
-static timesync_client_t *clients;
-static const uint16_t nclient = TIMESYNC_CLIENTS_NUM;
-
-static int close_socket(int *fd) {
-    if (*fd <= 0) return 1;
-    close(*fd);
-    lock_acquire();
-    for (uint8_t i = 0; clients && i < nclient; i++) {
-        if (clients[i].fd != *fd) continue;
-        epoll_ctl(poller, EPOLL_CTL_DEL, *fd, NULL);
-        memset(&clients[i], 0, sizeof(timesync_client_t));
-    }
-    lock_release();
-    *fd = 0;
-    return 0;
-}
-
 const char * getsockaddr(int fd) {
-    static struct sockaddr_in raddr;
-    static socklen_t raddrlen = sizeof(raddr);
     static char ret[INET_ADDRSTRLEN + 6];
-    if ( getpeername(fd, (struct sockaddr *)&raddr, &raddrlen) == -1 ) return "unknown";
-    snprintf(ret, INET_ADDRSTRLEN + 6, "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
+    static struct sockaddr_in raddr;
+    static socklen_t len = sizeof(raddr);
+    if (getpeername(fd, (struct sockaddr *)&raddr, &len) < 0) return "unknown";
+    sprintf(ret, "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
     return ret;
 }
 
-void clients_info(int fd, int verbose) {
-    puts("FD Counts   AvrTimeOffset(s) RoundTrip(ms)       SyncTime(s)");
-    for (uint8_t i = 0; i < nclient; i++) {
-        if (fd != -1 && clients[i].fd != fd) continue;
-        if (clients[i].fd <= 0) {
-            puts("-- Client not using");
-        } else {
-            printf("%2d %6u %18.6f %13.3f %18.6f\n",
-                   clients[i].fd, clients[i].count,
-                   clients[i].offset, clients[i].rtript * TIMESTAMP_MS,
-                   clients[i].results[(clients[i].count - 1) % 3].sync);
+static const char * TSS = "TSS";
+static struct pollfd pollfds[TIMESYNC_CLIENTS_NUM + 1];
+static timesync_client_t clients[TIMESYNC_CLIENTS_NUM];
+static int server = -1;
+
+void timesync_server_status() {
+    bool header = false;
+    LOOPN(i, TIMESYNC_CLIENTS_NUM) {
+        if (clients[i].fd < 0) continue;
+        if (!header) {
+            printf("FD Counts %18s %18s %13s\n",
+                   "AvrTimeOffset(s)", "SyncTime(s)", "RoundTrip(ms)");
+            header = true;
         }
-        if (verbose) {
-            uint8_t nresult = clients[i].count < 3 ? clients[i].count : 3;
-            while (nresult--) {
-                uint32_t count = clients[i].count - nresult - 1;
-                timesync_result_t *rst = &clients[i].results[count % 3];
-                printf(" > ID %3u %18.6f %13s %18.6f\n",
-                       count + 1, rst->offset, "", rst->sync);
-            }
+        printf("%2d %06u %18.6f %18.6f %13.3f\n",
+               clients[i].fd, clients[i].count, clients[i].offset,
+               clients[i].results[(clients[i].count - 1) % 3].sync,
+               clients[i].rtript * TIMESTAMP_MS);
+        LOOPND(j, MIN(clients[i].count, 3)) {
+            uint32_t cnt = clients[i].count - j - 1;
+            timesync_result_t *rst = &clients[i].results[cnt % 3];
+            printf(" > %06u %18.6f %18.6f\n", cnt + 1, rst->offset, rst->sync);
         }
     }
 }
 
-// Convert double to bytearray and vice versa
-static union d2b_t {
-    TIMESYNC_PACKTYPE d;
-    char b[sizeof(TIMESYNC_PACKTYPE)];
-} ts_convert;
+static int timesync_server_find(int fd) {
+    LOOPN(i, TIMESYNC_CLIENTS_NUM) { if (clients[i].fd == fd) return i; }
+    return -1;
+}
 
-/* TS Server Side initialization: socket() => bind() => listen() => epoll() */
+/* TS Server Side new client
+ *   - setsockopt(NODELAY | SNDTIMEO)
+ *   - register to pollfds
+ */
+static void timesync_server_add(int fd) {
+    static int nodelay = 1;
+    static struct timeval timeout = { .tv_sec = 0, .tv_usec = 500 }; // 0.5ms
+    static size_t tlen = sizeof(timeout), nlen = sizeof(nodelay);
+    lock_acquire();
+    LOOPN(i, TIMESYNC_CLIENTS_NUM) {
+        if (clients[i].fd == fd || clients[i].fd > 0) continue;
+        if (
+            setsockopt(fd, SOL_SOCKET,  SO_SNDTIMEO, (void *)&timeout, tlen) ||
+            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&nodelay, nlen)
+        ) break;
+        strcpy(clients[i].addr, getsockaddr(fd));
+        ESP_LOGI(TSS, "client %s connected", clients[i].addr);
+        clients[i].fd = pollfds[i].fd = fd;
+        pollfds[i].events = POLLIN;
+        fd = 0; // added
+        break;
+    }
+    lock_release();
+    if (fd) { // not added
+        close(fd);
+        ESP_LOGW(TSS, "client %s rejected", getsockaddr(fd));
+    }
+}
+
+/* TS Server Side close socket
+ *   - close() socket
+ *   - clean struct pollfd
+ *   - set fd to -1
+ */
+static int timesync_server_close(int *fd) {
+    if (*fd < 0) return 1;
+    lock_acquire();
+    int idx = timesync_server_find(*fd);
+    if (idx != -1) pollfds[idx].fd = clients[idx].fd = -1;
+    close(*fd);
+    *fd = -1;
+    lock_release();
+    return 0;
+}
+
+/* TS Server Side initialization
+ *   - create socket()
+ *   - bind() as server
+ *   - listen() for clients
+ *   - prepare for poll()
+ */
 int timesync_server_init(uint16_t port) {
-    ASSERT_WINSOCK();
-    puts("[TSS] init TimeSync Server");
-    if (!( clients = (timesync_client_t *)calloc(nclient, sizeof(timesync_client_t)) )) {
-        perror("[TSS] calloc");
+#ifdef TIMESYNC_THREAD_SAFE
+    if (!lock) lock = xSemaphoreCreateBinary();
+#endif
+    if (server >= 0) return 0;
+    ESP_LOGD(TSS, "TimeSync Server init");
+    if (( server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP) ) == -1) {
+        log_error(TSS, server, "socket");
         return -1;
     }
-    if (( server = socket(AF_INET, SOCK_STREAM, 0) ) == -1) {
-        perror("[TSS] socket");
-        free(clients);
-        clients = NULL;
-        return -1;
-    }
+    LOOPN(i, TIMESYNC_CLIENTS_NUM) { clients[i].fd = pollfds[i].fd = -1; }
+    pollfds[TIMESYNC_CLIENTS_NUM].events = POLLIN;
+    pollfds[TIMESYNC_CLIENTS_NUM].fd = server;
     struct sockaddr_in laddr = {
         .sin_family = AF_INET,
         .sin_port = htons(port),
         .sin_addr = { .s_addr = htonl(INADDR_ANY) }
     };
-    struct epoll_event ev = {
-        .events = EPOLLIN,
-        .data = { .fd = server }
-    };
-    printf("[TSS] listening on port %d\n", ntohs(laddr.sin_port));
-    if        (bind(server, (struct sockaddr *)&laddr, sizeof(laddr))) {
-        perror("[TSS] bind");
+    if (bind(server, (struct sockaddr *)&laddr, sizeof(laddr))) {
+        log_error(TSS, server, "bind");
     } else if (listen(server, 1)) {
-        perror("[TSS] listen");
-    } else if (( poller = epoll_create(nclient + 1) ) == epoll_failed) {
-        perror("[TSS] epoll_create");
-    } else if (epoll_ctl(poller, EPOLL_CTL_ADD, server, &ev)) {
-        perror("[TSS] epoll_ctl_add");
-    } else return 0;
-    close_socket(&server);
-    free(clients);
-    clients = NULL;
+        log_error(TSS, server, "listen");
+    } else {
+        ESP_LOGI(TSS, "listening on port %d", ntohs(laddr.sin_port));
+        return 0;
+    }
+    timesync_server_close(&server);
     return -1;
 }
 
-/* TS Server Side new client: setsockopt(NODELAY | SNDTIMEO) => epoll_ctl() => welcome() */
-static void timesync_server_addclient(int fd) {
-    static int nodelay = 1;
-    static struct timeval timeout = { .tv_sec = 0, .tv_usec = 500 };  // default 0.5ms
-    static size_t tlen = sizeof(timeout), nlen = sizeof(nodelay);
-    struct epoll_event ev = { .events = EPOLLIN, .data = { .fd = fd } };
-    lock_acquire();
-    for (uint8_t i = 0; clients && i < nclient; i++) {
-        if (clients[i].fd == fd || clients[i].fd > 0)
-            continue;  // space already occupied
-        if (
-            setsockopt(fd, SOL_SOCKET,  SO_SNDTIMEO, (void *)&timeout, tlen) ||
-            setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&nodelay, nlen) ||
-            epoll_ctl(poller, EPOLL_CTL_ADD, fd, &ev)
-        ) break;
-        printf("[TSS] client %s connected\n", getsockaddr(fd));
-        clients[i].fd = fd;
-        fd = 0;
-        break;
-    }
-    lock_release();
-    if (fd) {
-        close(fd);
-        printf("[TSS] client %s rejected\n", getsockaddr(fd));
-    }
-}
-
-/* TS Server Side protocol: timesync => timeack(check timedone) */
-static int timesync_server_handle(timesync_client_t *client,
-                                  char *rcvbuf, size_t msglen,
-                                  double ts_recv)
-{
+/* TS Server Side protocol
+ *   - wait for timeinit
+ *   - reply with timesync
+ *   - valid on timedone
+ *   - calculate time offset
+ */
+static int timesync_server_handle(
+    timesync_client_t *client, char *rcvbuf, size_t msglen, double ts_recv
+) {
     static size_t packlen = sizeof(TIMESYNC_PACKTYPE);
-    static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = {
-        't', 'i', 'm', 'e', 's', 'y', 'n', 'c', 0
-    };
-    const char *raddrs = getsockaddr(client->fd);
+    static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = "timesync";
     timesync_result_t *result;
 
     lock_acquire();
-    rcvbuf[msglen] = '\0';
     // parse message according to TimeSync Protocol
     if (!strncmp("timeinit", rcvbuf, 8)) {
         double ts_send = get_timestamp(0), ts_sync = (ts_recv + ts_send) / 2;
-        ts_convert.d = ts_sync; memcpy(sndbuf + 8, ts_convert.b, packlen);
+        ts_convert.d = ts_sync;
+        memcpy(sndbuf + 8, ts_convert.b, packlen);
         // respond to client as early as possible after ts_send recorded
         if (write(client->fd, sndbuf, 8 + packlen) != -1) {
             // save info for next loop
@@ -295,8 +307,9 @@ static int timesync_server_handle(timesync_client_t *client,
             result->send = ts_send;
         }
     } else if (
-        !strncmp("timedone", rcvbuf, 8) &&
-        (msglen >= (8 + 2 * packlen)) && client->count
+        !strncmp("timedone", rcvbuf, 8)
+        && (msglen >= (8 + 2 * packlen))
+        && client->count
     ) {
         memcpy(ts_convert.b, rcvbuf + 8          , packlen);
         double ts_client_sync   = ts_convert.d;
@@ -304,11 +317,10 @@ static int timesync_server_handle(timesync_client_t *client,
         double ts_client_offset = ts_convert.d;
         result = &client->results[(client->count - 1) % 3];
         result->offset = (ts_recv + result->send) / 2 - ts_client_sync;
-        // Validation of time offset:
-        //    values calculated by server and client should approximately equal
+        // values calculated by server and client should approximately equal
         if (ABS(result->offset - ts_client_offset) > 0.1) {
-            printf("[TSS] %s unmatched offset. S: %f, C: %f\n",
-                    raddrs, result->offset, ts_client_offset);
+            ESP_LOGW(TSS, "%s unmatched offset. S: %f, C: %f",
+                    client->addr, result->offset, ts_client_offset);
             result->offset = 0;
         } else if (client->count == 1) {
             client->offset = result->offset;
@@ -318,166 +330,198 @@ static int timesync_server_handle(timesync_client_t *client,
             client->rtript = (client->rtript + ts_recv - result->send) / 2;
         }
     } else {
-        printf("[TSS] client %s message: `%s`\n", raddrs, rcvbuf);
+        rcvbuf[msglen] = '\0';
+        ESP_LOGI(TSS, "client %s message: `%s`", client->addr, rcvbuf);
     }
     lock_release();
     return 0;
 }
 
 /* TS Server Side mainloop:
- *   - Poll on server socket and client sockets
- *   - Handle new clients
- *   - Handle client's message
- *   - Handle when clients leave
+ *   - poll on server socket and client sockets
+ *   - handle new clients
+ *   - handle client's message
+ *   - handle when clients leave
  */
 int timesync_server_loop(uint16_t ms) {
-    static struct epoll_event events[TIMESYNC_CLIENTS_NUM + 2];
-    static const uint8_t nevent = TIMESYNC_CLIENTS_NUM + 2;
     static char rcvbuf[TIMESYNC_RCVBUF_SIZE + 1];
-    int fd, idx, nfds, error = 0, msglen;
+    int rc, fd, idx, msglen;
 
-    if (poller == epoll_failed || server <= 0)
-        return msleep(ms);
-    if (( nfds = epoll_wait(poller, events, nevent, ms) ) <= 0)
+    if (server < 0) {
+        msleep(ms);
         return -1;
+    }
+    if (( rc = poll(pollfds, TIMESYNC_CLIENTS_NUM + 1, ms) ) < 0) {
+        log_error(TSS, server, "poll");
+        return -1;
+    } else if (!rc) {
+        return 0; // timeout
+    }
 
-    double ts_recv = get_timestamp(0);
-    for (int i = 0; !error && i < nfds; i++) {
-        if (( fd = events[i].data.fd ) == server) {
-            if (( fd = accept(server, NULL, NULL) ))
-                timesync_server_addclient(fd);
+    double ts_recv = get_timestamp(0); // right after poll returned
+
+    LOOPN(i, TIMESYNC_CLIENTS_NUM + 1) {
+        if (!pollfds[i].revents) continue;
+        if (( fd = pollfds[i].fd ) == server) {
+            if (( fd = accept(server, NULL, NULL) ) < 0) {
+                log_error(TSS, server, "accept");
+                return 1;
+            } else {
+                timesync_server_add(fd);
+                continue;
+            }
+        }
+        if (( idx = timesync_server_find(fd) ) < 0) {
+            log_error(TSS, fd, "find"); // this should not happen
+            timesync_server_close(&fd);
             continue;
         }
-        idx = clients ? 0 : nclient;
-        while (idx < nclient && fd != clients[idx].fd) idx++;
-        if (idx == nclient) { // fd not found in clients list
-            printf("[TSS] recv %s message: `%s`\n", getsockaddr(fd), rcvbuf);
-            continue;
-        }
-        if (( msglen = recv(fd, (char *)rcvbuf, TIMESYNC_RCVBUF_SIZE, 0) ) < 0) {
-            error = errno;
-        } else if (msglen) {
-            timesync_server_handle(&clients[idx], rcvbuf, msglen, ts_recv);
+        if (( msglen = recv(fd, rcvbuf, TIMESYNC_RCVBUF_SIZE, 0) ) <= 0) {
+            ESP_LOGI(TSS, "client %s closed", clients[i].addr);
+            timesync_server_close(&clients[idx].fd);
+        } else if (msglen < 8) {
+            rcvbuf[msglen] = '\0';
+            ESP_LOGW(TSS, "client %s message: `%s`", clients[i].addr, rcvbuf);
         } else {
-            printf("[TSS] client %s closed\n", getsockaddr(fd));
-            close_socket(&fd);
+            timesync_server_handle(&clients[idx], rcvbuf, msglen, ts_recv);
         }
     }
-    return error;
+    return 0;
 }
 
 int timesync_server_exit() {
-    if (server <= 0) return 1;
+    if (timesync_server_close(&server)) return 1;
     lock_acquire();
-    for (int i = 0, fd; clients && i < nclient; i++) {
-        if (( fd = clients[i].fd ) <= 0) continue;
-        if ( epoll_ctl(poller, EPOLL_CTL_DEL, fd, NULL) == -1 )
-            perror("epoll_ctl del");
-        shutdown(fd, SHUT_RDWR); close(fd);
+    LOOPN(i, TIMESYNC_CLIENTS_NUM) {
+        if (clients[i].fd < 0) continue;
+        shutdown(clients[i].fd, SHUT_RDWR);
+        close(clients[i].fd);
     }
-    free(clients);
-    clients = NULL;
-    server = close(server);
-    puts("[TSS] exited");
     lock_release();
+    ESP_LOGD(TSS, "TimeSync Server exit");
     return 0;
 }
 
-static timesync_client_t client;
+static const char *TSC = "TSC";
+static timesync_client_t client = { -1 };
 
-/* TS Client Side initialization: socket() => setsockopt(RCVTIMEO) => connect() */
+/* TS Client Side initialization
+ *   - create socket()
+ *   - setsockopt(RCVTIMEO)
+ *   - connect()
+ */
 int timesync_client_init(const char *host, uint16_t port) {
-    ASSERT_WINSOCK();
-    puts("[TSC] init TimeSync Client");
-    int addrlen = INET_ADDRSTRLEN; char address[INET_ADDRSTRLEN];
-    struct sockaddr_in raddr = { .sin_family = AF_INET, .sin_port = htons(port) };
-    struct timeval rcvto = { .tv_sec = 1, .tv_usec = 0 }, sndto = { .tv_sec = 3, .tv_usec = 0 };
-    // validation of host ip address
-    if ( inet_pton(AF_INET, host, &raddr.sin_addr) != 1 ) { puts("inet_pton: Invalid ipaddress"); return 1; }
-    if ( inet_ntop(AF_INET, &(raddr.sin_addr), address, addrlen) == NULL ) { perror("inet_ntop"); return 1; }
-    printf("[TSC] using server %s:%d\n", address, port);
-    if ( (client.fd = socket(AF_INET, SOCK_STREAM, 0)) < 0 ) { perror("socket"); return 1; }
-    if ( setsockopt(client.fd, SOL_SOCKET, SO_SNDTIMEO, (void *)&sndto, sizeof(sndto)) ) goto error;
-    if ( setsockopt(client.fd, SOL_SOCKET, SO_RCVTIMEO, (void *)&rcvto, sizeof(rcvto)) ) goto error;
-    if ( connect(client.fd, (struct sockaddr *)&raddr, sizeof(raddr)) ) { perror("connect"); goto error; }
-    return 0;
-error:
+    if (client.fd >= 0) return 0;
+    ESP_LOGD(TSC, "TimeSync Client init");
+    char address[INET_ADDRSTRLEN];
+    struct sockaddr_in raddr = {
+        .sin_family = AF_INET,
+        .sin_port = htons(port)
+    };
+    if (inet_pton(AF_INET, host, &raddr.sin_addr) != 1) {
+        log_error(TSC, client.fd, "inet_pton");
+        return -1;
+    }
+    if (!inet_ntop(AF_INET, &(raddr.sin_addr), address, sizeof(address))) {
+        log_error(TSC, client.fd, "inet_ntop");
+        return -1;
+    }
+    if (( client.fd = socket(AF_INET, SOCK_STREAM, 0) ) < 0) {
+        log_error(TSC, client.fd, "socket");
+        return -1;
+    }
+    struct timeval
+        rcvto = { .tv_sec = 1, .tv_usec = 0 },
+        sndto = { .tv_sec = 3, .tv_usec = 0 };
+    size_t tlen = sizeof(struct timeval);
+    if (
+        setsockopt(client.fd, SOL_SOCKET, SO_SNDTIMEO, (void *)&sndto, tlen) ||
+        setsockopt(client.fd, SOL_SOCKET, SO_RCVTIMEO, (void *)&rcvto, tlen)
+    ) {
+        log_error(TSC, client.fd, "setsockopt");
+    } else if (connect(client.fd, (struct sockaddr *)&raddr, sizeof(raddr))) {
+        log_error(TSC, client.fd, "connect");
+    } else {
+        strcpy(client.addr, getsockaddr(client.fd));
+        ESP_LOGI(TSC, "using server %s", client.addr);
+        return 0;
+    }
     timesync_client_exit();
-    return 1;
+    return -1;
 }
 
-/* TS Client Side protocol: timeinit => timedone(optional) => timeoffset */
-int timesync_client_sync(uint8_t ack) {
+/* TS Client Side protocol
+ *   - send timeinit
+ *   - wait for timesync
+ *   - send optional timedone optional
+ *   - calculate time offset
+ */
+int timesync_client_sync(double *offset, uint8_t ack) {
     static timesync_result_t *result;
     static int msglen = 0, packlen = sizeof(TIMESYNC_PACKTYPE);
     static char rcvbuf[TIMESYNC_RCVBUF_SIZE];
-    static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = {
-        't', 'i', 'm', 'e', 'i', 'n', 'i', 't', 0
-    };
-    static char ackbuf[8 + sizeof(TIMESYNC_PACKTYPE) * 2] = {
-        't', 'i', 'm', 'e', 'd', 'o', 'n', 'e', 0
-    };
-    if (client.fd <= 0) return 1;
+    static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = "timeinit";
+    static char ackbuf[8 + sizeof(TIMESYNC_PACKTYPE) * 2] = "timedone";
+    if (client.fd < 0) return -1;
     // init timesync request
     double ts_send = get_timestamp(0);
-    ts_convert.d = ts_send; memcpy(sndbuf + 8, ts_convert.b, packlen);
+    ts_convert.d = ts_send;
+    memcpy(sndbuf + 8, ts_convert.b, packlen);
     if (write(client.fd, sndbuf, 8 + packlen) == -1) {
-        perror("timesync server hanged");
-        return 1;
+        log_error(TSC, client.fd, "timesync server hanged");
+        return -1;
     }
     // wait for timesync response
     memset(rcvbuf, 0, msglen > 0 ? msglen : 0);
     msglen = read(client.fd, rcvbuf, TIMESYNC_RCVBUF_SIZE - 1);
     double ts_recv = get_timestamp(0);
     // recv timeout
-    if (msglen < 0) {
-        return 1;
-    } else {
+    if (msglen < 0) return 1;
+    if (msglen < 8 || strncmp(rcvbuf, "timesync", 8)) {
         rcvbuf[msglen] = '\0';
+        ESP_LOGI(TSC, "server message: `%s`", rcvbuf);
+        return 1;
     }
     // parse response to calculate timesync offset
-    if (!strncmp(rcvbuf, "timesync", 8)) {
-        memcpy(ts_convert.b, rcvbuf + 8, packlen); double ts_server_sync = ts_convert.d;
-        result = &client.results[client.count++ % 3];
-        result->sync = (ts_recv + ts_send) / 2;
-        result->offset = ts_server_sync - result->sync;
-        if (client.count == 1) {
-            client.offset = result->offset;
-            client.rtript = ts_recv - ts_send;
-        } else {
-            client.offset = (client.offset + result->offset) / 2;
-            client.rtript = (client.rtript + ts_recv - ts_send) / 2;
-        }
-        if (!ack) {
-            result->send = 0;
-        } else {
-            result->send = get_timestamp(0);
-            ts_convert.d = result->offset; memcpy(ackbuf + 8          , ts_convert.b, packlen);
-            ts_convert.d = result->send;   memcpy(ackbuf + 8 + packlen, ts_convert.b, packlen);
-            if (write(client.fd, ackbuf, 8 + packlen * 2) == -1) { ; }
-        }
+    memcpy(ts_convert.b, rcvbuf + 8, packlen);
+    double ts_server_sync = ts_convert.d;
+    result = &client.results[client.count++ % 3];
+    result->sync = (ts_recv + ts_send) / 2;
+    result->offset = ts_server_sync - result->sync;
+    if (client.count == 1) {
+        client.offset = result->offset;
+        client.rtript = ts_recv - ts_send;
     } else {
-        printf("[TSC] server message: `%s`\n", rcvbuf);
+        client.offset = (client.offset + result->offset) / 2;
+        client.rtript = (client.rtript + ts_recv - ts_send) / 2;
+    }
+    if (offset) *offset = client.offset;
+    if (!ack) return result->send = 0;
+    result->send = get_timestamp(0);
+    ts_convert.d = result->offset;
+    memcpy(ackbuf + 8          , ts_convert.b, packlen);
+    ts_convert.d = result->send;
+    memcpy(ackbuf + 8 + packlen, ts_convert.b, packlen);
+    if (write(client.fd, ackbuf, 8 + packlen * 2) == -1) {
+        log_error(TSC, client.fd, "timesync server hanged");
+        return -1;
     }
     return 0;
 }
 
-double timesync_client_xsync(uint8_t iters) {
-    if (client.fd <= 0) return 0;
-    double avr = 0;
-    while (iters-- > 0) {
-        if (timesync_client_sync(0) != 0) continue;
-        avr = avr ? (avr + client.offset) / 2 : client.offset;
-        msleep((rand() % 250) + 250);  // 250 - 500 ms
+int timesync_client_xsync(double *offset, uint8_t iters) {
+    LOOPN(i, iters - 1) {
+        int rc = timesync_client_sync(offset, 0);
+        if (rc == -1) return rc;
+        if (rc == 0) msleep((rand() % 50) + 50);  // 50 - 100 ms
     }
-    timesync_client_sync(1);
-    return avr;
+    return timesync_client_sync(offset, 1);
 }
 
 int timesync_client_exit() {
-    if (client.fd <= 0) return 1;
-    client.fd = close(client.fd);
-    puts("[TSC] exited");
+    if (client.fd < 0) return 1;
+    close(client.fd);
+    client.fd = -1;
+    ESP_LOGD(TSC, "TimeSync Client exit");
     return 0;
 }
-#endif

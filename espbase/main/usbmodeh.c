@@ -68,10 +68,9 @@ void usbmodeh_status(usbmode_t mode) {
 }
 
 static bool waitBits(EventBits_t bits, uint32_t ms) {
-    if (!ctx.evtgrp) return false;
     // ClearOnExit = true, WaitForAllBits = false
-    return xEventGroupWaitBits(
-        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits;
+    return ctx.evtgrp ? xEventGroupWaitBits(
+        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits : false;
 }
 
 static bool getBits(EventBits_t bits) {

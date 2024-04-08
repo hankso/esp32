@@ -35,8 +35,10 @@
 #define CONSOLE_NET_AP              // 3884 Bytes
 #define CONSOLE_NET_FTM             // 1860 Bytes
 #define CONSOLE_NET_MDNS            // 520 Bytes
-#define CONSOLE_NET_PING            // 21668 Bytes
-#define CONSOLE_NET_IPERF           // 24004 Bytes
+#define CONSOLE_NET_SNTP            // 482 Bytes
+#define CONSOLE_NET_PING            // 5132 Bytes
+#define CONSOLE_NET_IPERF           // 7432 Bytes
+#define CONSOLE_NET_TSYNC           // 7888 Bytes
 
 #ifdef __cplusplus
 extern "C" {

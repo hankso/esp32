@@ -5,25 +5,25 @@
  */
 
 #include "network.h"
+#include "server.h"
 #include "config.h"
+#include "timesync.h"
 
 #include "esp_wifi.h"
 #include "esp_event.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
-
-// For mdns command
-#include "mdns.h"
-// For ping command
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
-#include "ping/ping_sock.h"
-// For iperf command
-#include "iperf.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/event_groups.h"
+
+#include "mdns.h"               // for mdns command
+#include "esp_sntp.h"           // for sntp command
+#include "ping/ping_sock.h"     // for ping command
+#include "iperf.h"              // for iperf command
 
 #ifndef CONFIG_WIFI_CHANNEL
-#define CONFIG_WIFI_CHANNEL 1  // select from [1-13]
+#define CONFIG_WIFI_CHANNEL 1   // select from [1-13]
 #define CONFIG_MAX_STA_CONN 4
 #endif
 
@@ -32,18 +32,22 @@
 #define WIFI_CONNECTED_BIT  BIT0
 #define WIFI_FAILURE_BIT    BIT1
 #define WIFI_DISCONNECT_BIT BIT2
-#define WIFI_SCAN_BLOCK_BIT BIT3
-#define FTM_REPORT_BIT      BIT4
-#define FTM_FAILURE_BIT     BIT5
+#define WIFI_SCANNING_BIT   BIT3
+#define WIFI_SCAN_BLOCK_BIT BIT4
+#define FTM_REPORT_BIT      BIT5
+#define FTM_FAILURE_BIT     BIT6
+#define TSS_STOP_BIT        BIT7
+#define TSC_STOP_BIT        BIT8
+#define TS_STOPPED_BIT      BIT9
 
 #define HAS_STA(m)  ( m == WIFI_MODE_STA || m == WIFI_MODE_APSTA )
 #define HAS_AP(m)   ( m == WIFI_MODE_AP || m == WIFI_MODE_APSTA )
 
 static const char *TAG = "Network";
 
-static EventGroupHandle_t evtgrp;
+static EventGroupHandle_t evtgrp = NULL;
 
-static esp_netif_t *if_sta, *if_ap;
+static esp_netif_t *if_sta = NULL, *if_ap = NULL;
 
 static wifi_config_t config_ap = {
     .ap = {
@@ -55,10 +59,41 @@ static wifi_config_t config_ap = {
 
 static wifi_config_t config_sta = {
     .sta = {
-        .threshold.authmode = WIFI_AUTH_OPEN,
         .sae_pwe_h2e = WPA3_SAE_PWE_BOTH
     }
 };
+
+static EventBits_t waitBits(EventBits_t bits, uint32_t ms) {
+    // ClearOnExit = false, WaitForAllBits = false
+    return evtgrp ? xEventGroupWaitBits(
+        evtgrp, bits, pdFALSE, pdFALSE, TIMEOUT(ms)) & bits : false;
+}
+
+static EventBits_t getBits(EventBits_t bits) {
+    return evtgrp ? xEventGroupGetBits(evtgrp) & bits : false;
+}
+
+static bool setBits(EventBits_t bits) {
+    return evtgrp ? xEventGroupSetBits(evtgrp, bits) : false;
+}
+
+static EventBits_t clearBits(EventBits_t bits) {
+    return evtgrp ? xEventGroupClearBits(evtgrp, bits) : 0;
+}
+
+static bool str_like_ipaddr(const char *s) {
+    int len = strlen(s ?: ""), dot = 0, num = 0, hex = 0, con = 0;
+    LOOPN(i, len) {
+             if (s[i] == '.') { dot++; }
+        else if (s[i] == ':') { con++; }
+        else if ('0' <= s[i] && s[i] <= '9') { num++; }
+        else if ('a' <= s[i] && s[i] <= 'f') { hex++; }
+        else if ('A' <= s[i] && s[i] <= 'F') { hex++; }
+    }
+    if (dot == 3 && (num + dot) == len) return true;
+    if (!dot && con && (con + num + hex) == len) return true;
+    return false;
+}
 
 static const char * wifi_authmode_str(wifi_auth_mode_t auth) {
     switch (auth) {
@@ -82,6 +117,15 @@ static const char * wifi_mode_str(wifi_mode_t mode) {
         case WIFI_MODE_AP:      return "AP";
         case WIFI_MODE_APSTA:   return "AP+STA";
         default:                return "Unknown";
+    }
+}
+
+static const char * wifi_ftm_str(wifi_ftm_status_t status) {
+    switch (status) {
+        CASESTR(FTM_STATUS_UNSUPPORTED, 11);
+        CASESTR(FTM_STATUS_CONF_REJECTED, 11);
+        CASESTR(FTM_STATUS_NO_RESPONSE, 11);
+        default: return "ERROR";
     }
 }
 
@@ -140,7 +184,7 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
     if (!if_ptr) {
         wifi_mode_t mode = WIFI_MODE_NULL;
         wifi_mode_switch(UNCHANGED, UNCHANGED, &mode);
-        if (HAS_STA(mode) && xEventGroupGetBits(evtgrp) & WIFI_CONNECTED_BIT) {
+        if (HAS_STA(mode) && getBits(WIFI_CONNECTED_BIT)) {
             if_ptr = if_sta;
         } else if (HAS_AP(mode)) {
             if_ptr = if_ap;
@@ -155,8 +199,9 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
 static void wifi_print_ipaddr(esp_netif_t * if_ptr) {
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(if_ptr, &ip);
-    ESP_LOGI(TAG, "IP: " IPSTR ", GW: " IPSTR ", Mask: " IPSTR,
-             IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
+    ESP_LOGI(TAG, "%s IP " IPSTR ", GW " IPSTR ", Mask " IPSTR,
+             esp_netif_get_desc(if_ptr), IP2STR(&ip.ip),
+             IP2STR(&ip.gw), IP2STR(&ip.netmask));
 }
 
 static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
@@ -172,8 +217,8 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
         maxlen = 24;
 #endif
     }
-    printf("SSID%*s", maxlen - 4, "");
-    puts(" MAC address       RSSI Mode WPS FTM Auth   CC Channel");
+    printf("SSID%*s", maxlen - 4 + 1, "");
+    puts("MAC address       RSSI Mode WPS FTM Auth   CC Channel");
     LOOPN(i, num) {
         const char *ftm = "";
         if (aps[i].ftm_responder && aps[i].ftm_initiator) {
@@ -183,60 +228,58 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
         } else if (aps[i].ftm_initiator) {
             ftm = "REQ";
         }
-        printf("%-*s " MACSTR " %4d %c%c%c%c %3s %3s %-6s %c%c %2d (%d-%d)\n",
+        printf("%-*s " MACSTR "  %-3d %c%c%c%c %3s %3s %-6s %c%c %2d",
             maxlen, (char *)aps[i].ssid, MAC2STR(aps[i].bssid), aps[i].rssi,
             aps[i].phy_11b ? 'b' : ' ', aps[i].phy_11g ? 'g' : ' ',
             aps[i].phy_11n ? 'n' : ' ', aps[i].phy_lr ? 'l' : 'h',
             aps[i].wps ? "yes" : "", ftm, wifi_authmode_str(aps[i].authmode),
-            aps[i].country.cc[0], aps[i].country.cc[1], aps[i].primary,
-            aps[i].country.schan, aps[i].country.nchan);
+            aps[i].country.cc[0], aps[i].country.cc[1], aps[i].primary);
+        if (aps[i].country.nchan)
+            printf(" (%d-%d)", aps[i].country.schan, aps[i].country.nchan);
+        putchar('\n');
     }
 }
 
-static esp_err_t wifi_get_ap_records(uint16_t *nap, wifi_ap_record_t **paps) {
+static uint16_t s_nap = 0;
+static wifi_ap_record_t *s_aps = NULL;
+
+static esp_err_t wifi_get_ap_records() {
+    // Must call this function after sta scan
+    uint16_t nap;
     wifi_ap_record_t *aps = NULL;
-    esp_err_t err = esp_wifi_scan_get_ap_num(nap);
-    if (!err) err = *nap ? ESP_OK : ESP_ERR_NOT_FOUND;
-    if (!err) err = EALLOC(aps, *nap * sizeof(wifi_ap_record_t));
-    if (!err) err = esp_wifi_scan_get_ap_records(nap, aps);
-    if (!err) { *paps = aps; } else { TRYFREE(aps); }
+    esp_err_t err = esp_wifi_scan_get_ap_num(&nap);
+    if (!err) err = nap ? ESP_OK : ESP_ERR_NOT_FOUND;
+    if (!err) err = EALLOC(aps, nap * sizeof(wifi_ap_record_t));
+    if (!err) err = esp_wifi_scan_get_ap_records(&nap, aps);
+    if (!err) {
+        TRYFREE(s_aps);
+        s_aps = aps;
+        s_nap = nap;
+    } else {
+        TRYFREE(aps);
+    }
     return err;
 }
 
-static void wifi_print_aplist() {
-    uint16_t nap = 0;
-    wifi_ap_record_t *aps = NULL;
-    esp_err_t err = wifi_get_ap_records(&nap, &aps);
-    if (err) {
-        ESP_LOGE(TAG, "STA get AP failed: %s", esp_err_to_name(err));
-    } else {
-        ESP_LOGI(TAG, "STA found %d AP", nap);
-        wifi_print_apinfo(aps, nap);
-        TRYFREE(aps);
-    }
-}
-
-static esp_err_t wifi_find_ap(
-    const char *ssid, uint8_t *bssid, wifi_ap_record_t *record
+static esp_err_t UNUSED wifi_find_ap_record(
+    const char *ssid, uint8_t *bssid, bool scan, wifi_ap_record_t *record
 ) {
-    uint16_t nap = 0, found = 0;
-    wifi_ap_record_t *aps = NULL;
-    wifi_scan_config_t scan_config = { .ssid = (uint8_t *)ssid };
-    xEventGroupSetBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
-    esp_err_t err = esp_wifi_scan_start(&scan_config, true);
-    if (!err) err = wifi_get_ap_records(&nap, &aps);
-    LOOPN(i, err ? 0 : nap) {
+    bool found = false;
+    esp_err_t err = ESP_OK;
+    LOOPN(i, s_nap) {
         if (
-            (ssid && !strcmp((char *)aps[i].ssid, ssid)) ||
-            (bssid && !memcmp(aps[i].bssid, bssid, sizeof(aps[i].bssid)))
+            (ssid && !strcmp((char *)s_aps[i].ssid, ssid)) ||
+            (bssid && !memcmp(s_aps[i].bssid, bssid, sizeof(s_aps[i].bssid)))
         ) {
-            *record = aps[i]; // copy whole structure
+            *record = s_aps[i]; // copy whole structure
             found = true;
             break;
         }
     }
-    TRYFREE(aps);
-    return err ?: (found ? ESP_OK : ESP_ERR_NOT_FOUND);
+    if (found) return ESP_OK;
+    if (!scan) return ESP_ERR_NOT_FOUND;
+    if (( err = wifi_sta_scan(ssid, 0, 1500, false) )) return err;
+    return wifi_find_ap_record(ssid, bssid, false, record);
 }
 
 static esp_err_t wifi_mode_check(wifi_interface_t interface) {
@@ -255,106 +298,123 @@ static esp_err_t wifi_mode_check(wifi_interface_t interface) {
     return err;
 }
 
-static void event_handler(
+static void event_handler_ip(
     void *arg, esp_event_base_t base, int32_t id, void *data
 ) {
-    // For sys_evt stack overflow, try to uncomment next line:
-    ESP_LOGD(TAG, "event stack %d", uxTaskGetStackHighWaterMark(NULL));
+    if (id == IP_EVENT_STA_GOT_IP) {
+        ip_event_got_ip_t *evt = data;
+        if (evt->ip_changed) wifi_print_ipaddr(evt->esp_netif);
+    } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
+        ip_event_ap_staipassigned_t *evt = data;
+        ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
+    } else {
+        ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
+    }
+}
+
+static void event_handler_wifi(
+    void *arg, esp_event_base_t base, int32_t id, void *data
+) {
     static int retry = 0;
-    if (base == IP_EVENT) {
-        if (id == IP_EVENT_STA_GOT_IP) {
-            wifi_print_ipaddr(if_sta);
-        } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
-            ip_event_ap_staipassigned_t *evt = data;
-            ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
-        } else {
-            ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
-        }
-    } else if (base == WIFI_EVENT) {
-        if (id == WIFI_EVENT_AP_START) {
-            wifi_config_t cfg;
-            esp_wifi_get_config(WIFI_IF_AP, &cfg);
-            ESP_LOGI(TAG, "AP SSID %s, PASS %s, CH %d",
+    // For sys_evt stack overflow, try to uncomment next line:
+    // ESP_LOGD(TAG, "event stack %d", uxTaskGetStackHighWaterMark(NULL));
+    if (id == WIFI_EVENT_AP_START) {
+        wifi_config_t cfg;
+        esp_wifi_get_config(WIFI_IF_AP, &cfg);
+        ESP_LOGI(TAG, "AP SSID %s, PASS %s, Channel %d",
                 cfg.ap.ssid, cfg.ap.password, cfg.ap.channel);
-        } else if (id == WIFI_EVENT_AP_STACONNECTED) {
-            wifi_event_ap_staconnected_t *evt = data;
-            ESP_LOGI(TAG, "AP client " MACSTR " join, AID=%d, Mesh=%d",
-                    MAC2STR(evt->mac), evt->aid, evt->is_mesh_child);
-        } else if (id == WIFI_EVENT_AP_STADISCONNECTED) {
-            wifi_event_ap_stadisconnected_t *evt = data;
-            ESP_LOGI(TAG, "AP client " MACSTR " leave, AID=%d, Mesh=%d",
-                    MAC2STR(evt->mac), evt->aid, evt->is_mesh_child);
-        } else if (id == WIFI_EVENT_STA_CONNECTED) {
-            xEventGroupSetBits(evtgrp, WIFI_CONNECTED_BIT);
-            xEventGroupClearBits(evtgrp, WIFI_FAILURE_BIT);
-            xEventGroupClearBits(evtgrp, WIFI_DISCONNECT_BIT);
-            wifi_event_sta_connected_t *evt = data;
-            ESP_LOGI(TAG, "STA connect `%s` success", evt->ssid);
+    } else if (id == WIFI_EVENT_AP_STACONNECTED) {
+        wifi_event_ap_staconnected_t *evt = data;
+        ESP_LOGI(TAG, "AP client " MACSTR " join, AID=%d, Mesh=%d",
+                MAC2STR(evt->mac), evt->aid, evt->is_mesh_child);
+    } else if (id == WIFI_EVENT_AP_STADISCONNECTED) {
+        wifi_event_ap_stadisconnected_t *evt = data;
+        ESP_LOGI(TAG, "AP client " MACSTR " leave, AID=%d, Mesh=%d",
+                MAC2STR(evt->mac), evt->aid, evt->is_mesh_child);
+    } else if (id == WIFI_EVENT_STA_CONNECTED) {
+        setBits(WIFI_CONNECTED_BIT);
+        clearBits(WIFI_FAILURE_BIT | WIFI_DISCONNECT_BIT);
+        wifi_event_sta_connected_t *evt = data;
+        ESP_LOGI(TAG, "STA connect `%s` success", evt->ssid);
+        retry = 0;
+        if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
+        if (strbool(Config.app.SNTP_RUN)) sntp_control("sync");
+    } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        clearBits(WIFI_CONNECTED_BIT);
+        wifi_event_sta_disconnected_t *evt = data;
+        if (getBits(WIFI_DISCONNECT_BIT)) {
+            ESP_LOGI(TAG, "STA disconnect from `%s`", evt->ssid);
+            clearBits(WIFI_DISCONNECT_BIT);
+        } else if (evt->reason == WIFI_REASON_NO_AP_FOUND || retry > 2) {
             retry = 0;
-            if (strbool(Config.net.AP_AUTO))
-                wifi_ap_stop();
-        } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
-            xEventGroupClearBits(evtgrp, WIFI_CONNECTED_BIT);
-            wifi_event_sta_disconnected_t *evt = data;
-            if (xEventGroupGetBits(evtgrp) & WIFI_DISCONNECT_BIT) {
-                ESP_LOGI(TAG, "STA disconnect from `%s`", evt->ssid);
-                xEventGroupClearBits(evtgrp, WIFI_DISCONNECT_BIT);
-            } else if (evt->reason == WIFI_REASON_NO_AP_FOUND || retry > 2) {
-                retry = 0;
-                ESP_LOGW(TAG, "STA connect `%s` failed: 0x%02X",
-                        evt->ssid, evt->reason);
-                xEventGroupSetBits(evtgrp, WIFI_FAILURE_BIT);
-                if (strbool(Config.net.AP_AUTO))
-                    wifi_ap_start(NULL, NULL, NULL);
-            } else  {
-                retry++;
-                esp_wifi_connect();
-                ESP_LOGD(TAG, "STA connect `%s` retry %d", evt->ssid, retry);
-            }
-        } else if (id == WIFI_EVENT_SCAN_DONE) {
-            if (xEventGroupGetBits(evtgrp) & WIFI_SCAN_BLOCK_BIT) {
-                xEventGroupClearBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
-            } else {
-                wifi_print_aplist();
-            }
+            ESP_LOGW(TAG, "STA connect `%s` failed: %d", evt->ssid, evt->reason);
+            setBits(WIFI_FAILURE_BIT);
+            if (strbool(Config.net.AP_AUTO)) wifi_ap_start(NULL, NULL, NULL);
+        } else  {
+            retry++;
+            esp_wifi_connect();
+            ESP_LOGD(TAG, "STA connect `%s` retry %d", evt->ssid, retry);
+        }
+    } else if (id == WIFI_EVENT_SCAN_DONE) {
+        clearBits(WIFI_SCANNING_BIT);
+        if (getBits(WIFI_SCAN_BLOCK_BIT)) {
+            clearBits(WIFI_SCAN_BLOCK_BIT);
+        } else if (!wifi_get_ap_records()) {
+            ESP_LOGI(TAG, "STA found %d AP", s_nap);
+            wifi_print_apinfo(s_aps, s_nap);
+        }
+    } else if (id == WIFI_EVENT_FTM_REPORT) {
+        wifi_event_ftm_report_t *evt = data;
+        if (evt->status != FTM_STATUS_SUCCESS) {
+            ESP_LOGW(TAG, "FTM " MACSTR " failed: %s",
+                    MAC2STR(evt->peer_mac), wifi_ftm_str(evt->status));
+            setBits(FTM_FAILURE_BIT);
         } else {
-            ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
+            ESP_LOGI(TAG, "FTM " MACSTR " RTT %dns, Dist %dcm",
+                    MAC2STR(evt->peer_mac), evt->rtt_est, evt->dist_est);
+            if (evt->ftm_report_num_entries) puts("ID  RSSI RTT (ns)");
+            LOOPN(i, evt->ftm_report_num_entries) {
+                wifi_ftm_report_entry_t *ent = evt->ftm_report_data + i;
+                printf("%-3d %-3d %7.3f\n",
+                        ent->dlog_token, ent->rssi, ent->rtt / 1e3);
+            }
+            TRYFREE(evt->ftm_report_data);
+            setBits(FTM_REPORT_BIT);
         }
     } else {
         ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
     }
 }
 
-static esp_err_t mdns_initialize();
-
 void network_initialize() {
-    esp_err_t err;
-    esp_log_level_set("wifi", ESP_LOG_WARN);
-    esp_log_level_set("wifi_init", ESP_LOG_WARN);
-    esp_log_level_set("esp_netif_lwip", ESP_LOG_WARN);
-    esp_log_level_set("esp_netif_handlers", ESP_LOG_WARN);
+    const char * tags[] = {
+        "wifi", "wifi_init", "iperf",
+        "esp_netif_lwip", "esp_netif_handlers",
+    };
+    LOOPN(i, LEN(tags)) { esp_log_level_set(tags[i], ESP_LOG_WARN); }
 
     ESP_ERROR_CHECK( esp_netif_init() );
     ESP_ERROR_CHECK( esp_event_loop_create_default() );
-    if_ap = esp_netif_create_default_wifi_ap();
-    if_sta = esp_netif_create_default_wifi_sta();
-    evtgrp = xEventGroupCreate();
+
+    if (!if_ap) if_ap = esp_netif_create_default_wifi_ap();
+    if (!if_sta) if_sta = esp_netif_create_default_wifi_sta();
+    if (!evtgrp) evtgrp = xEventGroupCreate();
+
+#define REGEVT(evt, cb) \
+    esp_event_handler_instance_register(evt, ESP_EVENT_ANY_ID, cb, NULL, NULL)
+    ESP_ERROR_CHECK( REGEVT(WIFI_EVENT, &event_handler_wifi) );
+    ESP_ERROR_CHECK( REGEVT(IP_EVENT, &event_handler_ip) );
 
     wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&init_config) );
-
-    esp_event_base_t bases[2] = { WIFI_EVENT, IP_EVENT };
-    LOOPN(i, LEN(bases)) {
-        ESP_ERROR_CHECK(
-            esp_event_handler_instance_register(
-                bases[i], ESP_EVENT_ANY_ID, &event_handler, NULL, NULL)
-        );
-    }
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_NULL) );
     ESP_ERROR_CHECK( esp_wifi_start() );
 
-    if (strbool(Config.app.MDNS_RUN) && ( err = mdns_initialize() ))
+    esp_err_t err;
+    if (strbool(Config.app.MDNS_RUN) && ( err = mdns_control("on") ))
         ESP_LOGE(TAG, "Failed to start mDNS: %s", esp_err_to_name(err));
+    if (strbool(Config.app.SNTP_RUN) && ( err = sntp_control("on") ))
+        ESP_LOGE(TAG, "Failed to start SNTP: %s", esp_err_to_name(err));
     if (!( err = wifi_sta_start(NULL, NULL, NULL) )) return;
     if (err != ESP_ERR_INVALID_ARG) {
         ESP_LOGE(TAG, "Failed to start STA: %s", esp_err_to_name(err));
@@ -378,7 +438,7 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     // WiFi mode validation
     esp_err_t err = wifi_mode_switch(true, UNCHANGED, NULL);
     if (err) return err;
-    if (xEventGroupGetBits(evtgrp) & WIFI_CONNECTED_BIT) {
+    if (getBits(WIFI_CONNECTED_BIT)) {
         wifi_ap_record_t record;
         err = esp_wifi_sta_get_ap_info(&record);
         if (err == ESP_OK && !strcmp((char *)record.ssid, ssid))
@@ -390,13 +450,15 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     // Configure static IP address
     if (ip && !( err = wifi_dhcp_switch(false, UNCHANGED) )) {
         esp_netif_ip_info_t ip_sta = {
-            .ip.addr = ipaddr_addr(ip),
-            .gw.addr = (ipaddr_addr(ip) & ~0xFF) | 0x01,
-            .netmask.addr = ipaddr_addr("255.255.255.0")
+            .ip.addr = inet_addr(ip),
+            .gw.addr = (inet_addr(ip) & ~0xFF) | 0x01,
+            .netmask.addr = inet_addr("255.255.255.0")
         };
         if (( err = esp_netif_set_ip_info(if_sta, &ip_sta) )) {
             ESP_LOGE(TAG, "STA static IP failed: %s", esp_err_to_name(err));
             wifi_dhcp_switch(true, UNCHANGED);
+        } else {
+            ESP_LOGI(TAG, "STA static IP set to %s", ip);
         }
     } else if (!ip && ( err = wifi_dhcp_switch(true, UNCHANGED) )) {
         return err;
@@ -417,46 +479,49 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
 }
 
 esp_err_t wifi_sta_stop() {
-    xEventGroupSetBits(evtgrp, WIFI_DISCONNECT_BIT);
+    setBits(WIFI_DISCONNECT_BIT);
     return esp_wifi_disconnect();
 }
 
-esp_err_t wifi_sta_scan(const char * ssid, uint8_t channel, uint16_t timeout_ms)
-{
+esp_err_t wifi_sta_scan(
+    const char * ssid, uint8_t channel, uint16_t timeout_ms, bool verbose
+) {
     esp_err_t err = wifi_mode_check(WIFI_IF_STA);
-    if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
-    if (err || ( err = esp_wifi_scan_stop() )) return err;
-    esp_wifi_clear_ap_list();
+    if (!err) err = esp_wifi_scan_stop();
+    if (!err) err = esp_wifi_clear_ap_list();
+    if (err) return err;
     wifi_scan_config_t scan_config = {
         .ssid = (uint8_t *)ssid,
         .channel = channel,
         .show_hidden = true
     };
-    if (timeout_ms < 1300) {
-        xEventGroupClearBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
+    setBits(WIFI_SCANNING_BIT | WIFI_SCAN_BLOCK_BIT);
+    if (!timeout_ms) {
+        clearBits(WIFI_SCAN_BLOCK_BIT);
         return esp_wifi_scan_start(&scan_config, false);
     }
-    scan_config.scan_time.active.min = timeout_ms / 13;
-    scan_config.scan_time.active.max = timeout_ms / 16;
-    xEventGroupSetBits(evtgrp, WIFI_SCAN_BLOCK_BIT);
-    if (!( err = esp_wifi_scan_start(&scan_config, true) ))
-        wifi_print_aplist();
+    scan_config.scan_time.active.min = CONS(timeout_ms / 15, 10, 1400);
+    scan_config.scan_time.active.max = CONS(timeout_ms / 10, 20, 1500);
+    if (
+        !( err = esp_wifi_scan_start(&scan_config, true) ) &&
+        !( err = wifi_get_ap_records() ) &&
+        verbose
+    ) {
+        ESP_LOGI(TAG, "STA found %d AP", s_nap);
+        wifi_print_apinfo(s_aps, s_nap);
+    }
     return err;
 }
 
-esp_err_t wifi_sta_wait(uint16_t timeout_ms) {
-    EventBits_t wait = WIFI_CONNECTED_BIT | WIFI_DISCONNECT_BIT | WIFI_FAILURE_BIT;
-    EventBits_t bits = xEventGroupWaitBits(
-        evtgrp, wait, pdFALSE, pdFALSE, timeout_ms / portTICK_PERIOD_MS);
-    if (bits & WIFI_CONNECTED_BIT)
-        return ESP_OK;
+esp_err_t wifi_sta_wait(uint16_t tout_ms) {
+    EventBits_t bits = waitBits(
+        WIFI_CONNECTED_BIT | WIFI_DISCONNECT_BIT | WIFI_FAILURE_BIT, tout_ms);
+    if (bits & WIFI_FAILURE_BIT) return ESP_FAIL;
+    if (bits & WIFI_CONNECTED_BIT) return ESP_OK;
     if (bits & WIFI_DISCONNECT_BIT) {
-        xEventGroupClearBits(evtgrp, WIFI_DISCONNECT_BIT);
-        esp_wifi_connect();
-        return wifi_sta_wait(timeout_ms);
+        ESP_LOGW(TAG, "STA stopped by wifi_sta_stop");
+        return ESP_OK;
     }
-    if (bits & WIFI_FAILURE_BIT)
-        return ESP_FAIL;
     return ESP_ERR_TIMEOUT;
 }
 
@@ -476,9 +541,9 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
 
     if (ip && !( err = wifi_dhcp_switch(UNCHANGED, false) )) {
         esp_netif_ip_info_t ip_ap = {
-            .ip.addr = ipaddr_addr(ip),
-            .gw.addr = ipaddr_addr(ip),
-            .netmask.addr = ipaddr_addr("255.255.255.0")
+            .ip.addr = inet_addr(ip),
+            .gw.addr = inet_addr(ip),
+            .netmask.addr = inet_addr("255.255.255.0")
         };
         if (( err = esp_netif_set_ip_info(if_ap, &ip_ap) ))
             ESP_LOGE(TAG, "AP static IP failed: %s", esp_err_to_name(err));
@@ -487,9 +552,10 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
 
     wifi_ap_config_t *ap = &config_ap.ap;
     snprintf((char *)ap->ssid, sizeof(ap->ssid), "%s", ssid);
-    if (strlen(Config.info.UID))
+    if (strlen(Config.info.UID)) {
         snprintf((char *)ap->ssid + strlen(ssid),
                 sizeof(ap->ssid) - strlen(ssid), "-%s", Config.info.UID);
+    }
     ap->ssid_len = strlen((char *)ap->ssid);
     if (!pass || strlen(pass) < 8) {
         ap->authmode = WIFI_AUTH_OPEN;
@@ -508,17 +574,16 @@ esp_err_t wifi_sta_list_ap() {
     esp_err_t err = wifi_mode_check(WIFI_IF_STA);
     if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
     if (err) return err;
-    EventBits_t bits = xEventGroupGetBits(evtgrp);
     if (config_sta.sta.ssid && strlen((char *)config_sta.sta.ssid)) {
-        printf("STA SSID: `%s`, Status: ", (char *)config_sta.sta.ssid);
+        printf("STA SSID %s ", (char *)config_sta.sta.ssid);
     } else {
-        printf("STA Status: ");
+        printf("STA ");
     }
-    if (bits & WIFI_DISCONNECT_BIT) {
+    if (getBits(WIFI_DISCONNECT_BIT)) {
         puts("disconnected");
-    } else if (bits & WIFI_FAILURE_BIT) {
+    } else if (getBits(WIFI_FAILURE_BIT)) {
         puts("failed");
-    } else if (bits & WIFI_CONNECTED_BIT) {
+    } else if (getBits(WIFI_CONNECTED_BIT)) {
         puts("connected");
         wifi_ap_record_t info;
         if (( err = esp_wifi_sta_get_ap_info(&info) ))
@@ -535,7 +600,7 @@ esp_err_t wifi_ap_list_sta() {
     esp_err_t err = wifi_mode_check(WIFI_IF_AP);
     if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
     if (err) return err;
-    printf("AP SSID %s CH %d\n", config_ap.ap.ssid, config_ap.ap.channel);
+    printf("AP SSID %s Channel %d\n", config_ap.ap.ssid, config_ap.ap.channel);
     wifi_print_ipaddr(if_ap);
 
     uint16_t aid;
@@ -559,7 +624,7 @@ esp_err_t wifi_ap_list_sta() {
             ESP_LOGD(TAG, "Get STA AID failed: %s", esp_err_to_name(err));
             continue;
         }
-        printf("%04X %-16s " MACSTR " %4d %c%c%c%c %s\n",
+        printf("%-4d %-16s " MACSTR " %4d %c%c%c%c %s\n",
             aid, inet_ntoa(sw->ip), MAC2STR(sw->mac), hw->rssi,
             hw->phy_11b ? 'b' : ' ', hw->phy_11g ? 'g' : ' ',
             hw->phy_11n ? 'n' : ' ', hw->phy_lr ? 'l' : 'h',
@@ -568,42 +633,70 @@ esp_err_t wifi_ap_list_sta() {
     return err;
 }
 
-// Applications based on network
-
-esp_err_t ftm_respond(const char *ctrl, int16_t *offset_cm) {
-    if (offset_cm && !esp_wifi_ftm_resp_set_offset(*offset_cm)) {
-        ESP_LOGI(TAG, "AP set FTM responder offset to %dcm", *offset_cm);
+esp_err_t wifi_parse_addr(const char *host, void *dst) {
+    ip_addr_t tmp = { 0 };
+    struct addrinfo *res = NULL, *ptr;
+    if (getaddrinfo(host, NULL, NULL, &res) != 0) return ESP_ERR_INVALID_ARG;
+    for (ptr = res; ptr; ptr = ptr->ai_next) {
+        if (ptr->ai_family == AF_INET) {
+            struct sockaddr_in *addr4 = (struct sockaddr_in *)ptr->ai_addr;
+            inet_addr_to_ip4addr(ip_2_ip4(&tmp), &addr4->sin_addr);
+        } else {
+            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)ptr->ai_addr;
+            inet6_addr_to_ip6addr(ip_2_ip6(&tmp), &addr6->sin6_addr);
+        }
+        if (!dst) {
+            puts(ipaddr_ntoa(&tmp));
+        } else if (ptr == res) {
+            *(ip_addr_t *)dst = tmp;
+        }
     }
-    esp_err_t err = wifi_mode_check(WIFI_IF_AP);
-    if (err || !ctrl || strbool(ctrl) == config_ap.ap.ftm_responder)
-        return err;
-    config_ap.ap.ftm_responder = !config_ap.ap.ftm_responder;
-    if (!( err = esp_wifi_set_config(WIFI_IF_AP, &config_ap) )) {
-        ESP_LOGI(TAG, "AP set FTM responder to %s",
-                config_ap.ap.ftm_responder ? "ON" : "OFF");
-    }
-    // TODO: ftm_respond
-    return err;
+    freeaddrinfo(res);
+    return ESP_OK;
 }
 
-esp_err_t ftm_request(const char *ssid, uint16_t timeout_ms, uint8_t *count)
-{
+// Applications based on network
+
+esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm) {
+#ifdef CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT
+    esp_err_t err = wifi_mode_check(WIFI_IF_AP);
+    if (err) return err;
+    if (offset_cm && !( err = esp_wifi_ftm_resp_set_offset(offset_cm) )) {
+        ESP_LOGI(TAG, "FTM responder set offset to %dcm", offset_cm);
+    } else if (err) {
+        ESP_LOGW(TAG, "FTM responder offset failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    if (ctrl && strbool(ctrl) != config_ap.ap.ftm_responder) {
+        config_ap.ap.ftm_responder = !config_ap.ap.ftm_responder;
+        if (( err = esp_wifi_set_config(WIFI_IF_AP, &config_ap) )) return err;
+    }
+    ESP_LOGI(TAG, "FTM responder %s",
+            config_ap.ap.ftm_responder ? "enabled" : "disabled");
+    return err;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
+}
+
+esp_err_t ftm_request(const char *ssid, uint8_t count) {
+#ifdef CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
     esp_err_t err = wifi_mode_check(WIFI_IF_STA);
     if (err) return err;
 
     wifi_ap_record_t record;
     if (ssid) {
-        if (( err = wifi_find_ap(ssid, NULL, &record) ))
+        if (( err = wifi_find_ap_record(ssid, NULL, true, &record) ))
             return err;
-    } else if (xEventGroupGetBits(evtgrp) & WIFI_CONNECTED_BIT) {
+    } else if (getBits(WIFI_CONNECTED_BIT)) {
         if (( err = esp_wifi_sta_get_ap_info(&record) ))
             return err;
     } else {
-        ESP_LOGE(TAG, "STA disconnected. FTM need the SSID of the AP");
+        ESP_LOGE(TAG, "STA disconnected. Provide SSID to run FTM.");
         return ESP_ERR_INVALID_ARG;
     }
     if (!record.ftm_responder) {
-        ESP_LOGE(TAG, "STA FTM not supported by `%s`", (char *)record.ssid);
+        ESP_LOGE(TAG, "FTM not supported by `%s`", (char *)record.ssid);
         return ESP_ERR_INVALID_ARG;
     }
     wifi_ftm_initiator_cfg_t config = {
@@ -611,23 +704,21 @@ esp_err_t ftm_request(const char *ssid, uint16_t timeout_ms, uint8_t *count)
         .frm_count = 32,
         .burst_period = 2   // 200ms
     };
-    memcpy(config.resp_mac, record.bssid, sizeof(record.bssid));
-    if (count && (*count % 8 == 0) && (*count <= 32 || *count == 64))
-        config.frm_count = *count;
-    ESP_LOGI(TAG, "STA FTM init " MACSTR " channel=%d count=%d period=%dms",
+    memcpy(config.resp_mac, record.bssid, sizeof(config.resp_mac));
+    if (!(count % 8) && (count <= 32 || count == 64)) config.frm_count = count;
+    ESP_LOGI(TAG, "FTM " MACSTR " channel=%d count=%d period=%dms",
             MAC2STR(config.resp_mac), config.channel,
             config.frm_count, config.burst_period * 100);
-    if (( err = esp_wifi_ftm_initiate_session(&config) ) || !timeout_ms)
-        return err;
-    EventBits_t want = FTM_REPORT_BIT | FTM_FAILURE_BIT;
-    EventBits_t bits = xEventGroupWaitBits(
-        evtgrp, want, pdFALSE, pdFALSE, TIMEOUT(timeout_ms));
-    if (bits & FTM_REPORT_BIT)
-    // TODO: ftm_request
-        return ESP_OK;
-    if (bits & FTM_FAILURE_BIT)
-        return ESP_FAIL;
+    if (( err = esp_wifi_ftm_initiate_session(&config) )) return err;
+    EventBits_t bits = waitBits(FTM_REPORT_BIT | FTM_FAILURE_BIT, 3000);
+    clearBits(bits);
+    if (bits & FTM_FAILURE_BIT) return ESP_FAIL;
+    if (bits & FTM_REPORT_BIT) return ESP_OK;
+    esp_wifi_ftm_end_session();
     return ESP_ERR_TIMEOUT;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+#endif
 }
 
 static const char * tcpip_if_str(tcpip_adapter_if_t interface) {
@@ -699,52 +790,158 @@ static esp_err_t mdns_query_host(const char *hostname, uint16_t timeout_ms) {
     return err;
 }
 
+static bool mdns_running = false;
+
 static esp_err_t mdns_initialize() {
-    uint8_t mac[6];
-    char hostname[32];
-    mdns_txt_item_t serviceDesc[] = {
-        { "name", Config.info.NAME },
-        { "ver", Config.info.VER },
-        { "uid", Config.info.UID }
-    };
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(hostname, sizeof(hostname),
-             "%s-%02X%02X%02X",
+    if (mdns_running) return ESP_OK;
+    char hostname[32] = { 0 };
+    snprintf(hostname, sizeof(hostname), "%s-%s",
              strlen(Config.app.MDNS_HOST)
              ? Config.app.MDNS_HOST
              : Config.info.NAME,
-             mac[3], mac[4], mac[5]);
+             Config.info.UID);
     esp_err_t err = mdns_init();
     if (!err) err = mdns_hostname_set(hostname);
     if (!err) err = mdns_instance_name_set("ESP32 mDNS");
-    if (!err) err = mdns_service_add(
-        "webui", "_http", "_tcp", 80, serviceDesc, LEN(serviceDesc));
+#ifdef CONFIG_USE_WEBSERVER
+    if (!err) {
+        mdns_txt_item_t desc[] = {
+            { "name", Config.info.NAME },
+            { "ver", Config.info.VER },
+            { "uid", Config.info.UID }
+        };
+        err = mdns_service_add(hostname, "_http", "_tcp", 80, desc, LEN(desc));
+    }
+#endif
+    mdns_running = !err;
     return err;
 }
 
 esp_err_t mdns_command(
-    const char *action, const char *hostname,
+    const char *ctrl, const char *hostname,
     const char *service, const char *proto, uint16_t timeout_ms
 ) {
-    static bool running = false;
     esp_err_t err = ESP_OK;
-    if (action) {
-        if (!strbool(action)) {
+    if (ctrl) {
+        if (!strbool(ctrl)) {
             mdns_free();
-            running = false;
-        } else if (!running) {
+            mdns_running = false;
+        } else {
             err = mdns_initialize();
-            running = !err;
         }
     } else if (hostname) {
         err = mdns_query_host(hostname, timeout_ms ?: 2000);
     } else if (service || proto) {
-        err = mdns_query_service(
-            service ?: "_http", proto ?: "_tcp", timeout_ms ?: 3000);
+        char sbuf[32] = "_http", pbuf[32] = "_tcp";
+        if (service)
+            snprintf(sbuf, sizeof(sbuf), "%s%s",
+                startswith(service, "_") ? "" : "_", service);
+        if (proto)
+            snprintf(pbuf, sizeof(pbuf), "%s%s",
+                startswith(proto, "_") ? "" : "_", proto);
+        err = mdns_query_service(sbuf, pbuf, timeout_ms ?: 3000);
     } else {
-        printf("mDNS: %s\n", running ? "enabled" : "disabled");
+        printf("mDNS: %s\n", mdns_running ? "enabled" : "disabled");
     }
     return err;
+}
+
+static void sntp_timesync_cb(struct timeval *tv) {
+    ESP_LOGI(TAG, "SNTP time synced: %s", format_timestamp_us(tv));
+}
+
+static const char * sntp_status_str(sntp_sync_status_t status) {
+    if (status == SNTP_SYNC_STATUS_RESET) return "reset";
+    if (status == SNTP_SYNC_STATUS_COMPLETED) return "completed";
+    if (status == SNTP_SYNC_STATUS_IN_PROGRESS) return "in progress";
+    return "Unknown";
+}
+
+static esp_err_t sntp_setserverhost(uint8_t idx, const char *host) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    if (idx > SNTP_MAX_SERVERS || !strlen(host ?: "")) return err;
+    ip_addr_t addr = { 0 };
+    err = wifi_parse_addr(host, &addr);
+    if (getBits(WIFI_CONNECTED_BIT) && err) return err;
+    bool updated = false;
+#if SNTP_SERVER_DNS
+    if (!str_like_ipaddr(host)) {
+        sntp_setservername(idx, host);
+        updated = true;
+    } else
+#endif
+    if (!err) {
+        sntp_setserver(idx, &addr);
+        updated = true;
+    }
+#if LWIP_DHCP_GET_NTP_SRV
+    if (updated) {
+        sntp_servermode_dhcp(0);
+    } else if (ip_addr_isany(sntp_getserver(idx))) {
+        sntp_servermode_dhcp(1);
+    }
+#endif
+    if (updated) ESP_LOGI(TAG, "SNTP server#%d set to %s", idx, host);
+    return err;
+}
+
+esp_err_t sntp_command(
+    const char *ctrl, const char *host, const char *mode, uint32_t interval_ms
+) {
+    if (ctrl) {
+        if (strcasestr(ctrl, "reset") || strcasestr(ctrl, "sync")) {
+            sntp_restart();
+        } else if (strbool(ctrl) && !sntp_enabled()) {
+            sntp_set_time_sync_notification_cb(sntp_timesync_cb);
+            sntp_setoperatingmode(SNTP_OPMODE_POLL);
+            sntp_setserverhost(0, Config.app.SNTP_HOST);
+            sntp_init();
+        } else if (!strbool(ctrl)) {
+            sntp_stop();
+        }
+    } else if (host) {
+        int idx = SNTP_MAX_SERVERS - 1;
+        LOOPN(i, SNTP_MAX_SERVERS) {
+            if (ip_addr_isany(sntp_getserver(i))) idx = i;
+        }
+        sntp_setserverhost(idx, host);
+    } else if (mode) {
+        if (strcasestr(mode, "smooth")) {
+            sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
+        } else {
+            sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
+        }
+    } else if (interval_ms && interval_ms != sntp_get_sync_interval()) {
+        sntp_set_sync_interval(interval_ms);
+    } else {
+        printf("SNTP: %s\n", sntp_enabled() ? "enabled" : "disabled");
+        if (sntp_enabled()) {
+            printf(
+                "Status:   %s\n"
+                "SyncMode: %s\n"
+                "OperMode: %s\n"
+                "Interval: %ds\n",
+                sntp_status_str(sntp_get_sync_status()),
+                sntp_get_sync_mode() ? "smooth" : "immediate",
+                sntp_getoperatingmode() ? "listen only" : "poll",
+                sntp_get_sync_interval() / 1000
+            );
+            LOOPN(i, SNTP_MAX_SERVERS) {
+                const ip_addr_t *addr = sntp_getserver(i);
+                if (ip_addr_isany(addr)) continue;
+                printf("Server#%d: %s", i, ipaddr_ntoa(addr));
+#if SNTP_SERVER_DNS
+                const char *name = sntp_getservername(i);
+                if (name) printf(" (%s)", name);
+#endif
+#if SNTP_MONITOR_SERVER_REACHABILITY
+                printf(", reachable: 0x%02X", sntp_getreachability(i));
+#endif
+                putchar('\n');
+            }
+        }
+    }
+    return ESP_OK;
 }
 
 #define GET_PING_PROF(name, var) \
@@ -760,9 +957,8 @@ static void ping_command_success(esp_ping_handle_t hdl, void *args) {
     GET_PING_PROF(SEQNO, seqno);
     GET_PING_PROF(TIMEGAP, dtms);
     GET_PING_PROF(IPADDR, target);
-    if (seqno == 1) putchar('\n');
-    printf("From %s: icmp_seq=%d bytes=%d time=%dms ttl=%d\n",
-           ipaddr_ntoa((ip_addr_t *)&target), seqno, size, dtms, ttl);
+    printf("%d bytes from %s icmp_seq=%d ttl=%d time=%dms\n",
+           size, ipaddr_ntoa(&target), seqno, ttl, dtms);
 }
 
 static void ping_command_timeout(esp_ping_handle_t hdl, void *args) {
@@ -770,114 +966,185 @@ static void ping_command_timeout(esp_ping_handle_t hdl, void *args) {
     ip_addr_t target;
     GET_PING_PROF(SEQNO, seqno);
     GET_PING_PROF(IPADDR, target);
-    const char *addr = ipaddr_ntoa((ip_addr_t *)&target);
-    if (seqno == 1) putchar('\n');
-    printf("From %s: icmp_seq=%d timeout\n", addr, seqno);
+    printf("From %s: icmp_seq=%d timeout\n", ipaddr_ntoa(&target), seqno);
 }
 
-static void ping_command_end(esp_ping_handle_t hdl, void *args) {
+static void ping_command_end(esp_ping_handle_t hdl, void *ptr) {
     ip_addr_t target;
-    const char *addr;
     uint32_t sent, recv, dtms;
     GET_PING_PROF(REPLY, recv);
     GET_PING_PROF(REQUEST, sent);
     GET_PING_PROF(DURATION, dtms);
     GET_PING_PROF(IPADDR, target);
-    if (IP_IS_V4(&target)) {
-        addr = inet_ntoa(*ip_2_ip4(&target));
-    } else {
-        addr = inet6_ntoa(*ip_2_ip6(&target));
-    }
     printf("Ping %s: %d sent, %d recv, %d lost (%d%%) in %dms\n",
-           addr, sent, recv, sent - recv, 100 * (sent - recv) / sent, dtms);
+           ipaddr_ntoa(&target), sent, recv, sent - recv,
+           100 * (sent - recv) / (sent ?: 1), dtms);
     esp_ping_delete_session(hdl);
+    if (ptr) *(esp_ping_handle_t *)ptr = NULL;
 }
 
 esp_err_t ping_command(
-    const char *host, uint16_t timeout_ms, uint16_t data_size, uint16_t count
+    const char *host, uint16_t intv, uint16_t size, uint16_t count, bool abort
 ) {
-    esp_err_t err = ESP_ERR_INVALID_ARG;
-    struct sockaddr_in6 sock_addr6;
-    ip_addr_t target_addr = { 0 };
-
-    if (inet_pton(AF_INET6, host, &sock_addr6.sin6_addr) == 1) {
-        ipaddr_aton(host, &target_addr); // IPv6 string to address
-    } else {
-        struct addrinfo hint, *res = NULL;
-        if (getaddrinfo(host, NULL, &hint, &res)) {
-            printf("Invalid host to ping: %s\n", host);
-            return err;
+    static esp_ping_handle_t hdl = NULL;
+    if (abort) {
+        if (hdl) {
+            esp_ping_stop(hdl);
+            puts("Ping session stopped");
+            esp_ping_delete_session(hdl);
+            hdl = NULL;
         }
-        if (res->ai_family == AF_INET) {
-            struct sockaddr_in *addr4 = (struct sockaddr_in *)res->ai_addr;
-            inet_addr_to_ip4addr(ip_2_ip4(&target_addr), &addr4->sin_addr);
-        } else {
-            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)res->ai_addr;
-            inet6_addr_to_ip6addr(ip_2_ip6(&target_addr), &addr6->sin6_addr);
-        }
-        freeaddrinfo(res);
+        return ESP_OK;
+    } else if (!host || hdl) {
+        printf("Ping session %srunning\n", hdl ? "" : "not ");
+        return hdl ? ESP_ERR_INVALID_STATE : ESP_OK;
     }
 
     esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
-    if (timeout_ms) config.timeout_ms = timeout_ms;
-    if (data_size)  config.data_size = data_size;
-    if (count)      config.count = count;
-    config.target_addr = target_addr;
+    if (wifi_parse_addr(host, &config.target_addr)) {
+        printf("Invalid host to ping: %s\n", host);
+        return ESP_ERR_INVALID_ARG;
+    }
+    if (intv)   config.interval_ms = intv;
+    if (size)   config.data_size = size;
+    if (count)  config.count = count;
 
-    static esp_ping_callbacks_t cbs = {
+    esp_ping_callbacks_t cbs = {
         .on_ping_success = ping_command_success,
         .on_ping_timeout = ping_command_timeout,
         .on_ping_end = ping_command_end,
-        .cb_args = NULL
+        .cb_args = &hdl
     };
-    esp_ping_handle_t hdl;
-    if (( err = esp_ping_new_session(&config, &cbs, &hdl) ))
-        return err;
-    return esp_ping_start(hdl);
+    esp_err_t err = esp_ping_new_session(&config, &cbs, &hdl);
+    if (!err) err = esp_ping_start(hdl);
+    if (err) {
+        TRYNULL(hdl, esp_ping_delete_session);
+    } else if (intv && config.count != ESP_PING_COUNT_INFINITE) {
+        msleep(intv * config.count + 10);
+    }
+    return err;
 }
 
 esp_err_t iperf_command(
     const char *host, uint16_t port, uint16_t length,
-    uint32_t interval_sec, uint16_t timeout_sec, bool abort, bool udp
+    uint8_t interval_sec, uint8_t timeout_sec, bool abort, bool udp
 ) {
-    if (abort) return iperf_stop();
+    TaskHandle_t server = xTaskGetHandle(IPERF_TRAFFIC_TASK_NAME);
+    TaskHandle_t client = xTaskGetHandle(IPERF_REPORT_TASK_NAME);
+    if (abort) {
+        if (server) puts("IPerf server stopped");
+        if (client) puts("IPerf client stopped");
+        return iperf_stop();
+    } else if (server || client) {
+        printf("IPerf %s running\n", server ? "server" : "client");
+        return ESP_OK;
+    } else if (host && !strlen(host)) {
+        puts("IPerf not running");
+        return ESP_OK;
+    }
 
     uint32_t flag = host ? IPERF_FLAG_CLIENT : IPERF_FLAG_SERVER;
     uint32_t src_ip = wifi_local_ip(NULL);
     uint32_t dst_ip = ipaddr_addr(host ?: "");
-    if (!src_ip) return ESP_ERR_INVALID_STATE;
-    if (host && dst_ip == IPADDR_NONE) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = src_ip ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (!err && host && dst_ip == IPADDR_NONE) err = ESP_ERR_INVALID_ARG;
+    if (err) return err;
 
     iperf_cfg_t config = {
         .flag = flag | (udp ? IPERF_FLAG_UDP : IPERF_FLAG_TCP),
         .destination_ip4 = host ? dst_ip : 0,
         .source_ip4 = src_ip,
-        .type = IPERF_IP_TYPE_IPV4,
+        .type = IPERF_IP_TYPE_IPV4, // currently only support IPv4
         .dport = (port && host) ? port : IPERF_DEFAULT_PORT,
         .sport = (port && !host) ? port : IPERF_DEFAULT_PORT,
         .interval = interval_sec ?: IPERF_DEFAULT_INTERVAL,
-        .time = timeout_sec ?: IPERF_DEFAULT_TIME,
+        .time = (timeout_sec ?: IPERF_DEFAULT_TIME) + (host ? 0 : 1),
         .len_send_buf = length,
         .bw_lim = IPERF_DEFAULT_NO_BW_LIMIT
     };
-    if (config.time < config.interval)
-        config.time = config.interval;
-    char sip[IP4ADDR_STRLEN_MAX], dip[IP4ADDR_STRLEN_MAX];
-    inet_ntoa_r(config.source_ip4, sip, IP4ADDR_STRLEN_MAX);
-    inet_ntoa_r(config.destination_ip4, dip, IP4ADDR_STRLEN_MAX);
-    ESP_LOGI(TAG, "mode=%s-%s sip=%s:%d, dip=%s:%d, interval=%d, time=%d",
+    if (config.time < config.interval) config.time = config.interval;
+    if (!( err = iperf_start(&config) )) {
+        size_t blen = IP4ADDR_STRLEN_MAX;
+        char sip[blen], dip[blen];
+        ESP_LOGI(TAG, "mode=%s-%s sip=%s:%d, dip=%s:%d, intval=%d, tout=%d",
             udp ? "udp" : "tcp", host ? "client" : "server",
-            sip, config.sport, dip, config.dport,
+            inet_ntoa_r(config.source_ip4, sip, blen), config.sport,
+            inet_ntoa_r(config.destination_ip4, dip, blen), config.dport,
             config.interval, config.time);
-    return iperf_start(&config);
+    }
+    return err;
 }
 
-esp_err_t socket_command() {
-    // TODO: socket
-    return ESP_ERR_NOT_SUPPORTED;
+typedef struct {
+    const char * host;
+    uint16_t port;
+    uint32_t tout;
+} timesync_param_t;
+
+static void timesync_server_task(void *arg) {
+    timesync_param_t param = *(timesync_param_t *)arg;
+    if (timesync_server_init(param.port)) {
+        ESP_LOGE(TAG, "Could not init TimeSync Server");
+    } else {
+        clearBits(TSS_STOP_BIT);
+        while (!getBits(TSS_STOP_BIT)) {
+            timesync_server_loop(param.tout);
+        }
+    }
+    timesync_server_exit();
+    setBits(TS_STOPPED_BIT | TSS_STOP_BIT);
+    vTaskDelete(NULL);
 }
 
-esp_err_t sntp_command() {
-    // TODO: sntp
-    return ESP_ERR_NOT_SUPPORTED;
+static void timesync_client_task(void *arg) {
+    timesync_param_t param = *(timesync_param_t *)arg;
+    if (timesync_client_init(param.host, param.port)) {
+        ESP_LOGE(TAG, "Could not init TimeSync Client");
+    } else {
+        double offset = 0;
+        clearBits(TSC_STOP_BIT);
+        while (!getBits(TSC_STOP_BIT)) {
+            if (timesync_client_xsync(&offset, 5) < 0) break;
+            ESP_LOGI(TAG, "TimeSync offset with %s: %.9f", param.host, offset);
+            waitBits(TSC_STOP_BIT, param.tout);
+        }
+    }
+    timesync_client_exit();
+    setBits(TS_STOPPED_BIT | TSC_STOP_BIT);
+    vTaskDelete(NULL);
+}
+
+esp_err_t timesync_command(
+    const char *host, uint16_t port, uint32_t timeout_ms, bool abort
+) {
+    TaskHandle_t server = xTaskGetHandle("tss");
+    TaskHandle_t client = xTaskGetHandle("tsc");
+    if (abort) {
+        if (server) puts("TimeSync server stopped");
+        if (client) puts("TimeSync client stopped");
+        setBits(TSS_STOP_BIT | TSC_STOP_BIT);
+        waitBits(TS_STOPPED_BIT, timeout_ms ?: 1000);
+        return ESP_OK; // do NOT use vTaskDelete because we need clean on exit
+    } else if (server || client) {
+        printf("TimeSync %s running\n", server ? "server" : "client");
+        return ESP_OK;
+    } else if (host && !strlen(host)) {
+        puts("TimeSync not running");
+        return ESP_OK;
+    }
+
+    timesync_param_t param = {
+        .host = host,
+        .port = port ?: TIMESYNC_PORT,
+        .tout = timeout_ms ?: (host ? 30000 : 500),
+    };
+    TaskHandle_t task = NULL;
+    clearBits(TS_STOPPED_BIT);
+    if (host) {
+        xTaskCreate(timesync_client_task, "tsc", 4096, &param, 5, &task);
+    } else {
+        xTaskCreate(timesync_server_task, "tss", 4096, &param, 5, &task);
+    }
+    if (!task) return ESP_ERR_NO_MEM;
+    return waitBits(TS_STOPPED_BIT, 50) ? ESP_FAIL : ESP_OK;
 }

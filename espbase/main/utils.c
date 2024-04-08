@@ -180,7 +180,7 @@ void task_info(uint8_t sort_attr) {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
     // Running Ready Blocked Suspended Deleted
     static const char task_states[] = "*RBSD", *taskname;
-    uint32_t ulTotalRunTime;
+    uint32_t ulTotalRunTime = 0;
     uint16_t num = uxTaskGetNumberOfTasks();
     TaskStatus_t tmp, *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
     if (tasks == NULL) {
@@ -212,7 +212,7 @@ void task_info(uint8_t sort_attr) {
                tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
                taskname, tasks[i].uxCurrentPriority,
                tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
-               100 * tasks[i].ulRunTimeCounter / ulTotalRunTime,
+               100 * tasks[i].ulRunTimeCounter / (ulTotalRunTime ?: 1),
                format_size(tasks[i].usStackHighWaterMark, false));
     }
     vPortFree(tasks);
@@ -369,17 +369,17 @@ static uint8_t partition_used(const esp_partition_t *part) {
         esp_log_level_set(tag, ESP_LOG_NONE);
         esp_err_t err = esp_image_verify(ESP_IMAGE_VERIFY, &pos, &data);
         esp_log_level_set(tag, backup);
-        if (!err) return 100 * data.image_len / part->size;
+        if (!err) return part->size ? 100 * data.image_len / part->size : 0;
     } else if (part->subtype == ESP_PARTITION_SUBTYPE_DATA_NVS) {
-        nvs_stats_t nvs_stats;
-        if (!nvs_get_stats(part->label, &nvs_stats))
-            return 100 * nvs_stats.used_entries / nvs_stats.total_entries;
+        nvs_stats_t stat;
+        if (!nvs_get_stats(part->label, &stat) && stat.total_entries)
+            return 100 * stat.used_entries / stat.total_entries;
     } else if (
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT ||
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS
     ) {
         filesys_info_t info;
-        if (filesys_get_info(FILESYS_FLASH, &info))
+        if (filesys_get_info(FILESYS_FLASH, &info) && info.total)
             return 100 * info.used / info.total;
     }
     return 0;

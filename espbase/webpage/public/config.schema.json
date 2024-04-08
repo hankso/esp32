@@ -112,6 +112,19 @@
         { "maxLength": 0 }
       ]
     },
+    "app.sntp.run": {
+      "description": "Enable SNTP service",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "app.sntp.host": {
+      "description": "NTP server to sync time from",
+      "type": "string",
+      "anyOf": [
+        { "format": "hostname" },
+        { "maxLength": 0 }
+      ]
+    },
     "app.ota.run": {
       "description": "Enable auto updation checking",
       "type": "string",
@@ -136,6 +149,10 @@
         "HID_DEVICE",
         "HID_HOST"
       ]
+    },
+    "app.timezone": {
+      "description": "Set local timezone (see tzset(3) man)",
+      "type": "string"
     },
     "app.prompt": {
       "description": "Console promption string",

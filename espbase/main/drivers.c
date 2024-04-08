@@ -17,6 +17,24 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+#ifdef CONFIG_USE_BTN
+#   include "iot_button.h"
+#endif
+
+#ifdef CONFIG_USE_KNOB
+#   include "iot_knob.h"
+#endif
+
+#ifdef CONFIG_LED_INDICATOR
+#   include "led_indicator.h"
+#else
+#   include "led_strip.h"
+#endif
+
+#ifdef CONFIG_VLX_SENSOR
+#   include "vl53l0x.h"
+#endif
+
 #if defined(CONFIG_USE_SCREEN)
 #   include "esp_lcd_panel_io.h"
 #   include "esp_lcd_panel_ops.h"
@@ -32,42 +50,6 @@
 #       warning "Run `git clone git@github.com:olikraus/u8g2.git`"
 #       warning "Run `git clone git@github.com:mkfrey/u8g2-hal-esp-idf.git`"
 #       warning "Run `idf.py add-dependency lvgl/lvgl`"
-#   endif
-#endif
-
-#ifdef CONFIG_VLX_SENSOR
-#   if __has_include("vl53l0x.h")
-#       include "vl53l0x.h"
-#   else
-#       warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
-#       undef CONFIG_VLX_SENSOR
-#   endif
-#endif
-
-#ifndef CONFIG_LED_INDICATOR
-#   include "led_strip.h"
-#elif __has_include("led_indicator.h")
-#   include "led_indicator.h"
-#else
-#   warning "Run `idf.py add-dependency espressif/led_indicator`"
-#   undef CONFIG_LED_INDICATOR
-#endif
-
-#ifdef CONFIG_USE_BTN
-#   if __has_include("iot_button.h")
-#       include "iot_button.h"
-#   else
-#       warning "Run `idf.py add-dependency espressif/button`"
-#       undef CONFIG_USE_BTN
-#   endif
-#endif
-
-#ifdef CONFIG_USE_KNOB
-#   if __has_include("iot_knob.h")
-#       include "iot_knob.h"
-#   else
-#       warning "Run `idf.py add-dependency espressif/button`"
-#       undef CONFIG_USE_KNOB
 #   endif
 #endif
 

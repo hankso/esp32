@@ -2,7 +2,6 @@
  * File: config.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-12 21:49:38
- *
  */
 
 #include "config.h"
@@ -42,9 +41,12 @@ config_t Config = {
     .app = {
         .MDNS_RUN  = "1",
         .MDNS_HOST = "",
+        .SNTP_RUN  = "1",
+        .SNTP_HOST = "pool.ntp.org",
         .OTA_RUN   = "1",
         .OTA_URL   = "",
         .USB_MODE  = "",
+        .TIMEZONE  = "CST-8",   // China Standard Time
         .PROMPT    = "esp32> ",
     },
     .info = {
@@ -87,9 +89,12 @@ static config_entry_t rwlst[] = {       // read/write entries
 
     {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
+    {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
+    {"app.sntp.host",   &Config.app.SNTP_HOST,  NULL},
     {"app.ota.run",     &Config.app.OTA_RUN,    NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
     {"app.usb.mode",    &Config.app.USB_MODE,   NULL},
+    {"app.timezone",    &Config.app.TIMEZONE,   NULL},
     {"app.prompt",      &Config.app.PROMPT,     NULL},
 };
 
@@ -492,8 +497,8 @@ void config_nvs_stats() {
         ESP_LOGE(TAG, "Could not found nvs partition. Skip");
         return;
     }
-    nvs_stats_t nvs_stats;
-    esp_err_t err = nvs_get_stats(ctx.part->label, &nvs_stats);
+    nvs_stats_t stat;
+    esp_err_t err = nvs_get_stats(ctx.part->label, &stat);
     if (err) {
         ESP_LOGE(TAG, "Could not get nvs status: %s", esp_err_to_name(err));
         return;
@@ -502,15 +507,21 @@ void config_nvs_stats() {
         "NVS Partition Size: %s\n"
         "  Namespaces: %d\n"
         "  Entries: %d/%d (%.2f %% free)\n",
-        format_size(ctx.part->size, false), nvs_stats.namespace_count,
-        nvs_stats.used_entries, nvs_stats.total_entries,
-        100.0 * nvs_stats.free_entries / nvs_stats.total_entries
+        format_size(ctx.part->size, false), stat.namespace_count,
+        stat.used_entries, stat.total_entries,
+        100.0 * stat.free_entries / (stat.total_entries ?: 1)
     );
 }
 
 void config_initialize() {
     esp_err_t err;
     config_nvs_init();
+    config_nvs_load();
+
+    if (strlen(Config.app.TIMEZONE)) {
+        setenv("TZ", Config.app.TIMEZONE, 1);
+        tzset();
+    }
 
     // startup times counter test
     if (config_nvs_open(NAMESPACE_INFO, false) == ESP_OK) {
@@ -532,6 +543,4 @@ void config_initialize() {
         }
         config_nvs_close();
     }
-
-    config_nvs_load();
 }

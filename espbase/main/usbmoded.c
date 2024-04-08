@@ -746,7 +746,7 @@ const char * hid_keycode_str(uint8_t mod, uint8_t keycode[6]) {
 bool hid_report_dial(hid_dial_keycode_t k) {
     tinyusb_hid_report_t report = {
         .report_id = REPORT_ID_DIAL,
-        .dial = { k, (k == DIAL_L || k == DIAL_LF) ? 0xFF : 0 }
+        .dial = { k, (k == DIAL_L) ? 0xFF : 0 }
     };
     return send_report(&report, false, 100);
 }

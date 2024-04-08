@@ -11,6 +11,7 @@
 
 #ifdef CONFIG_USE_CONSOLE
 
+#include <sys/fcntl.h>
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
@@ -23,9 +24,6 @@
 #   include "esp_vfs_cdcacm.h"
 #endif
 #ifdef CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-#   ifndef CONFIG_ESP_CONSOLE_SECONDARY_NONE
-#       warning "A secondary serial console is not useful."
-#   endif
 #   include "esp_vfs_usb_serial_jtag.h"
 #   include "driver/usb_serial_jtag.h"
 #endif
@@ -71,13 +69,13 @@ void console_initialize() {
     esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
     esp_vfs_dev_uart_use_driver(NUM_UART);
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_vfs_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
-    esp_vfs_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    esp_vfs_dev_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    esp_vfs_dev_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
     fcntl(fileno(stdout), F_SETFL, 0); // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
     usb_serial_jtag_driver_config_t conf = \
         USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( usb_serial_jtag_driver_install(&conf) );
+    usb_serial_jtag_driver_install(&conf);
     esp_vfs_usb_serial_jtag_use_driver();
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
     esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);

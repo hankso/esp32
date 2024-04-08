@@ -21,8 +21,8 @@
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 void setup() {
-    driver_initialize();
     config_initialize();
+    driver_initialize();
     update_initialize();
     filesys_initialize();
     usbmode_initialize();

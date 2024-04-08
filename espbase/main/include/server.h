@@ -40,6 +40,11 @@
 
 #include "globals.h"
 
+#if defined(CONFIG_USE_WEBSERVER) && !__has_include("ESPAsyncWebServer.h")
+#   warning "Run `git clone git@github.com:me-no-dev/ESPAsyncWebServer`"
+#   undef CONFIG_USE_WEBSERVER
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

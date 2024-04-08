@@ -3,6 +3,7 @@ import { name, version } from '@/../package.json'
 
 import { isApmode } from '@/apis'
 
+import { useDark, useToggle } from '@vueuse/core'
 import { useTheme, useDisplay } from 'vuetify'
 import {
     mdiConsole,
@@ -21,8 +22,14 @@ if (process.env.SRC_VER) {
     desc += '-' + process.env.SRC_VER
 }
 
-const theme = useTheme().global
 const { lg } = useDisplay()
+const theme = useTheme()
+const isDark = useDark({
+    onChanged(dark) {
+        theme.global.name.value = dark ? 'light' : 'dark'
+    },
+})
+const toggleDark = useToggle(isDark)
 
 const title = `${name} WebUI`
 const apmode = ref(true)
@@ -56,10 +63,6 @@ const staonly = parseLink('STA mode', [
     ['Web Serial', '/serial', mdiUsbPort],
     ['JSON RPC', '/jsonrpc', mdiDuck],
 ])
-
-function toggleTheme() {
-    theme.name.value = theme.current.value.dark ? 'light' : 'dark'
-}
 
 const progbar = ref(false)
 
@@ -166,7 +169,7 @@ onMounted(() => {
                 <v-btn variant="text">STA mode</v-btn>
                 <v-btn variant="text" v-if="apmode">AP mode</v-btn>
                 <v-divider vertical class="mx-2"></v-divider>
-                <v-btn icon @click="toggleTheme">
+                <v-btn icon @click="toggleDark()">
                     <v-icon :icon="mdiCompare"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
                         Toggle theme

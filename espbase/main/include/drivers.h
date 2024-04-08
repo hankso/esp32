@@ -13,6 +13,26 @@
 #include "driver/gpio.h"
 #include "driver/spi_master.h"
 
+#if defined(CONFIG_USE_BTN) && !__has_include("iot_button.h")
+#   warning "Run `idf.py add-dependency espressif/button`"
+#   undef CONFIG_USE_BTN
+#endif
+
+#if defined(CONFIG_USE_KNOB) && !__has_include("iot_knob.h")
+#   warning "Run `idf.py add-dependency espressif/knob`"
+#   undef CONFIG_USE_KNOB
+#endif
+
+#if defined(CONFIG_LED_INDICATOR) && !__has_include("led_indicator.h")
+#   warning "Run `idf.py add-dependency espressif/led_indicator`"
+#   undef CONFIG_LED_INDICATOR
+#endif
+
+#if defined(CONFIG_VLX_SENSOR) && !__has_include("vl53l0x.h")
+#   warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
+#   undef CONFIG_VLX_SENSOR
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif

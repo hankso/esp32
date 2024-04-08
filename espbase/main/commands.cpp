@@ -88,9 +88,9 @@ static struct {
     struct arg_int *tout;
     struct arg_end *end;
 } system_restart_args = {
-    .halt = arg_lit0("h", NULL, "shutdown instead of reboot"),
-    .cxel = arg_lit0("c", NULL, "cancel pending reboot (if available)"),
-    .tout = arg_int0("t", NULL, "<65535>", "reboot timeout in ms"),
+    .halt = arg_lit0("h", "halt", "shutdown instead of reboot"),
+    .cxel = arg_lit0("c", "cancel", "cancel pending reboot (if available)"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "reboot timeout in ms"),
     .end  = arg_end(3)
 };
 
@@ -107,7 +107,7 @@ static void system_restart_task(void *arg) {
     }
 }
 
-static esp_err_t system_restart(int argc, char **argv) {
+static int system_restart(int argc, char **argv) {
     static TaskHandle_t task = NULL;
     static int end_ms, tout_ms;
     ARG_PARSE(argc, argv, &system_restart_args);
@@ -141,7 +141,7 @@ static struct {
     struct arg_end *end;
 } system_sleep_args = {
     .mode = arg_str0(NULL, NULL, "<light|deep>", "sleep mode"),
-    .tout = arg_int0("t", NULL, "<2^31>", "wakeup timeout in ms"),
+    .tout = arg_int0("t", NULL, "<0-2^31>", "wakeup timeout in ms"),
     .pin  = arg_intn("p", NULL, "<0-49>", 0, 8, "wakeup from GPIO[s]"),
     .lvl  = arg_intn("l", NULL, "<0|1>", 0, 8, "GPIO level[s] to detect"),
     .end  = arg_end(4)
@@ -233,9 +233,9 @@ static int system_sleep(int argc, char **argv) {
     if (light) {
         esp_light_sleep_start();
     } else {
-        esp_deep_sleep_start();
+        esp_deep_sleep_start(); // no-return (see console_register_commands)
     }
-    fprintf(stderr, "ESP32 is woken up from light sleep mode by %s\n",
+    fprintf(stderr, "Woken up from light sleep mode by %s\n",
             wakeup_reason_list[(int)esp_sleep_get_wakeup_cause()]);
     return esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 }
@@ -253,8 +253,8 @@ static struct {
     .cmd   = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
     .part  = arg_str0("p", NULL, "<label>", "partition to boot from"),
     .url   = arg_str0("u", NULL, "<url>", "specify URL to fetch"),
-    .fetch = arg_lit0(NULL, "fetch", "fetch app firmware from URL"),
-    .reset = arg_lit0(NULL, "reset", "clear OTA internal states"),
+    .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
+    .reset = arg_lit0("r", "reset", "clear OTA internal states"),
     .end   = arg_end(5)
 };
 
@@ -301,7 +301,7 @@ static void register_system() {
         ESP_CMD_ARG(system, update, "OTA Updation helper command"),
 #endif
     };
-    register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
+    register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -373,7 +373,7 @@ static struct {
     .key  = arg_str0("k", NULL, "<CODE>", "HID report keypress"),
     .mse  = arg_str0("m", NULL, "<B|XYVH>", "HID report mouse"),
     .dial = arg_str0("d", NULL, "<B|LRUD>", "HID report S-Dial"),
-    .tout = arg_int0("t", NULL, "<65535>", "key/mouse timeout in ms"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "key/mouse timeout in ms"),
     .end  = arg_end(5)
 };
 
@@ -526,8 +526,8 @@ static struct {
     .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
     .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
     .val = arg_int0(NULL, NULL, "regval", "register value"),
-    .len = arg_int0(NULL, "len", "<uint8>", "read specified length of regs"),
-    .hex = arg_lit0(NULL, "word", "read/write in word (16-bit) mode"),
+    .len = arg_int0("l", "len", "<uint8>", "read specified length of regs"),
+    .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
     .end = arg_end(6)
 };
 
@@ -640,7 +640,7 @@ static struct {
     struct arg_end *end;
 } driver_adc_args = {
     .intv = arg_int0("i", NULL, "<10-1000>", "interval in ms, default 500"),
-    .tout = arg_int0("t", NULL, "<2^31>", "loop until timeout in ms"),
+    .tout = arg_int0("t", NULL, "<0-2^31>", "loop until timeout in ms"),
     .end = arg_end(2)
 };
 
@@ -726,7 +726,7 @@ static void register_driver() {
         ESP_CMD_ARG(driver, pwm, "Control rotation of servo by PWM"),
 #endif
     };
-    register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
+    register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -1008,7 +1008,7 @@ static void register_utils() {
         ESP_CMD_ARG(utils, hist, "Dump / load console history from flash"),
 #endif
     };
-    register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
+    register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -1026,7 +1026,7 @@ static struct {
     .cmd  = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
     .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
     .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
-    .tout = arg_int0("t", NULL, "<65535>", "scan/join timeout in ms"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "scan/join timeout in ms"),
     .end  = arg_end(4)
 };
 
@@ -1035,7 +1035,7 @@ static int net_sta(int argc, char **argv) {
     const char * cmd = ARG_STR(net_sta_args.cmd, "");
     uint16_t tout_ms = ARG_INT(net_sta_args.tout, 0);
     if (strstr(cmd, "scan")) {
-        return wifi_sta_scan(ARG_STR(net_sta_args.ssid, NULL), 0, tout_ms);
+        return wifi_sta_scan(ARG_STR(net_sta_args.ssid, NULL), 0, tout_ms, 1);
     } else if (strstr(cmd, "join")) {
         const char *ssid = ARG_STR(net_sta_args.ssid, NULL);
         const char *pass = ARG_STR(net_sta_args.pass, (ssid ? "" : NULL));
@@ -1078,40 +1078,31 @@ static int net_ap(int argc, char **argv) {
        //
 #ifdef CONSOLE_NET_FTM
 static struct {
-    struct arg_str *cmd;
     struct arg_str *ssid;
     struct arg_int *npkt;
-    struct arg_int *tout;
+    struct arg_lit *rep;
     struct arg_str *ctrl;
     struct arg_int *base;
     struct arg_end *end;
 } net_ftm_args = {
-    .cmd  = arg_str1(NULL, NULL, "<REP|REQ>", "run as responder | initiator"),
     .ssid = arg_str0(NULL, NULL, "<SSID>", "initiator target AP hostname"),
     .npkt = arg_int0("n", NULL, "<0-32|64>", "initiator frame count"),
-    .tout = arg_int0("t", NULL, "<65535>", "initiator timeout in ms"),
+    .rep  = arg_lit0(NULL, "resp", "control responder"),
     .ctrl = arg_str0("c", NULL, "<on|off>", "responder enable / disable"),
     .base = arg_int0("o", NULL, "<cm>", "responder T1 offset in cm"),
-    .end  = arg_end(6)
+    .end  = arg_end(5)
 };
 
 static int net_ftm(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ftm_args);
-    const char *cmd = net_ftm_args.cmd->sval[0];
-    if (strstr(cmd, "REP")) {
-        int16_t base = net_ftm_args.base->ival[0];
+    if (net_ftm_args.rep->count) {
         return ftm_respond(
             ARG_STR(net_ftm_args.ctrl, NULL),
-            net_ftm_args.base->count ? &base : NULL);
-    } else if (strstr(cmd, "REQ")) {
-        uint8_t npkt = net_ftm_args.npkt->ival[0];
+            ARG_INT(net_ftm_args.base, 0));
+    } else {
         return ftm_request(
             ARG_STR(net_ftm_args.ssid, NULL),
-            ARG_INT(net_ftm_args.tout, 1000),
-            net_ftm_args.npkt->count ? &npkt : NULL);
-    } else {
-        printf("Invalid command: `%s`\n", cmd);
-        return ESP_ERR_INVALID_ARG;
+            ARG_INT(net_ftm_args.npkt, -1));
     }
 }
 #endif
@@ -1121,16 +1112,16 @@ static struct {
     struct arg_str *ctrl;
     struct arg_str *host;
     struct arg_str *serv;
-    struct arg_str *proto;
+    struct arg_str *prot;
     struct arg_int *tout;
     struct arg_end *end;
 } net_mdns_args = {
-    .ctrl  = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
-    .host  = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
-    .serv  = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
-    .proto = arg_str0("p", NULL, "<_tcp>", "mDNS protocol to query"),
-    .tout  = arg_int0("t", NULL, "<65535>", "query timeout in ms"),
-    .end   = arg_end(5)
+    .ctrl = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
+    .host = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
+    .serv = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
+    .prot = arg_str0("p", NULL, "<_tcp>", "mDNS protocol to query"),
+    .tout = arg_int0("t", NULL, "<0-65535>", "query timeout in ms"),
+    .end  = arg_end(5)
 };
 
 static int net_mdns(int argc, char **argv) {
@@ -1139,8 +1130,34 @@ static int net_mdns(int argc, char **argv) {
         ARG_STR(net_mdns_args.ctrl, NULL),
         ARG_STR(net_mdns_args.host, NULL),
         ARG_STR(net_mdns_args.serv, NULL),
-        ARG_STR(net_mdns_args.proto, NULL),
+        ARG_STR(net_mdns_args.prot, NULL),
         ARG_INT(net_mdns_args.tout, 0)
+    );
+}
+#endif
+
+#ifdef CONSOLE_NET_SNTP
+static struct {
+    struct arg_str *ctrl;
+    struct arg_str *host;
+    struct arg_str *mode;
+    struct arg_int *intv;
+    struct arg_end *end;
+} net_sntp_args = {
+    .ctrl = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
+    .host = arg_str0("h", NULL, "<HOST>", "SNTP server name or address"),
+    .mode = arg_str0("m", NULL, "<immed|smooth>", "SNTP time sync mode"),
+    .intv = arg_int0("i", NULL, "<0-2^31>", "interval between sync in ms"),
+    .end  = arg_end(4)
+};
+
+static int net_sntp(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_sntp_args);
+    return sntp_command(
+        ARG_STR(net_sntp_args.ctrl, NULL),
+        ARG_STR(net_sntp_args.host, NULL),
+        ARG_STR(net_sntp_args.mode, NULL),
+        ARG_INT(net_sntp_args.intv, 0)
     );
 }
 #endif
@@ -1148,55 +1165,105 @@ static int net_mdns(int argc, char **argv) {
 #ifdef CONSOLE_NET_PING
 static struct {
     struct arg_str *host;
-    struct arg_int *tout;
+    struct arg_int *intv;
     struct arg_int *size;
     struct arg_int *npkt;
+    struct arg_lit *stop;
+    struct arg_lit *dry;
     struct arg_end *end;
 } net_ping_args = {
-    .host = arg_str1(NULL, NULL, "<host>", "target IP address"),
-    .tout = arg_int0("t", NULL, "<65535>", "response timeout in ms"),
-    .size = arg_int0("s", NULL, "<byte>", "number of data bytes to be sent"),
-    .npkt = arg_int0("n", NULL, "<num>", "stop after sending num packets"),
-    .end  = arg_end(4)
+    .host = arg_str1(NULL, NULL, "<HOST>", "target hostname or IP address"),
+    .intv = arg_int0("i", NULL, "<0-65535>", "interval between ping in ms"),
+    .size = arg_int0("l", NULL, "<LEN>", "number of data bytes to be sent"),
+    .npkt = arg_int0("n", NULL, "<NUM>", "stop after sending num packets"),
+    .stop = arg_lit0(NULL, "stop", "stop currently running ping session"),
+    .dry  = arg_lit0(NULL, "dryrun", "print IP address and stop (dryrun)"),
+    .end  = arg_end(6)
 };
 
 static int net_ping(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ping_args);
+    if (net_ping_args.dry->count)
+        return wifi_parse_addr(net_ping_args.host->sval[0], NULL);
     return ping_command(
-        net_ping_args.host->sval[0], ARG_INT(net_ping_args.tout, 0),
-        ARG_INT(net_ping_args.size, 0), ARG_INT(net_ping_args.npkt, 0)
+        net_ping_args.host->sval[0],
+        ARG_INT(net_ping_args.intv, 0),
+        ARG_INT(net_ping_args.size, 0),
+        ARG_INT(net_ping_args.npkt, 0),
+        net_ping_args.stop->count
     );
 }
 #endif
 
 #ifdef CONSOLE_NET_IPERF
 static struct {
+    struct arg_lit *serv;
     struct arg_str *host;
     struct arg_int *port;
     struct arg_int *size;
     struct arg_int *intv;
     struct arg_int *tout;
-    struct arg_lit *stop;
     struct arg_lit *udp;
+    struct arg_lit *stop;
     struct arg_end *end;
 } net_iperf_args = {
-    .host = arg_str0("h", NULL, "<host>", "run in client mode"),
-    .port = arg_int0("p", NULL, "<port>", "specify port number"),
-    .size = arg_int0("l", NULL, "<bytes>", "read/write buffer size"),
-    .intv = arg_int0("i", NULL, "<sec>", "time between bandwidth reports"),
-    .tout = arg_int0("t", NULL, "<sec>", "time to transmit for"),
+    .serv = arg_lit0("s", NULL, "run in server mode"),
+    .host = arg_str0("c", NULL, "<HOST>", "run in client mode"),
+    .port = arg_int0("p", NULL, "<PORT>", "specify port number"),
+    .size = arg_int0("l", NULL, "<LEN>", "read/write buffer size"),
+    .intv = arg_int0("i", NULL, "<0-255>", "time between reports in seconds"),
+    .tout = arg_int0("t", NULL, "<0-255>", "session timeout in seconds"),
+    .udp  = arg_lit0("u", "udp", "use UDP rather than TCP"),
     .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
-    .udp  = arg_lit0(NULL, "udp", "use UDP rather than TCP"),
-    .end  = arg_end(7)
+    .end  = arg_end(8)
 };
 
 static int net_iperf(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_iperf_args);
+    const char *host = net_iperf_args.serv->count ? NULL : "";
     return iperf_command(
-        ARG_STR(net_iperf_args.host, NULL),
-        ARG_INT(net_iperf_args.port, 0), ARG_INT(net_iperf_args.size, 0),
-        ARG_INT(net_iperf_args.intv, 0), ARG_INT(net_iperf_args.tout, 0),
-        net_iperf_args.stop->count, net_iperf_args.udp->count
+        ARG_STR(net_iperf_args.host, host),
+        ARG_INT(net_iperf_args.port, 0),
+        ARG_INT(net_iperf_args.size, 0),
+        ARG_INT(net_iperf_args.intv, 1),
+        ARG_INT(net_iperf_args.tout, 0),
+        net_iperf_args.udp->count,
+        net_iperf_args.stop->count
+    );
+}
+#endif
+
+#ifdef CONSOLE_NET_TSYNC
+static struct {
+    struct arg_lit *serv;
+    struct arg_str *host;
+    struct arg_int *port;
+    struct arg_int *tout;
+    struct arg_lit *stat;
+    struct arg_lit *stop;
+    struct arg_end *end;
+} net_tsync_args = {
+    .serv = arg_lit0("s", NULL, "run in server mode"),
+    .host = arg_str0("c", NULL, "<HOST>", "run in client mode"),
+    .port = arg_int0("p", NULL, "<PORT>", "specify port number"),
+    .tout = arg_int0("t", NULL, "<0-2^31>", "timeout in ms"),
+    .stat = arg_lit0(NULL, "stat", "print service summary"),
+    .stop = arg_lit0(NULL, "stop", "stop currently running task"),
+    .end  = arg_end(6)
+};
+
+static int net_tsync(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_tsync_args);
+    if (net_tsync_args.stat->count) {
+        timesync_server_status();
+        return ESP_OK;
+    }
+    const char *host = net_tsync_args.serv->count ? NULL : "";
+    return timesync_command(
+        ARG_STR(net_tsync_args.host, host),
+        ARG_INT(net_tsync_args.port, 0),
+        ARG_INT(net_tsync_args.tout, 0),
+        net_tsync_args.stop->count
     );
 }
 #endif
@@ -1213,7 +1280,10 @@ static void register_network() {
         ESP_CMD_ARG(net, ftm, "RTT Fine Timing Measurement between STA & AP"),
 #endif
 #ifdef CONSOLE_NET_MDNS
-        ESP_CMD_ARG(net, mdns, "Query / Get mDNS hostname and service info"),
+        ESP_CMD_ARG(net, mdns, "Query / Set mDNS hostname and service info"),
+#endif
+#ifdef CONSOLE_NET_SNTP
+        ESP_CMD_ARG(net, sntp, "Query / Set SNTP server and sync status"),
 #endif
 #ifdef CONSOLE_NET_PING
         ESP_CMD_ARG(net, ping, "Send ICMP ECHO_REQUEST to specified hosts"),
@@ -1221,15 +1291,23 @@ static void register_network() {
 #ifdef CONSOLE_NET_IPERF
         ESP_CMD_ARG(net, iperf, "Bandwidth test on IP networks"),
 #endif
+#ifdef CONSOLE_NET_TSYNC
+        ESP_CMD_ARG(net, tsync, "TimeSync protocol daemon and client"),
+#endif
     };
-    register_commands(cmds, sizeof(cmds) / sizeof(esp_console_cmd_t));
+    register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
  * Export register commands
  */
 
+// Put this variable into RTC memory to maintain the value during deep sleep
+RTC_DATA_ATTR static int boot_count = 0;
+
 extern "C" void console_register_commands() {
+    if (boot_count++) fputs("Woken up from deep sleep mode", stderr);
+    esp_log_level_set(TAG, ESP_LOG_INFO);
     const esp_console_cmd_t clear = {
         .command = "clear",
         .help = "Clean screen",
@@ -1240,7 +1318,6 @@ extern "C" void console_register_commands() {
         },
         .argtable = NULL
     };
-    esp_log_level_set(TAG, ESP_LOG_INFO);
     ESP_ERROR_CHECK( esp_console_register_help_command() );
     ESP_ERROR_CHECK( esp_console_cmd_register(&clear) );
     register_network();

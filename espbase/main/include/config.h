@@ -39,9 +39,12 @@ typedef struct config_webserver_t {
 typedef struct config_application_t {
     const char * MDNS_RUN;  // Enable mDNS service
     const char * MDNS_HOST; // Register mDNS hostname
+    const char * SNTP_RUN;  // Enable SNTP service
+    const char * SNTP_HOST; // NTP server to sync time from
     const char * OTA_RUN;   // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
     const char * USB_MODE;  // Select USB work mode
+    const char * TIMEZONE;  // Set local timezone (see tzset(3) man)
     const char * PROMPT;    // Console promption string
 } config_app_t;
 

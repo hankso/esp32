@@ -8,17 +8,6 @@
 
 #include "globals.h"
 
-#include <time.h>
-
-// TODO
-// #include <sys/time.h>
-// #include <sys/types.h>
-// #include <sys/socket.h>
-// #include <arpa/inet.h>
-// #include <netinet/in.h>
-// #include <netinet/tcp.h>
-// #include <netinet/udp.h>
-
 #define TIMESTAMP_MS            1000
 #define TIMESTAMP_US            1000000
 #define TIMESTAMP_NS            1000000000
@@ -28,7 +17,7 @@
 
 #define TIMESYNC_PORT           1918
 #define TIMESYNC_RCVBUF_SIZE    128
-#define TIMESYNC_CLIENTS_NUM    5
+#define TIMESYNC_CLIENTS_NUM    3
 #define TIMESYNC_PACKTYPE       double
 
 #ifdef __cplusplus
@@ -74,12 +63,13 @@ const char * getsockaddr(int fd);
 int timesync_server_init(uint16_t port);
 int timesync_server_loop(uint16_t timeout);  // timeout in milliseconds
 int timesync_server_exit();
+void timesync_server_status();
 
 // TimeSync Client
 int timesync_client_init(const char *host, uint16_t port);
-int timesync_client_sync(uint8_t ack);  // ack: whether send timedone after timesync
+int timesync_client_sync(double *tsoffset, uint8_t ack);
+int timesync_client_xsync(double *tsoffset, uint8_t iters);
 int timesync_client_exit();
-double timesync_client_xsync(uint8_t iters);  // do sync mulitple times and calculate mean value
 
 #ifdef __cplusplus
 }

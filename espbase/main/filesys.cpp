@@ -506,7 +506,7 @@ void FLASHFS::getInfo(filesys_info_t *info) {
     if (( info->wlhdl = _wlhdl ) != WL_INVALID_HANDLE) {
         info->pdrv = ff_diskio_get_pdrv_wl(_wlhdl);
         info->blksize = wl_sector_size(_wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
-        info->blkcnt = info->blksize ? (_total / info->blksize) : 0;
+        info->blkcnt = info->blksize ? _total / info->blksize : 0;
     }
 }
 #endif // CONFIG_USE_FFS

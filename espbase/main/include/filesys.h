@@ -182,7 +182,7 @@ public:
 
     void printInfo(FILE *stream = stdout) {
         fprintf(stream, "File System used %llu/%llu KB (%llu%%)\n",
-                _used / 1024, _total / 1024, 100 * _used / _total);
+                _used / 1024, _total / 1024, 100 * _used / (_total ?: 1));
     }
 };
 

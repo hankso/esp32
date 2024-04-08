@@ -4,23 +4,11 @@
  * Create: 2019-05-27 15:29:05
  */
 #include "server.h"
-
 #include "config.h"
 #include "update.h"
 #include "drivers.h"
 #include "console.h"
 #include "filesys.h"
-
-#ifdef CONFIG_USE_WEBSERVER
-#   if __has_include("ESPAsyncWebServer.h") && __has_include("AsyncTCP.h")
-#       include <AsyncTCP.h>
-#       include <ESPAsyncWebServer.h>
-#   else
-#       warning "Run `git clone git@github.com:me-no-dev/ESPAsyncWebServer`"
-#       warning "Run `git clone git@github.com:me-no-dev/AsyncTCP`"
-#       undef CONFIG_USE_WEBSERVER
-#   endif
-#endif
 
 #ifndef CONFIG_USE_WEBSERVER
 
@@ -30,6 +18,9 @@ bool server_get_logging() { return false; }
 void server_set_logging(bool l) { NOTUSED(l); }
 
 #else
+
+#include <AsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 
 static const char
 *TAG = "Server",
