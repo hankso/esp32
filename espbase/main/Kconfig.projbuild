@@ -1,372 +1,571 @@
 menu "ESP Base Configuration"
 
-    config DEBUG
+    config BASE_DEBUG
         bool "Enable DEBUG features and loggings"
         default y
 
-    config AUTO_ALIGN
+    config BASE_AUTO_ALIGN
         bool "Enable tab and space alignment in loggings"
         default y
 
-    menuconfig USE_LED
-        bool "Enable LED"
-        default y
-    if USE_LED
-        config GPIO_LED
-            int "Blink GPIO number"
-            range 0 48
-            default 8 if IDF_TARGET_ESP32C3 || IDF_TARGET_ESP32H2
-            default 18 if IDF_TARGET_ESP32S2
-            default 48 if IDF_TARGET_ESP32S3
-            default 5
-
-        config LED_NUM
-            int "LED number"
-            range 1 256
-            default 1
-
-        choice
-            prompt "Select LED driver mode"
-            default LED_MODE_GPIO
-            config LED_MODE_GPIO
-                bool "GPIO on/off"
-            config LED_MODE_LEDC
-                bool "LEDC PWM signal"
-            config LED_MODE_RMT
-                bool "RMT addressable LED (e.g. ws2812)"
-        endchoice
-
-        config LED_INDICATOR
-            bool "Enable IOT component led indicator"
-            default y
-            help
-                Add about 27.4KB to firmware.
-    endif
-
-    menuconfig USE_UART
-        bool "Enable UART"
-        default y
-    if USE_UART
-        config UART_NUM
-            int "UART Controller number"
-            range 0 2
-            default 0
-
-        config GPIO_TXD
-            int "UART TXD pin number"
-            range 0 48
-            default 43 if IDF_TARGET_ESP32S3
-            default 1
-
-        config GPIO_RXD
-            int "UART RXD pin number"
-            range 0 48
-            default 44 if IDF_TARGET_ESP32S3
-            default 3
-    endif
-
-    menuconfig USE_I2C
-        bool "Enable I2C"
-        default y
-    if USE_I2C
-        config I2C_NUM
-            int "I2C Bus number"
-            range 0 1
-            default 0
-
-        config GPIO_SDA
-            int "I2C SDA pin number"
-            range 0 48
-            default 17 if IDF_TARGET_ESP32S3
-            default 26
-
-        config GPIO_SCL
-            int "I2C SCL pin number"
-            range 0 48
-            default 18 if IDF_TARGET_ESP32S3
-            default 27
-
-        config USE_SCREEN
-            bool "Enable Screen on I2C 1" # u8g2 occupies I2C_NUM_1
-            default y
-            select USE_I2C1 if I2C_NUM != 1
-            help
-                Enable scn_xxx functions. Add about 4.0KB to firmware.
-
-        config USE_I2C1
-            bool
-
-        config GPIO_SDA1
-            int "I2C1 SDA pin number"
-            depends on USE_I2C1
-            range 0 48
-            default 15 if IDF_TARGET_ESP32S3
-            default 18
-
-        config GPIO_SCL1
-            int "I2C1 SCL pin number"
-            depends on USE_I2C1
-            range 0 48
-            default 16 if IDF_TARGET_ESP32S3
-            default 19
-
-        config USE_I2C_GPIOEXP
-            bool "Enable GPIO Expander on I2C"
-            select USE_GPIOEXP
-            default n
-            help
-                Enable i2c_gpio_xxx functions. Add about 3.0KB to firmware.
-    endif
-
-    menuconfig USE_SPI
-        bool "Enable SPI"
-        default y
-    if USE_SPI
-        config SPI_NUM
-            int "SPI Host number"
-            range 1 3
-            default 2
-
-        config GPIO_SPI_MISO
-            int "SPI MISO pin number"
-            range 0 48
-            default 13 if IDF_TARGET_ESP32S3
-            default 12
-
-        config GPIO_SPI_MOSI
-            int "SPI MOSI pin number"
-            range 0 48
-            default 11 if IDF_TARGET_ESP32S3
-            default 13
-
-        config GPIO_SPI_SCLK
-            int "SPI SCLK pin number"
-            range 0 48
-            default 12 if IDF_TARGET_ESP32S3
-            default 14
-
-        config GPIO_SPI_CS0
-            int "SPI CS 0 pin number"
-            depends on USE_SDFS
-            range 0 48
-            default 10 if IDF_TARGET_ESP32S3
-            default 15
-
-        config USE_SPI_GPIOEXP
-            bool "Enable GPIO Expander on SPI"
-            select USE_GPIOEXP
-            default n
-            help
-                Enable spi_gpio_xxx functions. Add about 16KB to firmware.
-
-        config GPIO_SPI_CS1
-            int "SPI CS 1 pin number"
-            depends on USE_SPI_GPIOEXP
-            range 0 48
-            default 9 if IDF_TARGET_ESP32S3
-            default 25
-    endif
-
-    menuconfig USE_USB
-        bool "Enable USB" if IDF_TARGET_ESP32S2 || IDF_TARGET_ESP32S3
+    menuconfig BASE_USE_USB
+        bool "Enable USB" if IDF_TARGET_ESP32S3
         default y if IDF_TARGET_ESP32S3
         select TINYUSB
         help
             Enable usbmode_xxx functions. Add about 62.7Kb to firmware.
-    if USE_USB
-        config USB_CDC_HOST
+    if BASE_USE_USB
+        config BASE_USB_CDC_HOST
             bool "Enable USB CDC host mode"
             default y
 
-        config USB_CDC_DEVICE
-            bool "Enable USB CDC slave mode"
+        config BASE_USB_CDC_DEVICE
+            bool "Enable USB CDC device mode"
             select TINYUSB_CDC_ENABLED
             default y
         choice
-            prompt "Select USB CDC slave mode features"
-            depends on USB_CDC_DEVICE
-            default USB_CDC_DEVICE_SERIAL
-            config USB_CDC_DEVICE_SERIAL
+            prompt "Select USB CDC device mode features"
+            depends on BASE_USB_CDC_DEVICE
+            default BASE_USB_CDC_DEVICE_SERIAL
+            config BASE_USB_CDC_DEVICE_SERIAL
                 bool "Act as serial device"
-            config USB_CDC_DEVICE_CONSOLE
+            config BASE_USB_CDC_DEVICE_CONSOLE
                 bool "Act as console device"
         endchoice
 
-        config USB_MSC_HOST
+        config BASE_USB_MSC_HOST
             bool "Enable USB MSC host mode"
             default y
 
-        config USB_MSC_DEVICE
+        config BASE_USB_MSC_DEVICE
             bool "Enable USB MSC Slave mode"
             select TINYUSB_MSC_ENABLED
             imply USE_FFS
             imply USE_SDFS
             default y
 
-        config USB_HID_HOST
+        config BASE_USB_HID_HOST
             bool "Enable USB HID host mode"
             default y
 
-        config USB_HID_DEVICE
-            bool "Enable USB HID slave mode"
+        config BASE_USB_HID_DEVICE
+            bool "Enable USB HID device mode"
             select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4+
             select TINYUSB_HID_COUNT    # for ESP-IDF v5.0+
             default y
-        config USB_HID_DEVICE_TASK
+        config BASE_USB_HID_DEVICE_TASK
             bool "Create a task for HID reports"
-            depends on USB_HID_DEVICE
+            depends on BASE_USB_HID_DEVICE
             default n
     endif
 
-    config USE_GPIOEXP
-        bool
-    if USE_GPIOEXP
-        config GPIO_INT
-            int "GPIO Expander Interrupt pin number"
-            range 0 48
-            default 1 if IDF_TARGET_ESP32S3
-            default 34
+    menuconfig BASE_USE_LED
+        bool "Enable LED"
+        select BASE_GPIO_NUMBER
+        default y
+    if BASE_USE_LED
+        config BASE_LED_NUM
+            int "LED number"
+            range 1 256
+            default 1
+
+        choice
+            prompt "Select LED driver mode"
+            default BASE_LED_MODE_GPIO
+            config BASE_LED_MODE_GPIO
+                bool "GPIO on/off"
+            config BASE_LED_MODE_LEDC
+                bool "LEDC PWM signal"
+            config BASE_LED_MODE_RMT
+                bool "RMT addressable LED (e.g. ws2812)"
+        endchoice
+
+        config BASE_LED_INDICATOR
+            bool "Enable IOT component led indicator"
+            default y
+            help
+                Add about 27.4KB to firmware.
     endif
 
-    menuconfig USE_ADC
-        bool "Enable ADC"
+    menuconfig BASE_USE_UART
+        bool "Enable UART"
+        select BASE_GPIO_NUMBER
+        default y
+    if BASE_USE_UART
+        config BASE_UART_NUM
+            int "UART Controller number"
+            range 0 2
+            default 0
+    endif
+
+    menuconfig BASE_USE_I2C
+        bool "Enable I2C"
+        select BASE_GPIO_NUMBER
+        default y
+    if BASE_USE_I2C
+        config BASE_I2C_NUM
+            int "I2C Bus number"
+            range 0 1
+            default 0
+
+        config BASE_I2C_SPEED
+            int "I2C Bus speed in Hz"
+            range 1 400000
+            default 50000
+            help
+                Default value: 50KHz
+
+        config BASE_USE_I2C0
+            bool "Enable I2C Bus 0" if BASE_I2C_NUM = 1
+            default y if BASE_I2C_NUM = 0 || BASE_SCREEN_I2C_ALT
+
+        config BASE_USE_I2C1
+            bool "Enable I2C Bus 1" if BASE_I2C_NUM = 0
+            default y if BASE_I2C_NUM = 1 || BASE_SCREEN_I2C_ALT
+    endif
+
+    menuconfig BASE_USE_SPI
+        bool "Enable SPI"
+        select BASE_GPIO_NUMBER
+        default y
+    if BASE_USE_SPI
+        config BASE_SPI_NUM
+            int "SPI Host number"
+            range 1 3
+            default 2
+    endif
+
+    menuconfig BASE_USE_SCREEN
+        bool "Enable Screen" if BASE_USE_I2C || BASE_USE_SPI
         default y
         help
-            Enable adc_read function. Add about 4.6KB to firmware.
-    if USE_ADC
-        config GPIO_ADC
-            int "ADC1 pin number"
-            range 32 39 if IDF_TARGET_ESP32
-            range 1 10 if IDF_TARGET_ESP32S3
-            range 0 48
-            default 2 if IDF_TARGET_ESP32S3
-            default 36
+            Enable scn_xxx functions. Add about 100KB to firmware.
+    if BASE_USE_SCREEN
+        choice
+            prompt "Select Screen interface"
+            config BASE_SCREEN_I2C
+                bool "I2C" if BASE_USE_I2C
+            config BASE_SCREEN_SPI
+                bool "SPI" if BASE_USE_SPI
+        endchoice
+
+        if BASE_SCREEN_I2C
+            config BASE_SCREEN_I2C_ADDR
+                hex "I2C Screen 7bit address"
+                default 0x3C
+
+            config BASE_SCREEN_I2C_ALT
+                bool "I2C Screen use dedicated I2C bus"
+                default y if IDF_TARGET_ESP32
+
+            config BASE_SCREEN_I2C_SPEED
+                int "I2C Screen clock speed in Hz" if BASE_SCREEN_I2C_ALT
+                range 1 1000000
+                default 400000
+                help
+                    Default value: 400KHz
+        endif
+
+        if BASE_SCREEN_SPI
+            config BASE_SCREEN_SPI_MODE
+                hex "SPI Screen mode (CPOL | CPHA)"
+                range 0x00 0x03
+                default 0x00
+
+            config BASE_SCREEN_SPI_SPEED
+                int "SPI Screen clock speed in Hz"
+                range 1 80000000
+                default 20000000
+                help
+                    Default value: 20MHz
+        endif
     endif
 
-    menuconfig USE_BTN
-        bool "Enable Button input"
-        default y
-    if USE_BTN
-        config GPIO_BTN
-            int "Button pin number"
-            range 0 48
-            default 4 if IDF_TARGET_ESP32S3
-            default 35
+    menuconfig BASE_USE_GPIOEXP
+        bool "Enable GPIO Expander" if BASE_USE_I2C || BASE_USE_SPI
+        help
+            Enable gexp_xxx functions. Add about 19KB to firmware.
+    if BASE_USE_GPIOEXP
+        config BASE_GPIOEXP_I2C
+            bool "Enable GPIO Expander on I2C"
+            default n
 
-        config BTN_ACTIVE_LOW
-            bool "Button active low"
+        config BASE_GPIOEXP_SPI
+            bool "Enable GPIO Expander on SPI"
+            default n
+
+        config BASE_GPIOEXP_INT
+            bool "Handle interrupt from expander"
+            select BASE_USE_INT
+            default y if BASE_GPIOEXP_I2C || BASE_GPIOEXP_SPI
+    endif
+
+    menuconfig BASE_USE_INT
+        bool "Enable Interrupt input"
+        select BASE_GPIO_NUMBER
+        default n
+    if BASE_USE_INT
+        choice
+            prompt "Select GPIO interrupt trigger"
+            default BASE_INT_NEGEDGE
+            config BASE_INT_POSEDGE
+                bool "Rising edge"
+            config BASE_INT_NEGEDGE
+                bool "Falling edge"
+            config BASE_INT_ANYEDGE
+                bool "Both rising and falling edge"
+            config BASE_INT_LOW
+                bool "Input low level"
+            config BASE_INT_HIGH
+                bool "Input high level"
+        endchoice
+    endif
+
+    menuconfig BASE_USE_BTN
+        bool "Enable Button input"
+        select BASE_GPIO_NUMBER
+        default y
+    if BASE_USE_BTN
+        config BASE_BTN_ACTIVE_HIGH
+            bool "Button active high"
             default n
     endif
 
-    menuconfig USE_KNOB
+    menuconfig BASE_USE_ADC
+        bool "Enable ADC input"
+        select BASE_GPIO_NUMBER
+        default y
+        help
+            Enable adc_xxx function. Add about 4.6KB to firmware.
+    if BASE_USE_ADC
+        config BASE_ADC_MULTISAMPLING
+            int "ADC raw value multi-sampling to filter noise"
+            range 0 1024
+            default 64
+
+        choice
+            prompt "Select ADC sensor features"
+            default BASE_ADC_HALL if IDF_TARGET_ESP32
+            default BASE_ADC_SINGLE
+            config BASE_ADC_SINGLE
+                bool "Try to use Read ADC normally"
+            config BASE_ADC_JOYSTICK
+                bool "Read joystick value by ADC"
+            config BASE_ADC_HALL
+                bool "Read hall sensor value by ADC" if IDF_TARGET_ESP32
+                help
+                    Compatible with BASE_ADC_DEFAULT & BASE_ADC_JOYSTICK
+        endchoice
+    endif
+
+    config BASE_USE_DAC
+        bool "Enable DAC to self-test ADC" if IDF_TARGET_ESP32
+        select BASE_GPIO_NUMBER
+        default n
+        help
+            Enable dac_xxx functions. Add about 2.5KB to firmware.
+
+    config BASE_USE_TPAD
+        bool "Enable touch pad"
+        select BASE_GPIO_NUMBER
+        default n
+        help
+            Enable touch_xxx functions.
+
+    config BASE_USE_KNOB
         bool "Enable Knob input"
+        select BASE_GPIO_NUMBER
         default y
         help
             Add about 2.3KB to firmware.
-    if USE_KNOB
-        config GPIO_ENCA
-            int "Knob encoder A pin number"
-            range 0 48
-            default 5 if IDF_TARGET_ESP32S3
-            default 37
 
-        config GPIO_ENCB
-            int "Knob encoder B pin number"
-            range 0 48
-            default 6 if IDF_TARGET_ESP32S3
-            default 38
-    endif
-
-    menuconfig USE_SERVO
+    config BASE_USE_SERVO
         bool "Enable Servo control"
+        select BASE_GPIO_NUMBER
         default y
         help
             Enable pwm_xxx_degree functions. Add about 1.5KB to firmware.
-    if USE_SERVO
-        config GPIO_SERVOV
-            int "Servo Vertical PWM pin number"
-            range 0 48
-            default 7 if IDF_TARGET_ESP32S3
-            default 32
 
-        config GPIO_SERVOH
-            int "Servo Horizontal PWM pin number"
-            range 0 48
-            default 8 if IDF_TARGET_ESP32S3
-            default 33
-    endif
-
-    menuconfig USE_BUZZER
+    config BASE_USE_BUZZER
         bool "Enable Buzzer output"
+        select BASE_GPIO_NUMBER
         default y
         help
             Enable pwm_xxx_tone functions. Add about 1.1KB to firmware.
-    if USE_BUZZER
-        config GPIO_BUZZER
-            int "Buzzer PWM pin number"
-            range 0 48
-            default 14 if IDF_TARGET_ESP32S3
-            default 4
+
+    menuconfig BASE_USE_BT
+        bool "Enable BT, BLE & Bluedroid host"
+        select BT_ENABLED
+        default y
+    if BASE_USE_BT
+        config BASE_BT_HID_DEVICE
+            bool "Enable BT HID device mode"
+            depends on IDF_TARGET_ESP32
+            select BT_CLASSIC_ENABLED
+            select BT_HID_ENABLED
+            default y
+        config BASE_BLE_HID_DEVICE
+            bool "Enable BLE HID device mode"
+            select BT_BLE_ENABLED
+            default y
+        config BASE_BLE_HID_HOST
+            bool "Enable BLE HID host mode"
+            select BT_BLE_ENABLED
+            default y
     endif
 
-    menuconfig USE_FFS
+    menuconfig BASE_USE_WIFI
+        bool "Enable WiFi STA & AP"
+        default y
+    if BASE_USE_WIFI
+        config BASE_AP_CHANNEL
+            int "Channel of AP mode"
+            range 1 13
+            default 1
+
+        config BASE_AP_MAX_CONN
+            int "Max STA connections of AP mode"
+            range 0 16
+            default 3
+
+        config BASE_OTA_FETCH
+            bool "Enable OTA updation from URL"
+            default n
+            help
+                Enable ota_updation_url function. Add about 140KB to firmware.
+
+        config BASE_USE_WEBSERVER
+            bool "Enable web server on port 80"
+            default y
+            help
+                Enable server_loop_xxx functions. Add about 80KB to firmware.
+    endif
+
+    menuconfig BASE_USE_FFS
         bool "Enable Flash FileSystem"
         default y
-    if USE_FFS
-        config FFS_MP
+    if BASE_USE_FFS
+        config BASE_FFS_MP
             string "Flash FileSystem Mount Point"
             default "/flashfs"
 
         choice
             prompt "Select Flash FileSystem Format"
-            default FFS_SPIFFS
-            config FFS_FAT
+            default BASE_FFS_SPIFFS
+            config BASE_FFS_FAT
                 bool "Storage partition is Fat FileSystem"
-            config FFS_SPIFFS
+            config BASE_FFS_SPIFFS
                 bool "Storage partition is SPI Flash FileSystem"
         endchoice
     endif
 
-    menuconfig USE_SDFS
+    menuconfig BASE_USE_SDFS
         bool "Enable SDCard FileSystem"
-        depends on USE_SPI
+        depends on BASE_USE_SPI
         default n
-    if USE_SDFS
-        config SDFS_MP
+    if BASE_USE_SDFS
+        config BASE_SDFS_MP
             string "SDCard FileSystem Mount Point"
             default "/sdcard"
     endif
 
-    config ALS_TRACK
+    config BASE_ALS_TRACK
         bool "Enable Ambient Light Sensor"
-        depends on USE_I2C
-        default n
+        depends on BASE_USE_I2C
+        default y
         help
             Enable als_xxx functions. Add about 1.0KB to firmware.
 
-    config VLX_SENSOR
+    config BASE_VLX_SENSOR
         bool "Enable VLX distance measurement input"
-        depends on USE_I2C
+        depends on BASE_USE_I2C
         default n
         help
             Enable vlx_probe function. Add about 5.0KB to firmware.
 
-    config OTA_FETCH
-        bool "Enable OTA updation from URL"
-        default n
-        help
-            Enable ota_updation_url function. Add about 140KB to firmware.
-
-    config USE_CONSOLE
+    config BASE_USE_CONSOLE
         bool "Enable console based on linenoise"
         default y
         help
             Enable console_xxx and commands. Add about 110KB to firmware.
 
-    config USE_WEBSERVER
-        bool "Enable web server on port 80"
-        default y
-        help
-            Enable server_loop_xxx functions. Add about 80KB to firmware.
+    config BASE_GPIO_NUMBER
+        bool "Config GPIO number"
+    if BASE_GPIO_NUMBER
+        config BASE_GPIO_LED
+            int "Blink GPIO number" if BASE_USE_LED
+            range 0 48
+            default 48 if IDF_TARGET_ESP32S3
+            default 5
+
+        if BASE_USE_UART
+            config BASE_GPIO_TXD
+                int "UART TXD pin number"
+                range 0 48
+                default 43 if IDF_TARGET_ESP32S3
+                default 1
+
+            config BASE_GPIO_RXD
+                int "UART RXD pin number"
+                range 0 48
+                default 44 if IDF_TARGET_ESP32S3
+                default 3
+        endif
+
+        if BASE_USE_I2C0
+            config BASE_GPIO_SDA0
+                int "I2C SDA0 pin number"
+                range 0 48
+                default 5 if IDF_TARGET_ESP32S3
+                default 21
+
+            config BASE_GPIO_SCL0
+                int "I2C SCL0 pin number"
+                range 0 48
+                default 6 if IDF_TARGET_ESP32S3
+                default 22
+        endif
+
+        if BASE_USE_I2C1
+            config BASE_GPIO_SDA1
+                int "I2C1 SDA1 pin number"
+                range 0 48
+                default 41 if IDF_TARGET_ESP32S3
+                default 23
+
+            config BASE_GPIO_SCL1
+                int "I2C1 SCL1 pin number"
+                range 0 48
+                default 42 if IDF_TARGET_ESP32S3
+                default 25
+        endif
+
+        if BASE_USE_SPI
+            config BASE_GPIO_SPI_MISO
+                int "SPI MISO pin number"
+                range 0 48
+                default 13 if IDF_TARGET_ESP32S3
+                default 12
+
+            config BASE_GPIO_SPI_MOSI
+                int "SPI MOSI pin number"
+                range 0 48
+                default 11 if IDF_TARGET_ESP32S3
+                default 13
+
+            config BASE_GPIO_SPI_SCLK
+                int "SPI SCLK pin number"
+                range 0 48
+                default 12 if IDF_TARGET_ESP32S3
+                default 14
+
+            config BASE_GPIO_SPI_CS0
+                int "SPI CS0 pin number (for SDCard)"
+                depends on BASE_USE_SDFS
+                range 0 48
+                default 8 if IDF_TARGET_ESP32S3
+                default 15
+
+            config BASE_GPIO_SPI_CS1
+                int "SPI CS1 pin number (for Screen)"
+                depends on BASE_SCREEN_SPI
+                range 0 48
+                default 9 if IDF_TARGET_ESP32S3
+                default 18
+
+            config BASE_GPIO_SPI_CS2
+                int "SPI CS2 pin number (for GPIOExp)"
+                depends on BASE_GPIOEXP_SPI
+                range 0 48
+                default 10 if IDF_TARGET_ESP32S3
+                default 19
+        endif
+
+        if BASE_SCREEN_SPI
+            config BASE_GPIO_SCN_RST
+                int "SPI Screen reset pin number"
+                range 0 48
+
+            config BASE_GPIO_SCN_DC
+                int "SPI Screen Data/Cmd pin number"
+                range 0 48
+                default 7 if IDF_TARGET_ESP32S3
+                default 27
+        endif
+
+        config BASE_GPIO_INT
+            int "Interrupt pin number" if BASE_USE_INT
+            range 0 48
+            default 14 if IDF_TARGET_ESP32S3
+            default 34
+
+        config BASE_GPIO_BTN
+            int "Button pin number" if BASE_USE_BTN
+            range 0 48
+            default 4 if IDF_TARGET_ESP32S3
+            default 35
+
+        if BASE_USE_ADC && !BASE_ADC_HALL
+            config BASE_GPIO_ADC1
+                int "ADC pin number 1"
+                range 32 39 if IDF_TARGET_ESP32
+                range 1 10 if IDF_TARGET_ESP32S3
+                range 0 48
+                default 1 if IDF_TARGET_ESP32S3
+                default 36
+
+            config BASE_GPIO_ADC2
+                int "ADC pin number 2" if BASE_ADC_JOYSTICK
+                range 32 39 if IDF_TARGET_ESP32
+                range 1 10 if IDF_TARGET_ESP32S3
+                range 0 48
+                default 2 if IDF_TARGET_ESP32S3
+                default 39
+        endif
+
+        config BASE_GPIO_DAC
+            int "DAC pin number" if BASE_USE_DAC && IDF_TARGET_ESP32
+            range 25 26
+            default 26
+
+        config BASE_GPIO_TPAD
+            int "Touch pin number" if BASE_USE_TPAD
+            range 0 48
+            default 2
+
+        if BASE_USE_KNOB
+            config BASE_GPIO_ENCA
+                int "Knob encoder A pin number"
+                range 0 48
+                default 15 if IDF_TARGET_ESP32S3
+                default 37
+
+            config BASE_GPIO_ENCB
+                int "Knob encoder B pin number"
+                range 0 48
+                default 16 if IDF_TARGET_ESP32S3
+                default 38
+        endif
+
+        if BASE_USE_SERVO
+            config BASE_GPIO_SERVOV
+                int "Servo Vertical PWM pin number"
+                range 0 48
+                default 17 if IDF_TARGET_ESP32S3
+                default 32
+
+            config BASE_GPIO_SERVOH
+                int "Servo Horizontal PWM pin number"
+                range 0 48
+                default 18 if IDF_TARGET_ESP32S3
+                default 33
+        endif
+
+        config BASE_GPIO_BUZZER
+            int "Buzzer PWM pin number" if BASE_USE_BUZZER
+            range 0 48
+            default 3 if IDF_TARGET_ESP32S3
+            default 4
+    endif
 
 endmenu

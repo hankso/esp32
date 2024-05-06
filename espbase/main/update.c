@@ -14,9 +14,6 @@
 
 static const char *TAG = "ota";
 
-extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
-extern const uint8_t server_cert_pem_end[]   asm("_binary_ca_cert_pem_end");
-
 static struct {
     const esp_partition_t *target, *running;
     esp_app_desc_t info;
@@ -63,11 +60,10 @@ void update_initialize() {
         }
     } else if (esp_ota_check_rollback_is_possible()) {
         esp_err_t err = esp_ota_mark_app_invalid_rollback_and_reboot();
-        if (err) {
-            ESP_LOGE(TAG, "Could not rollback: %s", esp_err_to_name(err));
-            // esp_restart();  // still running with error
-        }
-    } else ESP_LOGE(TAG, "App validation failed!");
+        if (err) ESP_LOGE(TAG, "Could not rollback: %s", esp_err_to_name(err));
+    } else {
+        ESP_LOGE(TAG, "App validation failed!");
+    }
 #endif // CONFIG_APP_ROLLBACK_ENABLE
 }
 
@@ -82,9 +78,11 @@ void ota_updation_reset() {
 bool ota_updation_partition(const char *label) {
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, label);
-    ota_updation_st.error = ESP_ERR_NOT_FOUND;
-    if (part)
+    if (!part) {
+        ota_updation_st.error = ESP_ERR_NOT_FOUND;
+    } else {
         ota_updation_st.error = esp_ota_set_boot_partition(part);
+    }
     return ota_updation_st.error == ESP_OK;
 }
 
@@ -150,9 +148,12 @@ const char * ota_updation_error() {
             esp_err_to_name(ota_updation_st.error) : NULL;
 }
 
-esp_err_t ota_updation_fetch_url(const char *url) {
-    if (!ota_updation_st.target) return ota_updation_st.error;
-#ifdef CONFIG_OTA_FETCH
+#ifdef CONFIG_BASE_OTA_FETCH
+extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
+extern const uint8_t server_cert_pem_end[]   asm("_binary_ca_cert_pem_end");
+
+static esp_err_t ota_updation_fetch_url(const char *url) {
+    printf("OTA Updation from URL `%s`\n", url);
     esp_http_client_config_t config;
     config.url = url;
     // {
@@ -166,11 +167,11 @@ esp_err_t ota_updation_fetch_url(const char *url) {
     size_t
         hsize = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t),
         asize = sizeof(esp_app_desc_t);
-    esp_err_t err = EALLOC(buf, 1024 + 1);
+    esp_err_t err = ECALLOC(buf, 1, 1024 + 1);
     if (err) return err;
     if (( err = esp_http_client_open(client, 0) )) goto http_clean;
     esp_http_client_fetch_headers(client);
-    while (( rsize = esp_http_client_read(client, buf, 1024) )) {
+    while (( rsize = esp_http_client_read(client, buf, sizeof(buf) - 1) )) {
         if (rsize < 0) {
             err = ESP_FAIL;
             goto http_clean;
@@ -206,24 +207,23 @@ http_clean:
     esp_http_client_cleanup(client);
     TRYFREE(buf);
     return err;
-#else
-    return ESP_ERR_INVALID_STATE;
-#endif // CONFIG_OTA_FETCH
 }
+#endif // CONFIG_BASE_OTA_FETCH
 
 bool ota_updation_url(const char *url) {
-    if (!url || !strlen(url)) url = Config.app.OTA_URL;
-    printf("OTA Updation from URL `%s`\n", url);
+    // TODO: detect remote firmware version if Config.app.OTA_AUTO
+    if (!ota_updation_st.target) return false;
+    if (!url) url = Config.app.OTA_URL;
     if (!strlen(url)) {
         ota_updation_st.error = ESP_ERR_INVALID_ARG;
         return false;
     }
-    if (!strbool(Config.app.OTA_RUN)) {
-        ota_updation_st.error = ESP_ERR_INVALID_STATE;
-        printf("OTA Updation not enabled: `%s`\n", Config.app.OTA_RUN);
-        return false;
-    }
+#ifndef CONFIG_BASE_OTA_FETCH
+    ota_updation_st.error = ESP_ERR_NOT_SUPPORTED;
+    return false;
+#else
     return (ota_updation_st.error = ota_updation_fetch_url(url)) == ESP_OK;
+#endif
 }
 
 static const char * ota_get_img_state(const esp_partition_t *part) {

@@ -1,31 +1,29 @@
 /*
- * File: usbmodeh.c
+ * File: usbhost.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2024-03-25 17:23:12
  */
 
 #include "usbmode.h"
 
-#ifdef CONFIG_USE_USB
+#ifdef CONFIG_BASE_USE_USB
 
 #include "usb/usb_host.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/event_groups.h"
 
-#ifdef CONFIG_USB_CDC_HOST
-#   include "usb/cdc_acm_host.h"        // idf add-dependency usb_host_cdc_acm
+#ifdef CONFIG_BASE_USB_CDC_HOST
+#   include "usb/cdc_acm_host.h"
 #endif
 
-#ifdef CONFIG_USB_MSC_HOST
-#   include "msc_host.h"                // idf add-dependency usb_host_msc
+#ifdef CONFIG_BASE_USB_MSC_HOST
+#   include "msc_host.h"
 #   include "msc_host_vfs.h"
 #endif
 
-#ifdef CONFIG_USB_HID_HOST
-#   include "usb/hid_host.h"            // idf add-dependency usb_host_hid
-#   include "usb/hid_usage_mouse.h"
-#   include "usb/hid_usage_keyboard.h"
+#ifdef CONFIG_BASE_USB_HID_HOST
+#   include "usb/hid_host.h"
 #endif
 
 #define TIMEOUT_IDLE        10
@@ -56,7 +54,7 @@ static struct {
  * Helper functions
  */
 
-void usbmodeh_status(usbmode_t mode) {
+extern void usbhost_status(usbmode_t mode) {
     usb_host_lib_info_t info;
     esp_err_t err = usb_host_lib_info(&info);
     if (err) {
@@ -205,7 +203,7 @@ static esp_err_t usbh_common_exit() {
  * USBMode: CDC Host
  */
 
-#ifdef CONFIG_USB_CDC_HOST
+#ifdef CONFIG_BASE_USB_CDC_HOST
 
 static const char * CDC = "CDC Host";
 
@@ -218,29 +216,31 @@ static bool cdc_acm_rx_cb(const uint8_t *data, size_t size, void *arg) {
 static void cdc_acm_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
     uint32_t vp;
     switch (event->type) {
-        case CDC_ACM_HOST_ERROR:
-            ESP_LOGE(TAG, "%s error %d", CDC, event->data.error);
-            break;
-        case CDC_ACM_HOST_SERIAL_STATE:
-            ESP_LOGI(TAG, "%s got serial state notification 0x%04X",
-                    CDC, event->data.serial_state.val);
-            break;
-        case CDC_ACM_HOST_DEVICE_DISCONNECTED:
-            if (( vp = usb_dev_vid_pid(event->data.cdc_hdl) )) {
-                ESP_LOGI(TAG, "%s lost device %s", CDC, vid_pid_str(vp));
-            } else {
-                ESP_LOGI(TAG, "%s lost device", CDC);
-            }
-            cdc_acm_host_close(event->data.cdc_hdl);
-            setBits(BIT_DEVICE_EXIT);
-            break;
-        default: ESP_LOGW(TAG, "%s unhandled event: %d", CDC, event->type);
+    case CDC_ACM_HOST_ERROR:
+        ESP_LOGE(TAG, "%s error %d", CDC, event->data.error);
+        break;
+    case CDC_ACM_HOST_SERIAL_STATE:
+        ESP_LOGI(TAG, "%s got serial state notification 0x%04X",
+                CDC, event->data.serial_state.val);
+        break;
+    case CDC_ACM_HOST_DEVICE_DISCONNECTED:
+        if (( vp = usb_dev_vid_pid(event->data.cdc_hdl) )) {
+            ESP_LOGI(TAG, "%s lost device %s", CDC, vid_pid_str(vp));
+        } else {
+            ESP_LOGI(TAG, "%s lost device", CDC);
+        }
+        cdc_acm_host_close(event->data.cdc_hdl);
+        setBits(BIT_DEVICE_EXIT);
+        break;
+    default: ESP_LOGW(TAG, "%s unhandled event: %d", CDC, event->type);
     }
 }
 
+bool usbdev_interest(const void *desc); // implemented in usbdev.c
+
 static void cdc_host_cb(usb_device_handle_t dev) {
     const usb_device_desc_t *desc;
-    if (!usb_host_get_device_descriptor(dev, &desc) && usbmoded_device(desc)) {
+    if (!usb_host_get_device_descriptor(dev, &desc) && usbdev_interest(desc)) {
         ctx.vid_pid = desc->idVendor << 16 | desc->idProduct;
         setBits(BIT_DEVICE_INIT);
     } else {
@@ -327,21 +327,21 @@ exit:
     vTaskDelete(NULL);
 }
 
-esp_err_t cdc_host_init() { return usbh_common_init(cdc_host_task, CDC); }
-esp_err_t cdc_host_exit() { return usbh_common_exit(); }
+extern esp_err_t cdc_host_init() { return usbh_common_init(cdc_host_task, CDC); }
+extern esp_err_t cdc_host_exit() { return usbh_common_exit(); }
 
-#else // CONFIG_USB_CDC_HOST
+#else // CONFIG_BASE_USB_CDC_HOST
 
-esp_err_t cdc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t cdc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
-#endif // CONFIG_USB_MSC_HOST
+#endif // CONFIG_BASE_USB_MSC_HOST
 
 /******************************************************************************
  * USBMode: MSC Host
  */
 
-#ifdef CONFIG_USB_MSC_HOST
+#ifdef CONFIG_BASE_USB_MSC_HOST
 
 static const char * MSC = "MSC Host";
 static const char * MMP = "/msc";
@@ -350,26 +350,26 @@ static void msc_host_cb(const msc_host_event_t *event, void *arg) {
     msc_host_device_info_t info;
     msc_host_device_handle_t dev;
     switch (event->event) {
-        case MSC_DEVICE_CONNECTED:
-            ctx.address = event->device.address;
-            setBits(BIT_DEVICE_INIT);
-            break;
-        case MSC_DEVICE_DISCONNECTED:
-            dev = event->device.handle;
-            if (!msc_host_get_device_info(dev, &info)) {
-                uint32_t vp = info.idVendor << 16 | info.idProduct;
-                ESP_LOGI(TAG, "%s lost device %s", MSC, vid_pid_str(vp));
-            } else {
-                ESP_LOGI(TAG, "%s lost device", MSC);
-            }
-            if (ctx.vfs_hdl) {
-                msc_host_vfs_unregister(ctx.vfs_hdl);
-                ctx.vfs_hdl = NULL;
-            }
-            msc_host_uninstall_device(dev);
-            setBits(BIT_DEVICE_EXIT);
-            break;
-        default: ESP_LOGW(TAG, "%s unhandled event: %d", MSC, event->event);
+    case MSC_DEVICE_CONNECTED:
+        ctx.address = event->device.address;
+        setBits(BIT_DEVICE_INIT);
+        break;
+    case MSC_DEVICE_DISCONNECTED:
+        dev = event->device.handle;
+        if (!msc_host_get_device_info(dev, &info)) {
+            uint32_t vp = info.idVendor << 16 | info.idProduct;
+            ESP_LOGI(TAG, "%s lost device %s", MSC, vid_pid_str(vp));
+        } else {
+            ESP_LOGI(TAG, "%s lost device", MSC);
+        }
+        if (ctx.vfs_hdl) {
+            msc_host_vfs_unregister(ctx.vfs_hdl);
+            ctx.vfs_hdl = NULL;
+        }
+        msc_host_uninstall_device(dev);
+        setBits(BIT_DEVICE_EXIT);
+        break;
+    default: ESP_LOGW(TAG, "%s unhandled event: %d", MSC, event->event);
     }
 }
 
@@ -430,11 +430,11 @@ static void msc_host_task(void *arg) {
         if (( ctx.err = msc_host_vfs_register(dev, MMP, &mount_conf, pvfs) )) {
             const char *estr;
             switch (ctx.err) {
-                case ESP_ERR_MSC_MOUNT_FAILED: estr = "mount failed"; break;
-                case ESP_ERR_MSC_FORMAT_FAILED: estr = "format failed"; break;
-                case ESP_ERR_MSC_INTERNAL: estr = "host internal error"; break;
-                case ESP_ERR_MSC_STALL: estr = "usb transfer stalled"; break;
-                default: estr = esp_err_to_name(ctx.err); break;
+            case ESP_ERR_MSC_MOUNT_FAILED:  estr = "mount failed"; break;
+            case ESP_ERR_MSC_FORMAT_FAILED: estr = "format failed"; break;
+            case ESP_ERR_MSC_INTERNAL:      estr = "host internal error"; break;
+            case ESP_ERR_MSC_STALL:         estr = "usb transfer stall"; break;
+            default:                        estr = esp_err_to_name(ctx.err);
             }
             ESP_LOGE(TAG, "%s not mount: %s", MSC, estr);
             goto close;
@@ -452,174 +452,31 @@ exit:
     vTaskDelete(NULL);
 }
 
-esp_err_t msc_host_init() { return usbh_common_init(msc_host_task, MSC); }
-esp_err_t msc_host_exit() { return usbh_common_exit(); }
+extern esp_err_t msc_host_init() { return usbh_common_init(msc_host_task, MSC); }
+extern esp_err_t msc_host_exit() { return usbh_common_exit(); }
 
-#else // CONFIG_USB_MSC_HOST
+#else // CONFIG_BASE_USB_MSC_HOST
 
-esp_err_t msc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t msc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
-#endif // CONFIG_USB_MSC_HOST
+#endif // CONFIG_BASE_USB_MSC_HOST
 
 /******************************************************************************
  * USBMode: HID Host
  */
 
-#ifdef CONFIG_USB_HID_HOST
+#ifdef CONFIG_BASE_USB_HID_HOST
 
 static const char * HID = "HID Host";
 
-// HID_ASCII_TO_KEYCODE & KEYCODE_TO_ASCII (defined in tinyusb/class/hid/hid.h)
-// occupies 512 bytes and does not provide info of keycodes above 0x7F.
-// Here is our minimal implementation of conversion between ASCII and KEYCODE.
-
-static const struct {
-    uint8_t code;           // see usb_host_hid/usb/hid_usage_keyboard.h
-    const char *name;       // see https://theasciicode.com.ar
-} keycodes_special[] = {                    // ASCII
-    { HID_KEY_DEL,          "Backspace" },  // 8
-    { HID_KEY_TAB,          "Tab" },        // 9
-    { HID_KEY_ENTER,        "CR" },         // 13
-    { HID_KEY_CANCEL,       "Cancel" },     // 24
-    { HID_KEY_ESC,          "Escape" },     // 27
-    { HID_KEY_DELETE,       "Delete" },     // 127
-    { HID_KEY_CAPS_LOCK,    "CapsLock" },
-    { HID_KEY_PRINT_SCREEN, "PrtScn" },
-    { HID_KEY_SCROLL_LOCK,  "ScrLock" },
-    { HID_KEY_PAUSE,        "Pause" },
-    { HID_KEY_INSERT,       "Insert" },
-    { HID_KEY_HOME,         "Home" },
-    { HID_KEY_PAGEUP,       "PageUp" },
-    { HID_KEY_DELETE,       "Delete" },
-    { HID_KEY_END,          "End" },
-    { HID_KEY_PAGEDOWN,     "PageDown" },
-    { HID_KEY_NUM_LOCK,     "NumLock" },
-    { HID_KEY_POWER,        "Power" },
-    { HID_KEY_RIGHT,        "Right" },
-    { HID_KEY_LEFT,         "Left" },
-    { HID_KEY_DOWN,         "Down" },
-    { HID_KEY_UP,           "Up" },
-};
-
-static const uint8_t keycodes_normal[][3] = {
-    // Keycodes                ASCII Shift
-    { HID_KEY_1,                '1', '!' },
-    { HID_KEY_2,                '2', '@' },
-    { HID_KEY_3,                '3', '#' },
-    { HID_KEY_4,                '4', '$' },
-    { HID_KEY_5,                '5', '%' },
-    { HID_KEY_6,                '6', '^' },
-    { HID_KEY_7,                '7', '&' },
-    { HID_KEY_8,                '8', '*' },
-    { HID_KEY_9,                '9', '(' },
-    { HID_KEY_0,                '0', ')' },
-    { HID_KEY_SPACE,            ' ', ' ' },
-    { HID_KEY_MINUS,            '-', '_' },
-    { HID_KEY_EQUAL,            '=', '+' },
-    { HID_KEY_OPEN_BRACKET,     '[', '{' },
-    { HID_KEY_CLOSE_BRACKET,    ']', '}' },
-    { HID_KEY_SHARP,            '\\', '|' },
-    { HID_KEY_BACK_SLASH,       '\\', '|' },
-    { HID_KEY_COLON,            ';', ':' },
-    { HID_KEY_QUOTE,            '\'', '"' },
-    { HID_KEY_TILDE,            '`', '~' },
-    { HID_KEY_LESS,             ',', '<' },
-    { HID_KEY_GREATER,          '.', '>' },
-    { HID_KEY_SLASH,            '/', '?' },
-};
-
-extern uint8_t str2keycode(const char *str, uint8_t *mod) {
-    size_t len = str ? strlen(str) : 0;
-    if (!len) return 0;
-    if (mod) *mod &= ~(HID_LEFT_SHIFT | HID_RIGHT_SHIFT);
-    LOOPN(i, LEN(keycodes_special)) {
-        if (!strcasecmp(keycodes_special[i].name, str))
-            return keycodes_special[i].code;
-    }
-    LOOPN(i, LEN(keycodes_normal)) {
-        if (str[0] == keycodes_normal[i][1])
-            return keycodes_normal[i][0];
-        if (str[0] == keycodes_normal[i][2]) {
-            if (mod) *mod |= HID_LEFT_SHIFT;
-            return keycodes_normal[i][0];
-        }
-    }
-    if (str[0] == 'F' && len > 1 && '0' <= str[1] && str[1] <= '9')
-        return str[1] - '0' + HID_KEY_F1;
-    if ('a' <= str[0] && str[0] <= 'z')
-        return str[0] - 'a' + HID_KEY_A;
-    if ('A' <= str[0] && str[0] <= 'Z') {
-        if (mod) *mod |= HID_LEFT_SHIFT;
-        return str[0] - 'A' + HID_KEY_A;
-    }
-    return 0;
-}
-
-extern const char * keycode2str(uint8_t code, bool shift) {
-    static char buf[32];
-    if (HID_KEY_A <= code && code <= HID_KEY_Z) {
-        buf[0] = code - HID_KEY_A + (shift ? 'A' : 'a');
-        buf[1] = '\0';
-    } else if (HID_KEY_F1 <= code && code <= HID_KEY_F12) {
-        buf[0] = 'F';
-        buf[1] = code - HID_KEY_F1 + '1';
-        buf[2] = '\0';
-    } else {
-        LOOPN(i, LEN(keycodes_normal)) {
-            if (keycodes_normal[i][0] != code) continue;
-            buf[0] = keycodes_normal[i][shift ? 2 : 1];
-            buf[1] = '\0';
-            return buf;
-        }
-        LOOPN(i, LEN(keycodes_special)) {
-            if (keycodes_special[i].code != code) continue;
-            snprintf(buf, sizeof(buf), "<%s>", keycodes_special[i].name);
-            return buf;
-        }
-        snprintf(buf, sizeof(buf), "<0x%02X>", code);
-    }
-    return buf;
-}
-
-#define HAS_SHIFT(v) ( (v) & ( HID_LEFT_SHIFT | HID_RIGHT_SHIFT ) )
-
-extern const char * hid_keycode_str(uint8_t modifier, uint8_t keycode[6]) {
-    static char buf[64];
-    size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, 6) {
-        if (keycode[i]) {
-            size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", keycode2str(keycode[i], HAS_SHIFT(modifier)));
-        } else {
-            buf[size] = '\0';
-        }
-    }
-    return buf;
-}
-
-extern const char * hid_modifier_str(uint8_t modifier) {
-    static const char * MODIFIER_STR[] = {
-        "L-Ctrl", "L-Shift", "L-Alt", "L-WIN",
-        "R-Ctrl", "R-Shift", "R-Alt", "R-WIN",
-    };
-    static char buf[64];
-    size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, LEN(MODIFIER_STR)) {
-        if (modifier & (1 << i)) {
-            size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", MODIFIER_STR[i]);
-        } else {
-            buf[size] = '\0';
-        }
-    }
-    return buf;
-}
-
-extern const char * hid_protocol_str(hid_protocol_t proto) {
+static const char * hid_protocol_str(hid_protocol_t proto) {
+    if (proto == HID_PROTOCOL_NONE)     return "Generic";
     if (proto == HID_PROTOCOL_KEYBOARD) return "Keyboard";
     if (proto == HID_PROTOCOL_MOUSE)    return "Mouse";
-    return "Generic";
+    static char buf[4];
+    snprintf(buf, sizeof(buf), "%d", proto);
+    return buf;
 }
 
 static void hid_event_cb(
@@ -628,73 +485,41 @@ static void hid_event_cb(
     void *arg
 ) {
     // see esp-idf-5.2/examples/peripherals/usb/host/hid
-    static uint8_t buf[64];
-    static size_t blen = sizeof(buf), size;
     hid_host_dev_info_t info;
     hid_host_dev_params_t params;
     if (hid_host_device_get_params(dev, &params)) return;
     switch (event) {
-        case HID_HOST_INTERFACE_EVENT_INPUT_REPORT:
-            hid_host_device_get_raw_input_report_data(dev, buf, blen, &size);
-            break;
-        case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
-            ESP_LOGD(TAG, "%s address %d transfer_error", HID, params.addr);
-            break;
-        case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
-            if (!hid_host_get_device_info(dev, &info)) {
-                uint32_t vp = info.VID << 16 | info.PID;
-                ESP_LOGI(TAG, "%s lost device %s", HID, vid_pid_str(vp));
-            } else {
-                ESP_LOGI(TAG, "%s lost device", HID);
-            }
-            hid_host_device_close(dev);
-            setBits(BIT_DEVICE_EXIT);
-            break;
-        default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
-    }
-    if (event != HID_HOST_INTERFACE_EVENT_INPUT_REPORT) return;
-    if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
-        const char * proto_str = hid_protocol_str(HID_PROTOCOL_NONE);
-        printf("%s %s", HID, proto_str);
-        hexdump(buf, size, 80 - strlen(HID) - 1 - strlen(proto_str));
-    } else if (params.proto == HID_PROTOCOL_MOUSE) {
-        if (size < sizeof(hid_mouse_input_report_boot_t)) return;
-        hid_mouse_input_report_boot_t *report = \
-            (hid_mouse_input_report_boot_t *)buf;
-        static int x = 0, y = 0;
-        x += report->x_displacement;
-        y += report->y_displacement;
-        printf("%s %s X: %06d Y: %06d |%c|%c|%c|\n",
-            HID, hid_protocol_str(params.proto), x, y,
-            report->buttons.button1 ? 'o' : ' ',
-            report->buttons.button2 ? 'o' : ' ',
-            report->buttons.button3 ? 'o' : ' ');
-    } else if (params.proto == HID_PROTOCOL_KEYBOARD) {
-        if (size < sizeof(hid_keyboard_input_report_boot_t)) return;
-        hid_keyboard_input_report_boot_t *report = \
-            (hid_keyboard_input_report_boot_t *)buf;
-        static uint8_t prev[HID_KEYBOARD_KEY_MAX] = { HID_KEY_NO_PRESS };
-        uint8_t *next = report->key;
-        bool shift = HAS_SHIFT(report->modifier.val);
-        LOOPN(i, HID_KEYBOARD_KEY_MAX) {
-            bool prev_found = false, next_found = false;
-            LOOPN(j, HID_KEYBOARD_KEY_MAX) {
-                if (prev[i] == next[j]) next_found = true;
-                if (next[i] == prev[j]) prev_found = true;
-            }
-            if (prev[i] > HID_KEY_ERROR_UNDEFINED && !next_found) {
-                printf("%s %s %s released\n",
-                        HID, hid_protocol_str(params.proto),
-                        keycode2str(prev[i], shift));
-            }
-            if (next[i] > HID_KEY_ERROR_UNDEFINED && !prev_found) {
-                printf("%s %s %s pressed modifier %s",
-                        HID, hid_protocol_str(params.proto),
-                        keycode2str(next[i], shift),
-                        hid_modifier_str(report->modifier.val));
-            }
+    case HID_HOST_INTERFACE_EVENT_INPUT_REPORT: break;
+    case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
+        ESP_LOGD(TAG, "%s address %d transfer_error", HID, params.addr);
+        return;
+    case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
+        if (!hid_host_get_device_info(dev, &info)) {
+            ESP_LOGI(TAG, "%s lost device %s",
+                     HID, vid_pid_str(info.VID << 16 | info.PID));
+        } else {
+            ESP_LOGI(TAG, "%s lost device", HID);
         }
-        memcpy(prev, next, HID_KEYBOARD_KEY_MAX);
+        hid_host_device_close(dev);
+        setBits(BIT_DEVICE_EXIT);
+        return;
+    default:
+        ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
+        return;
+    }
+    uint8_t data[64];
+    size_t size = 0;
+    hid_host_device_get_raw_input_report_data(dev, data, sizeof(data), &size);
+    if (params.proto == HID_PROTOCOL_KEYBOARD) {
+        if (size < sizeof(hid_keyboard_report_t)) return;
+        hid_handle_keyboard((hid_keyboard_report_t *)data, NULL);
+    } else if (params.proto == HID_PROTOCOL_MOUSE) {
+        if (size < sizeof(hid_mouse_report_t)) return;
+        hid_handle_mouse((hid_mouse_report_t *)data, NULL, NULL);
+    } else if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%s %s", HID, hid_protocol_str(params.proto));
+        printf(buf); hexdump(data, size, 80 - strlen(buf));
     }
 }
 
@@ -704,11 +529,11 @@ static void hid_host_cb(
     void *arg
 ) {
     switch (event) {
-        case HID_HOST_DRIVER_EVENT_CONNECTED:
-            ctx.dev_hdl = dev;
-            setBits(BIT_DEVICE_INIT);
-            break;
-        default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
+    case HID_HOST_DRIVER_EVENT_CONNECTED:
+        ctx.dev_hdl = dev;
+        setBits(BIT_DEVICE_INIT);
+        break;
+    default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
     }
 }
 
@@ -759,8 +584,8 @@ static void hid_host_task(void *arg) {
             wprintf(L"Product      %ls\n", info.iProduct);
         if (wcslen(info.iSerialNumber))
             wprintf(L"SerialNumber %ls\n", info.iSerialNumber);
-        printf("Proto        %s\n", hid_protocol_str(params.proto));
-        // FIXME: usb_host_hid does NOT provide `hid_host_print_descriptors`
+        printf("SubClass     %s\nProto        %s\n",
+               params.sub_class ? "BOOT" : "", hid_protocol_str(params.proto));
 
         if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
             hid_class_request_set_protocol(dev, HID_REPORT_PROTOCOL_BOOT);
@@ -786,14 +611,14 @@ exit:
     vTaskDelete(NULL);
 }
 
-esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, HID); }
-esp_err_t hid_host_exit() { return usbh_common_exit(); }
+extern esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, HID); }
+extern esp_err_t hid_host_exit() { return usbh_common_exit(); }
 
-#else // CONFIG_USB_HID_HOST
+#else // CONFIG_BASE_USB_HID_HOST
 
-esp_err_t hid_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-esp_err_t hid_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t hid_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+extern esp_err_t hid_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
-#endif // CONFIG_USB_MSC_HOST
+#endif // CONFIG_BASE_USB_MSC_HOST
 
-#endif // CONFIG_USE_USB
+#endif // CONFIG_BASE_USE_USB

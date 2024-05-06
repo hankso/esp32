@@ -134,10 +134,99 @@ char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
     return dst;
 }
 
+// Convert between Unicode & Bytes
+// 0x00000000 - 0x0000007F : 0b0xxxxxxx
+// 0x00000080 - 0x000007FF : 0b110xxxxx 0b10xxxxxx
+// 0x00000800 - 0x0000FFFF : 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
+// 0x00010000 - 0x001FFFFF : 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
+const char * unicode2str(uint32_t unicode) {
+    static char buf[5];
+    if (unicode < 0x80) {
+        buf[0] = unicode;
+        buf[1] = '\0';
+    } else if (unicode < 0x800) {
+        buf[0] = 0xC0 | ((unicode >> 6) & 0x1F);
+        buf[1] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[2] = '\0';
+    } else if (unicode < 0x10000) {
+        buf[0] = 0xE0 | ((unicode >> 12) & 0xF);
+        buf[1] = 0x80 | ((unicode >> 6) & 0x3F);
+        buf[2] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[3] = '\0';
+    } else if (unicode < 0x1FFFFF) {
+        buf[0] = 0xF0 | ((unicode >> 18) & 0x7);
+        buf[1] = 0x80 | ((unicode >> 12) & 0x3F);
+        buf[2] = 0x80 | ((unicode >> 6) & 0x3F);
+        buf[3] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[4] = '\0';
+    } else {
+        buf[0] = '\0';
+    }
+    return buf;
+}
+
+uint32_t str2unicode(const char *str) {
+    if (!str || str[0] > 0xF7) return 0;
+    uint32_t nbytes = 0, unicode = 0;
+    if (str[0] >= 0xF0) {
+        nbytes = 3;
+        unicode = str[0] & 0x7;
+    } else if (str[0] >= 0xE0) {
+        nbytes = 2;
+        unicode = str[0] & 0xF;
+    } else if (str[0] >= 0xC0) {
+        nbytes = 1;
+        unicode = str[0] & 0x1F;
+    } else {
+        return str[0];
+    }
+    for (uint32_t i = 1; i <= nbytes; i++) {
+        if ((str[i] >> 6) != 0x2) return 0; // invalid format
+        unicode = (unicode << 6) | (str[i] & 0x3F);
+    }
+    return unicode;
+}
+
+static const uint8_t unicode_table[][10] = {
+    { 0x25, 6, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                      // circle
+    { 0x25, 8, 0x8F, 0x8E, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x88 },    // v bars
+    { 0x25, 8, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88 },    // h bars
+    { 0x25, 4, 0x91, 0x92, 0x93, 0x89 },                            // shades
+    { 0x28, 8, 0x46, 0x07, 0x0B, 0x19, 0x38, 0xB0, 0xE0, 0xC4 },    // dots
+};
+
+esp_err_t unicode_tricks(const unicode_trick_t *conf) {
+    if (conf->index >= LEN(unicode_table)) return ESP_ERR_INVALID_ARG;
+    uint16_t base = (uint16_t)unicode_table[conf->index][0] << 8;
+    uint16_t intv = conf->timeout_ms / unicode_table[conf->index][1];
+    uint8_t count = MAX(conf->repeat, 1);
+    FILE *stream = conf->stream ?: stderr;
+    LOOPN(i, unicode_table[conf->index][1]) {
+        uint8_t code = unicode_table[conf->index][i + 2];
+        fputc('\r', stream);
+        LOOPN(j, count) { fprintf(stream, unicode2str(base | code)); }
+        fflush(stream);
+        if (intv) msleep(intv);
+    }
+    fputc('\n', stream);
+    fflush(stream);
+    return ESP_OK;
+}
+
 const char * format_sha256(const void *src, size_t len) {
     static char buf[64 + 1];
     if (!src || !len) { buf[0] = '\0'; return buf; }
     return hexdumps(src, buf, len, sizeof(buf));
+}
+
+const char * format_binary(uint64_t num, size_t bytes) {
+    static char buf[64 + 1];
+    size_t bits = MIN(bytes, sizeof(num)) * 8;
+    LOOPN(i, bits) {
+        buf[bits - i - 1] = (num & (1 << i)) ? '1' : '0';
+    }
+    buf[bits] = '\0';
+    return buf;
 }
 
 // Note: format_size format string into static buffer. Therefore you don't
@@ -146,9 +235,9 @@ const char * format_sha256(const void *src, size_t len) {
 // reused and overwriten.
 const char * format_size(uint64_t bytes, bool inbit) {
     static char buffer[16]; // xxxx.xx u\0
-    static char * units[] = { " ", "K", "M", "G", "T", "P" };
-    static int Bdems[] = { 0, 1, 2, 3, 3, 4 };
-    static int bdems[] = { 0, 2, 3, 3, 4, 7 };
+    static const char * units[] = { " ", "K", "M", "G", "T", "P" };
+    static const int Bdems[] = { 0, 1, 2, 3, 3, 4 };
+    static const int bdems[] = { 0, 2, 3, 3, 4, 7 };
     if (!bytes) return inbit ? "0 b" : "0 B";
     double tmp = bytes * (inbit ? 8 : 1), base = 1024;
     int exp = 0;                        // you can replace this with log10
@@ -160,6 +249,29 @@ const char * format_size(uint64_t bytes, bool inbit) {
             inbit ? bdems[exp] : Bdems[exp], tmp, units[exp], "Bb"[inbit]);
     return buffer;
 }
+
+static void * createTimer(int64_t us, void (*func)(void *), void *arg) {
+    esp_timer_handle_t hdl = NULL;
+    const esp_timer_create_args_t args = { .callback = func, .arg = arg };
+    if (!func || esp_timer_create(&args, &hdl) != ESP_OK) {
+        hdl = NULL;
+    } else if (us < 0) {
+        esp_timer_start_once(hdl, -us);
+    } else {
+        esp_timer_start_periodic(hdl, us);
+    }
+    return hdl;
+}
+
+void * setTimeout(uint32_t ms, void (*func)(void *), void *arg) {
+    return createTimer((int64_t)ms * -1000, func, arg);
+}
+
+void * setInterval(uint32_t ms, void (*func)(void *), void *arg) {
+    return createTimer((int64_t)ms * +1000, func, arg);
+}
+
+void clearTimer(void *hdl) { TRYNULL(hdl, esp_timer_delete); }
 
 static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
     int aid = a->xCoreID > 1 ? -1 : a->xCoreID;
@@ -232,57 +344,47 @@ void version_info() {
            Config.info.VER, __DATE__, __TIME__);
 }
 
-static uint32_t memory_types[] = {
-    0, MALLOC_CAP_SPIRAM, MALLOC_CAP_EXEC, MALLOC_CAP_DMA,
-    MALLOC_CAP_INTERNAL, MALLOC_CAP_DEFAULT
-};
-
-static const char * const memory_names[] = {
-    "TOTAL", "SPI RAM", "EXEC", "DMA", "INTERN", "DEFAULT"
-};
-
 void memory_info() {
-    uint32_t mem_type = 0;
+    static const uint32_t caps[] = {
+        MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL,
+        MALLOC_CAP_DMA, MALLOC_CAP_EXEC, MALLOC_CAP_SPIRAM
+    };
+    static const char * const names[] = {
+        "DEFAULT", "INTERN", "DMA", "EXEC", "SPI RAM",
+    };
     multi_heap_info_t info;
-    printf("Type       Avail     Used     Size Free\n");
-    LOOPND(i, LEN(memory_types)) {
-        heap_caps_get_info(&info, i ? memory_types[i] : mem_type);
+    printf("%-7s %8s %8s %4s\n", "Type", "Total", "Avail", "Used");
+    LOOPN(i, LEN(caps)) {
+        heap_caps_get_info(&info, caps[i]);
         size_t total = info.total_free_bytes + info.total_allocated_bytes;
-        if (total) mem_type |= memory_types[i];
-        printf("%-7s", memory_names[i]);
-        printf(" %8s", format_size(info.total_allocated_bytes, false));
-        printf(" %8s", format_size(info.total_free_bytes, false));
-        printf(" %8s", format_size(total, false));
-        printf(" %3d%%", total ? 100 * info.total_free_bytes / total : 0);
-        putchar('\n');
+        printf("%-7s %8s ", names[i], format_size(total, false));
+        printf("%8s ", format_size(info.total_free_bytes, false));
+        printf("%3d%%\n", total ? 100 * info.total_allocated_bytes / total : 0);
     }
 }
 
 static const char * chip_model_str(esp_chip_model_t model) {
     switch (model) {
-        CASESTR(CHIP_ESP32S2, 5);
-        CASESTR(CHIP_ESP32S3, 5);
-        CASESTR(CHIP_ESP32C3, 5);
-        CASESTR(CHIP_ESP32H2, 5);
-        case CHIP_ESP32:
+    case CHIP_ESP32S2:  return "ESP32-S2";
+    case CHIP_ESP32S3:  return "ESP32-S3";
+    case CHIP_ESP32C3:  return "ESP32-C3";
+    case CHIP_ESP32H2:  return "ESP32-H2";
 #ifndef CONFIG_IDF_TARGET_ESP32
-            return "ESP32";
+    case CHIP_ESP32:    return "ESP32";
 #else
-            break;
+    case CHIP_ESP32:
+        switch (REG_GET_FIELD(EFUSE_BLK0_RDATA3_REG, EFUSE_RD_CHIP_VER_PKG)) {
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ6:     return "ESP32-D0WD-Q6";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ5:     return "ESP32-D0WD-Q5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5:     return "ESP32-D2WD-Q5";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4:     return "ESP32-PICO-D4";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOV302:   return "ESP32-PICO-V3-02";
+        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDR2V3:   return "ESP32-D2WD-R2-V3";
+        }
+        FALLTH;
 #endif
-        default: return "Unknown";
+    default:            return "Unknown";
     }
-#ifdef CONFIG_IDF_TARGET_ESP32
-    switch (REG_GET_FIELD(EFUSE_BLK0_RDATA3_REG, EFUSE_RD_CHIP_VER_PKG)) {
-        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ6: return "ESP32-D0WD-Q6";
-        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ5: return "ESP32-D0WD-Q5";
-        case EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5: return "ESP32-D2WD-Q5";
-        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOD4: return "ESP32-PICO-D4";
-        case EFUSE_RD_CHIP_VER_PKG_ESP32PICOV302: return "ESP32-PICO-V3-02";
-        case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDR2V3: return "ESP32-D2WD-R2-V3";
-        default: return "Unknown";
-    }
-#endif
 }
 
 void hardware_info() {
@@ -304,11 +406,20 @@ void hardware_info() {
         info.features & CHIP_FEATURE_BT ? " | BT" : ""
     );
 
-    uint8_t sta[6], ap[6];
-    esp_read_mac(sta, ESP_MAC_WIFI_STA);
-    esp_read_mac(ap, ESP_MAC_WIFI_SOFTAP);
-    printf(" STA MAC: " MACSTR "\n", MAC2STR(sta));
-    printf(" AP  MAC: " MACSTR "\n", MAC2STR(ap));
+    const struct {
+        const char * name;
+        esp_mac_type_t type;
+    } macs[] = {
+        { "STA", ESP_MAC_WIFI_STA },
+        { "AP ", ESP_MAC_WIFI_SOFTAP },
+        { "BT ", ESP_MAC_BT },
+        { "ETH", ESP_MAC_ETH },
+    };
+    LOOPN(i, LEN(macs)) {
+        uint8_t buf[8] = { 0 };
+        if (esp_read_mac(buf, macs[i].type)) continue;
+        printf(" %s MAC: " MACSTR "\n", macs[i].name, MAC2STR(buf));
+    }
 }
 
 static const char * partition_subtype_str(
@@ -318,31 +429,31 @@ static const char * partition_subtype_str(
     snprintf(buf, sizeof(buf), "0x%02X", subtype);
     if (type == ESP_PARTITION_TYPE_DATA) {
         switch (subtype) {
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_OTA, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_PHY, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_NVS, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_COREDUMP, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_UNDEFINED, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_FAT, 27);
-            CASESTR(ESP_PARTITION_SUBTYPE_DATA_SPIFFS, 27);
-            default: break;
+        case ESP_PARTITION_SUBTYPE_DATA_OTA:        return "OTA";
+        case ESP_PARTITION_SUBTYPE_DATA_PHY:        return "PHY";
+        case ESP_PARTITION_SUBTYPE_DATA_NVS:        return "NVS";
+        case ESP_PARTITION_SUBTYPE_DATA_COREDUMP:   return "COREDUMP";
+        case ESP_PARTITION_SUBTYPE_DATA_NVS_KEYS:   return "NVS_KEYS";
+        case ESP_PARTITION_SUBTYPE_DATA_EFUSE_EM:   return "EFUSE_EM";
+        case ESP_PARTITION_SUBTYPE_DATA_UNDEFINED:  return "UNDEFINED";
+        case ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD:   return "ESPHTTPD";
+        case ESP_PARTITION_SUBTYPE_DATA_FAT:        return "FAT";
+        case ESP_PARTITION_SUBTYPE_DATA_SPIFFS:     return "SPIFFS";
+        default: break;
         }
     } else if (type == ESP_PARTITION_TYPE_APP) {
         switch (subtype) {
-            CASESTR(ESP_PARTITION_SUBTYPE_APP_FACTORY, 26);
-            CASESTR(ESP_PARTITION_SUBTYPE_APP_TEST, 26);
-            default:
-                if (
-                    subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
-                    subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX
-                ) {
-                    subtype -= ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
-                    snprintf(buf, sizeof(buf), "ota_%d", subtype);
-                }
-                break;
+        case ESP_PARTITION_SUBTYPE_APP_FACTORY:     return "FACTORY";
+        case ESP_PARTITION_SUBTYPE_APP_TEST:        return "TEST";
+        default:
+            if (
+                subtype >= ESP_PARTITION_SUBTYPE_APP_OTA_MIN &&
+                subtype <= ESP_PARTITION_SUBTYPE_APP_OTA_MAX
+            ) {
+                subtype -= ESP_PARTITION_SUBTYPE_APP_OTA_MIN;
+                snprintf(buf, sizeof(buf), "OTA_%d", subtype);
+            }
+            break;
         }
     }
     return buf;
@@ -350,10 +461,11 @@ static const char * partition_subtype_str(
 
 static const char * partition_type_str(esp_partition_type_t type) {
     static char buf[8];
+    snprintf(buf, sizeof(buf), "0x%02X", type);
     switch (type) {
-        CASESTR(ESP_PARTITION_TYPE_DATA, 19);
-        CASESTR(ESP_PARTITION_TYPE_APP, 19);
-        default: snprintf(buf, sizeof(buf), "0x%02X", type); return buf;
+    case ESP_PARTITION_TYPE_DATA:                   return "DATA";
+    case ESP_PARTITION_TYPE_APP:                    return "APP";
+    default:                                        return buf;
     }
 }
 

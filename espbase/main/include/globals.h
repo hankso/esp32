@@ -2,12 +2,11 @@
  * File: globals.h
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:51:08
- *
- * Global variables are declared as extern in this header file.
  */
 
 #pragma once
 
+#include <math.h>
 #include <time.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -16,47 +15,52 @@
 #include <stdbool.h>
 #include <unistd.h>
 
+#include "sdkconfig.h"
 #include "esp_err.h"
 #include "esp_log.h"
 #include "esp_idf_version.h"
-#include "sdkconfig.h"
+#include "soc/soc_caps.h"
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-#define _STR_IMPL_(x)           #x
-#define STR(x)                  _STR_IMPL_(x)
-#define CASESTR(x, n)           case x: return #x + n;
-#define NOTUSED(x)              (void)(x)
-#define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
-#define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
-#define LOOP(x, l, h)           for (int x = (l); x < (h); x++)
-#define LOOPD(x, h, l)          for (int x = (h); x > (l); x--)
-#define LOOPN(x, n)             LOOP(x, 0, (n))
-#define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
-#define LPCHR(c, n)             { LOOPN(x, (n)) putchar((c)); }
-#define LPCHRN(c, n)            { LPCHR(c, n); putchar('\n'); }
-#define TRYNULL(p, f)           { if (p) f(p); (p) = NULL; }
-#define TRYFREE(p)              TRYNULL(p, free)
-#define TIMEOUT(m)              ( m ? pdMS_TO_TICKS(m) : portMAX_DELAY )
 #define UNUSED                  __attribute__((unused))
 #define PACKED                  __attribute__((packed))
 #define FALLTH                  __attribute__((fallthrough))
+#define NOTUSED(x)              (void)(x)
+#define _STR_IMPL_(x)           #x
+#define STR(x)                  _STR_IMPL_(x)
+#define CASESTR(x, offset)      case x: return #x + offset;
+#define CASESTRV(v, x, offset)  case x: (v) = #x + offset; break;
+#define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
+#define LOOP(x, low, high)      for (int x = (low); x < (high); x++)
+#define LOOPD(x, high, low)     for (int x = (high); x > (low); x--)
+#define LOOPN(x, n)             LOOP(x, 0, (n))
+#define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
+#define LPCHR(c, n)             do { LOOPN(x, (n)) putchar(c); } while(0)
+#define LPCHRN(c, n)            do { LPCHR((c), (n)); putchar('\n'); } while(0)
+#define TRYNULL(p, f)           do { if (p) f(p); (p) = NULL; } while(0)
+#define TRYFREE(p)              TRYNULL((p), free)
+
+#define TIMEOUT(m)              ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
+#define EMALLOC(v, size)                                                    \
+        ( ((v) = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
+#define ECALLOC(v, num, size)                                               \
+        ( ((v) = (typeof(v)) calloc((num), (size))) ? ESP_OK : ESP_ERR_NO_MEM )
+#define ITERN(v, arr, n)                                                    \
+        for (typeof(*(arr)) *p = (arr), (v) = *p; p < &((arr)[n]); (v) = *++p)
+#define ITER(v, arr) ITERN((v), (arr), LEN(arr))
 
 #ifndef ABS
 #define ABS(x)                  ( (x) > 0 ? (x) : -(x) )
+#endif
+#ifndef ABSDIFF
+#define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
 #endif
 #ifndef MAX
 #define MAX(a, b)               ( (a) > (b) ? (a) : (b) )
 #define MIN(a, b)               ( (a) > (b) ? (b) : (a) )
 #endif
 #ifndef CONS
-#define CONS(v, l, h)           MAX((l), MIN((v), (h)))
+#define CONS(x, low, high)      MAX((low), MIN((x), (high)))
 #endif
-
-#define EALLOC(v, l)                                                        \
-        ( ((v) = (typeof (v)) malloc(l)) ? ESP_OK : ESP_ERR_NO_MEM )
 
 // Aliases
 
@@ -77,31 +81,49 @@ extern "C" {
 #   define TARGET_ESP32S
 #   define TARGET_ESP32S3
 #else
-#   warning "This project has only been tested on ESP32 & ESP32-Sn chips"
+#   warning "This project has only been tested on ESP32 & ESP32-S chips"
 #endif
 
-// Hotfix for board specified configs
+// Board specified configs
 
-#if defined(TARGET_ESP32S3)
+#ifdef TARGET_ESP32S3
 #   define  BOARD_ESP32S3_LUATOS
-#   undef   CONFIG_GPIO_SPI_CS0
-#   define  CONFIG_GPIO_SPI_CS0 9
-#   undef   CONFIG_GPIO_LED
-#   define  CONFIG_GPIO_LED 10
-#   undef   CONFIG_USE_I2C1
-#   undef   CONFIG_I2C_NUM
-#   define  CONFIG_I2C_NUM 1
-#   undef   CONFIG_GPIO_TXD
-#   define  CONFIG_GPIO_TXD 15
-#   undef   CONFIG_GPIO_RXD
-#   define  CONFIG_GPIO_RXD 16
 // #   define  BOARD_ESP32S3_NOLOGO
-// #   undef   CONFIG_LED_MODE_GPIO
-// #   undef   CONFIG_LED_MODE_LEDC
-// #   define  CONFIG_LED_MODE_RMT
+#else
+// #   define  BOARD_ESP32_DEVKIT
+#   define  BOARD_ESP32_PICOKIT
 #endif
 
-// Utilities (implemented in utils.c)
+#if defined(BOARD_ESP32_DEVKIT)
+#   undef   CONFIG_BASE_GPIO_LED
+#   define  CONFIG_BASE_GPIO_LED 2
+#   undef   CONFIG_BASE_ADC_HALL
+#   undef   CONFIG_BASE_ADC_SINGLE
+#   define  CONFIG_BASE_ADC_JOYSTICK
+#elif defined(BOARD_ESP32_PICOKIT)
+#   undef   CONFIG_BASE_LED_MODE_GPIO
+#   undef   CONFIG_BASE_LED_MODE_LEDC
+#   define  CONFIG_BASE_LED_MODE_RMT
+#   undef   CONFIG_BASE_LED_NUM
+#   define  CONFIG_BASE_LED_NUM 8
+#elif defined(BOARD_ESP32S3_LUATOS)
+#   undef   CONFIG_BASE_GPIO_LED
+#   define  CONFIG_BASE_GPIO_LED 10
+// #   undef   CONFIG_BASE_GPIO_TXD
+// #   define  CONFIG_BASE_GPIO_TXD 3
+// #   undef   CONFIG_BASE_GPIO_RXD
+// #   define  CONFIG_BASE_GPIO_RXD 4
+#elif defined(BOARD_ESP32S3_NOLOGO)
+#   undef   CONFIG_BASE_LED_MODE_GPIO
+#   undef   CONFIG_BASE_LED_MODE_LEDC
+#   define  CONFIG_BASE_LED_MODE_RMT
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+// defined in utils.c
 void msleep(uint32_t ms);
 void asleep(uint32_t ms);
 bool strbool(const char *);
@@ -115,8 +137,30 @@ bool parse_float(const char *, float *ptr);
 size_t parse_all(const char *, int *arr, size_t arrlen);
 char * cast_away_const(const char *);
 
+const char * unicode2str(uint32_t);
+uint32_t str2unicode(const char *);
+
+typedef struct {
+    uint8_t index;
+#define UANIM_CIRCLE 0
+#define UANIM_V_BAR  1
+#define UANIM_H_BAR  2
+#define UANIM_SHADE  3
+#define UANIM_DOT    4
+    uint8_t repeat;
+    uint16_t timeout_ms;
+    FILE *stream;
+} unicode_trick_t;
+
+esp_err_t unicode_tricks(const unicode_trick_t *);
+
 const char * format_size(uint64_t, bool);
 const char * format_sha256(const void *, size_t);
+const char * format_binary(uint64_t, size_t);
+
+void * setTimeout(uint32_t ms, void (*func)(void *), void *arg);
+void * setInterval(uint32_t ms, void (*func)(void *), void *arg);
+void clearTimer(void *hdl); // = clearTimeout + clearInterval
 
 void task_info(uint8_t sort);
 void memory_info();

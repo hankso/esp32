@@ -8,29 +8,19 @@
 
 #include "globals.h"
 
-#include "driver/i2c.h"
-#include "driver/uart.h"
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
+#include "driver/i2c.h"         // for I2C_NUM_XXX
+#include "driver/uart.h"        // for UART_NUM_XXX
+#include "driver/gpio.h"        // for GPIO_NUM_XXX
+#include "driver/spi_master.h"  // for SPIXXX_HOST
 
-#if defined(CONFIG_USE_BTN) && !__has_include("iot_button.h")
+#if defined(CONFIG_BASE_USE_BTN) && !__has_include("iot_button.h")
 #   warning "Run `idf.py add-dependency espressif/button`"
-#   undef CONFIG_USE_BTN
+#   undef CONFIG_BASE_USE_BTN
 #endif
 
-#if defined(CONFIG_USE_KNOB) && !__has_include("iot_knob.h")
+#if defined(CONFIG_BASE_USE_KNOB) && !__has_include("iot_knob.h")
 #   warning "Run `idf.py add-dependency espressif/knob`"
-#   undef CONFIG_USE_KNOB
-#endif
-
-#if defined(CONFIG_LED_INDICATOR) && !__has_include("led_indicator.h")
-#   warning "Run `idf.py add-dependency espressif/led_indicator`"
-#   undef CONFIG_LED_INDICATOR
-#endif
-
-#if defined(CONFIG_VLX_SENSOR) && !__has_include("vl53l0x.h")
-#   warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
-#   undef CONFIG_VLX_SENSOR
+#   undef CONFIG_BASE_USE_KNOB
 #endif
 
 #ifdef __cplusplus
@@ -49,134 +39,131 @@ extern "C" {
 #define _GPIO_NUMBER(num) GPIO_NUM_##num
 #define GPIO_NUMBER(num) _GPIO_NUMBER(num)
 
-#ifdef CONFIG_USE_LED
-#   define PIN_LED      GPIO_NUMBER(CONFIG_GPIO_LED)
+#define PIN_UNUSED      -1
+
+#ifdef CONFIG_BASE_USE_LED
+#   define PIN_LED      GPIO_NUMBER(CONFIG_BASE_GPIO_LED)
 #endif
 
-#ifdef CONFIG_USE_UART
-#   define NUM_UART     UART_NUMBER(CONFIG_UART_NUM)
-#   define PIN_TXD      GPIO_NUMBER(CONFIG_GPIO_TXD)
-#   define PIN_RXD      GPIO_NUMBER(CONFIG_GPIO_RXD)
+#ifdef CONFIG_BASE_USE_UART
+#   define NUM_UART     UART_NUMBER(CONFIG_BASE_UART_NUM)
+#   define PIN_TXD      GPIO_NUMBER(CONFIG_BASE_GPIO_TXD)
+#   define PIN_RXD      GPIO_NUMBER(CONFIG_BASE_GPIO_RXD)
 #   define PIN_RTS      UART_PIN_NO_CHANGE
 #   define PIN_CTS      UART_PIN_NO_CHANGE
 #endif
 
-#ifdef CONFIG_USE_I2C
-#   define NUM_I2C      I2C_NUMBER(CONFIG_I2C_NUM)
-#   define PIN_SDA      GPIO_NUMBER(CONFIG_GPIO_SDA)
-#   define PIN_SCL      GPIO_NUMBER(CONFIG_GPIO_SCL)
+#ifdef CONFIG_BASE_USE_I2C
+#   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
+#   if CONFIG_BASE_I2C_NUM == 0
+#       define PIN_SDA  PIN_SDA0
+#       define PIN_SCL  PIN_SCL0
+#   else
+#       define PIN_SDA  PIN_SDA1
+#       define PIN_SCL  PIN_SCL1
+#   endif
 #endif
-#ifdef CONFIG_USE_I2C1
-#   define PIN_SDA1     GPIO_NUMBER(CONFIG_GPIO_SDA1)
-#   define PIN_SCL1     GPIO_NUMBER(CONFIG_GPIO_SCL1)
-#else
-#   define PIN_SDA1     PIN_SDA
-#   define PIN_SCL1     PIN_SCL
+#ifdef CONFIG_BASE_USE_I2C0
+#   define PIN_SDA0     GPIO_NUMBER(CONFIG_BASE_GPIO_SDA0)
+#   define PIN_SCL0     GPIO_NUMBER(CONFIG_BASE_GPIO_SCL0)
 #endif
-
-#ifdef CONFIG_USE_SPI
-#   define NUM_SPI      SPI_NUMBER(CONFIG_SPI_NUM)
-#   define PIN_MISO     GPIO_NUMBER(CONFIG_GPIO_SPI_MISO)
-#   define PIN_MOSI     GPIO_NUMBER(CONFIG_GPIO_SPI_MOSI)
-#   define PIN_SCLK     GPIO_NUMBER(CONFIG_GPIO_SPI_SCLK)
-#endif
-#ifdef CONFIG_USE_SDFS
-#   define PIN_CS0      GPIO_NUMBER(CONFIG_GPIO_SPI_CS0)
-#endif
-#ifdef CONFIG_USE_SPI_GPIOEXP
-#   define PIN_CS1      GPIO_NUMBER(CONFIG_GPIO_SPI_CS1)
+#ifdef CONFIG_BASE_USE_I2C1
+#   define PIN_SDA1     GPIO_NUMBER(CONFIG_BASE_GPIO_SDA1)
+#   define PIN_SCL1     GPIO_NUMBER(CONFIG_BASE_GPIO_SCL1)
 #endif
 
-#ifdef CONFIG_USE_GPIOEXP
-#   define PIN_INT      GPIO_NUMBER(CONFIG_GPIO_INT)
+#ifdef CONFIG_BASE_USE_SPI
+#   define NUM_SPI      SPI_NUMBER(CONFIG_BASE_SPI_NUM)
+#   define PIN_MISO     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MISO)
+#   define PIN_MOSI     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MOSI)
+#   define PIN_SCLK     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SCLK)
+#endif
+#ifdef CONFIG_BASE_USE_SDFS
+#   define PIN_CS0      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS0)
+#endif
+#ifdef CONFIG_BASE_SCREEN_SPI
+#   define PIN_CS1      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS1)
+#   define PIN_SDC      GPIO_NUMBER(CONFIG_BASE_GPIO_SCN_DC)
+#   ifdef CONFIG_BASE_GPIO_SCN_RST
+#       define PIN_SRST GPIO_NUMBER(CONFIG_BASE_GPIO_SCN_RST)
+#   else
+#       define PIN_SRST PIN_UNUSED
+#   endif
+#endif
+#ifdef CONFIG_BASE_GPIOEXP_SPI
+#   define PIN_CS2      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS2)
 #endif
 
-#ifdef CONFIG_USE_ADC
-#   define PIN_ADC      GPIO_NUMBER(CONFIG_GPIO_ADC)
+#ifdef CONFIG_BASE_USE_GPIOEXP
+#   define PIN_INT      GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
 #endif
 
-#ifdef CONFIG_USE_BTN
-#   define PIN_BTN      GPIO_NUMBER(CONFIG_GPIO_BTN)
+#if defined(CONFIG_BASE_ADC_HALL)
+#   define PIN_ADC1     GPIO_NUMBER(36)
+#   define PIN_ADC2     GPIO_NUMBER(39)
+#elif defined(CONFIG_BASE_ADC_JOYSTICK)
+#   define PIN_ADC1     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC1)
+#   define PIN_ADC2     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC2)
+#elif defined(CONFIG_BASE_USE_ADC)
+#   define PIN_ADC1     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC1)
 #endif
 
-#ifdef CONFIG_USE_KNOB
-#   define PIN_ENCA     GPIO_NUMBER(CONFIG_GPIO_ENCA)
-#   define PIN_ENCB     GPIO_NUMBER(CONFIG_GPIO_ENCB)
+#ifdef CONFIG_BASE_USE_DAC
+#   define PIN_DAC      GPIO_NUMBER(CONFIG_BASE_GPIO_DAC)
 #endif
 
-#ifdef CONFIG_USE_SERVO
-#   define PIN_SVOH     GPIO_NUMBER(CONFIG_GPIO_SERVOH)
-#   define PIN_SVOV     GPIO_NUMBER(CONFIG_GPIO_SERVOV)
+#ifdef CONFIG_BASE_USE_TPAD
+#   define PIN_TPAD     GPIO_NUMBER(CONFIG_BASE_GPIO_TPAD)
 #endif
 
-#ifdef CONFIG_USE_BUZZER
-#   define PIN_BUZZ     GPIO_NUMBER(CONFIG_GPIO_BUZZER)
+#ifdef CONFIG_BASE_USE_BTN
+#   define PIN_BTN      GPIO_NUMBER(CONFIG_BASE_GPIO_BTN)
+#endif
+
+#ifdef CONFIG_BASE_USE_KNOB
+#   define PIN_ENCA     GPIO_NUMBER(CONFIG_BASE_GPIO_ENCA)
+#   define PIN_ENCB     GPIO_NUMBER(CONFIG_BASE_GPIO_ENCB)
+#endif
+
+#ifdef CONFIG_BASE_USE_SERVO
+#   define PIN_SVOH     GPIO_NUMBER(CONFIG_BASE_GPIO_SERVOH)
+#   define PIN_SVOV     GPIO_NUMBER(CONFIG_BASE_GPIO_SERVOV)
+#endif
+
+#ifdef CONFIG_BASE_USE_BUZZER
+#   define PIN_BUZZ     GPIO_NUMBER(CONFIG_BASE_GPIO_BUZZER)
 #endif
 
 void driver_initialize();
 
-esp_err_t led_set_light(int index, uint8_t brightness);
-uint8_t led_get_light(int index);
-esp_err_t led_set_color(int index, uint32_t color);
-uint32_t led_get_color(int index);
-esp_err_t led_set_blink(int blink_type);
+esp_err_t twdt_feed();
 
-uint32_t adc_read();
+int adc_hall(); // return 0 if error
+int adc_read(uint8_t idx); // return -1 if error, else measured mV
+int adc_joystick(int *dx, int *dy); // return -1 if error, else x << 16 | y
 
-void gpio_table(bool i2c, bool spi);
-esp_err_t gpioext_set_level(int pin, bool level);
-esp_err_t gpioext_get_level(int pin, bool * level, bool sync);
+esp_err_t dac_write(uint8_t val);
+esp_err_t dac_cwave(uint32_t freq_scale_offset);
 
 esp_err_t pwm_set_degree(int hdeg, int vdeg);
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
 esp_err_t pwm_set_tone(int freq, int pcent);
 esp_err_t pwm_get_tone(int *freq, int *pcent);
 
-esp_err_t twdt_feed();
-
-uint16_t vlx_probe();
-
-typedef enum {
-    ALS_TRACK_0,    // single input
-    ALS_TRACK_1,
-    ALS_TRACK_2,
-    ALS_TRACK_3,
-    ALS_TRACK_H,    // dual input
-    ALS_TRACK_V,
-    ALS_TRACK_A,    // quad input
-} als_track_t;
-
-esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg);
-
-float als_brightness(int idx);
-
-typedef struct {
-    float brightness;   // lux
-    float temperature;  // Celsius degree
-    float atmosphere;   // Pa
-    float humidity;     // 0-1 percentage
-    float altitude;     // meter
-} gy39_data_t;
-
-esp_err_t gy39_measure(gy39_data_t *dat);
-
-esp_err_t scn_progbar(uint8_t percent);
-
 void i2c_detect(int bus);
-
 esp_err_t smbus_probe(int bus, uint8_t addr);
-esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg_start, uint8_t reg_end);
+esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
+esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
+esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num);
 esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val);
 esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
 esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val);
 esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val);
 
-// We use PCF8574 for IO expansion: Endstops | Temprature | Valves
-
 typedef enum {
-    PIN_I2C_BASE = GPIO_PIN_COUNT - 1,
-
-#ifdef CONFIG_USE_I2C_GPIOEXP
+    // GPIO Expander by PCF8574: Endstops | Temprature | Valves
+    PIN_I2C_MIN = GPIO_PIN_COUNT - 1,
+#ifdef CONFIG_BASE_GPIOEXP_I2C
     // endstops
     PIN_XMIN, PIN_XMAX, PIN_YMIN, PIN_YMAX,
     PIN_ZMIN, PIN_ZMAX, PIN_EVAL, PIN_PROB,
@@ -189,21 +176,11 @@ typedef enum {
     PIN_VLV1, PIN_VLV2, PIN_VLV3, PIN_VLV4,
     PIN_VLV5, PIN_VLV6, PIN_VLV7, PIN_VLV8,
 #endif
+    PIN_I2C_MAX,
 
-    PIN_I2C_MAX, PIN_I2C_MIN = PIN_I2C_BASE + 1
-} i2c_pin_num_t;
-
-#define PIN_IS_I2CEXP(n) ( (n) >= PIN_I2C_MIN && (n) < PIN_I2C_MAX )
-
-esp_err_t i2c_gpio_set_level(i2c_pin_num_t pin, bool level);
-esp_err_t i2c_gpio_get_level(i2c_pin_num_t pin, bool * level, bool sync);
-
-// IO expansion by 74HC595 (SPI connection): Steppers
-
-typedef enum {
-    PIN_SPI_BASE = PIN_I2C_MAX - 1,
-
-#ifdef CONFIG_USE_SPI_GPIOEXP
+    // GPIO Expander by cascaded 74HC595s (SPI connection): Steppers
+    PIN_SPI_MIN = PIN_I2C_MAX - 1,
+#ifdef CONFIG_BASE_GPIOEXP_SPI
     // stepper direction & step (pulse)
     PIN_XDIR,  PIN_XSTEP,  PIN_YDIR,  PIN_YSTEP,  PIN_ZDIR,  PIN_ZSTEP,
     PIN_E1DIR, PIN_E1STEP, PIN_E2DIR, PIN_E2STEP, PIN_E3DIR, PIN_E3STEP,
@@ -211,14 +188,19 @@ typedef enum {
     // enable | disable
     PIN_XYZEN, PIN_E1EN, PIN_E2EN,  PIN_E3EN,
 #endif
+    PIN_SPI_MAX,
+} gexp_num_t;
 
-    PIN_SPI_MAX, PIN_SPI_MIN = PIN_SPI_BASE + 1
-} spi_pin_num_t;
+#define PIN_I2C_BASE        ( PIN_I2C_MIN + 1 )
+#define PIN_SPI_BASE        ( PIN_SPI_MIN + 1 )
+#define PIN_I2C_COUNT       ( PIN_I2C_MAX - PIN_I2C_BASE )
+#define PIN_SPI_COUNT       ( PIN_SPI_MAX - PIN_SPI_BASE )
+#define PIN_IS_I2CEXP(n)    ( (n) > PIN_I2C_MIN && (n) < PIN_I2C_MAX )
+#define PIN_IS_SPIEXP(n)    ( (n) > PIN_SPI_MIN && (n) < PIN_SPI_MAX )
 
-#define PIN_IS_SPIEXP(n) ( (n) >= PIN_SPI_MIN && (n) < PIN_SPI_MAX )
-
-esp_err_t spi_gpio_set_level(spi_pin_num_t pin, bool level);
-esp_err_t spi_gpio_get_level(spi_pin_num_t pin, bool * level, bool sync);
+esp_err_t gexp_set_level(int pin, bool level);
+esp_err_t gexp_get_level(int pin, bool *level, bool sync);
+void gpio_table(bool i2c, bool spi);
 
 #ifdef __cplusplus
 }

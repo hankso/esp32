@@ -5,6 +5,43 @@
   "description": "Generated from espbase/main/config.h",
   "type": "object",
   "properties": {
+    "sys.path.data": {
+      "description": "Directory to storage font, image files etc.",
+      "type": "string"
+    },
+    "sys.path.docs": {
+      "description": "Directory to generated documentation",
+      "type": "string"
+    },
+    "sys.path.html": {
+      "description": "Directory to static webpage files",
+      "type": "string"
+    },
+    "sys.usb.mode": {
+      "description": "Select USB work mode",
+      "enum": [
+        "SERIAL_JTAG",
+        "CDC_DEVICE",
+        "CDC_HOST",
+        "MSC_DEVICE",
+        "MSC_HOST",
+        "HID_DEVICE",
+        "HID_HOST"
+      ]
+    },
+    "sys.bt.mode": {
+      "description": "Select BT work mode",
+      "enum": [
+        "BT_HIDD",
+        "BLE_HIDD",
+        "BLE_HIDH"
+      ]
+    },
+    "sys.bt.scan": {
+      "description": "Bluetooth discoverable",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
     "net.sta.ssid": {
       "description": "SSID of the AP to connect after startup",
       "type": "string",
@@ -87,18 +124,6 @@
         { "maxLength": 0 }
       ]
     },
-    "web.path.data": {
-      "description": "Directory to storage user uploaded files",
-      "type": "string"
-    },
-    "web.path.docs": {
-      "description": "Directory to generated documentation",
-      "type": "string"
-    },
-    "web.path.root": {
-      "description": "Directory to static webpage files",
-      "type": "string"
-    },
     "app.mdns.run": {
       "description": "Enable mDNS server",
       "type": "string",
@@ -125,7 +150,7 @@
         { "maxLength": 0 }
       ]
     },
-    "app.ota.run": {
+    "app.ota.auto": {
       "description": "Enable auto updation checking",
       "type": "string",
       "pattern": "^[01yn]?$"
@@ -136,18 +161,6 @@
       "anyOf": [
         { "format": "uri-reference" },
         { "maxLength": 0 }
-      ]
-    },
-    "app.usb.mode": {
-      "description": "Select USB work mode",
-      "enum": [
-        "SERIAL_JTAG",
-        "CDC_DEVICE",
-        "CDC_HOST",
-        "MSC_DEVICE",
-        "MSC_HOST",
-        "HID_DEVICE",
-        "HID_HOST"
       ]
     },
     "app.timezone": {

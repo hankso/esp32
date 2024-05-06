@@ -10,7 +10,11 @@
 #include "drivers.h"
 #include "filesys.h"
 #include "network.h"
+#include "sensors.h"
 #include "usbmode.h"
+#include "ledmode.h"
+#include "btmode.h"
+#include "screen.h"
 #include "timesync.h"
 
 #include "esp_sleep.h"
@@ -21,6 +25,54 @@
 #include "freertos/task.h"
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
+
+#ifndef CONFIG_BASE_USE_USB
+#undef  CONSOLE_DRIVER_USB
+#endif
+#ifndef CONFIG_BASE_USE_LED
+#undef  CONSOLE_DRIVER_LED
+#endif
+#ifndef CONFIG_BASE_USE_I2C
+#undef  CONSOLE_DRIVER_I2C
+#endif
+#ifndef CONFIG_BASE_USE_SCREEN
+#undef  CONSOLE_DRIVER_SCN
+#endif
+#ifndef CONFIG_BASE_ALS_TRACK
+#undef  CONSOLE_DRIVER_ALS
+#endif
+#ifndef CONFIG_BASE_USE_ADC
+#undef  CONSOLE_DRIVER_ADC
+#endif
+#ifndef CONFIG_BASE_USE_DAC
+#undef  CONSOLE_DRIVER_DAC
+#endif
+#if !defined(CONFIG_BASE_USE_SERVO) && !defined(CONFIG_BASE_USE_BUZZER)
+#undef  CONSOLE_DRIVER_PWM
+#endif
+
+#if !defined(CONFIG_BASE_USE_FFS) && !defined(CONFIG_BASE_USE_SDFS)
+#undef  CONSOLE_UTILS_LSFS
+#endif
+#if !defined(CONFIG_BASE_USE_USB) \
+ && !defined(CONFIG_BASE_USE_BT)  \
+ && !defined(CONFIG_BASE_USE_SCREEN)
+#undef  CONSOLE_UTILS_HID
+#endif
+
+#ifndef CONFIG_BASE_USE_BT
+#undef  CONSOLE_NET_BT
+#endif
+#ifndef CONFIG_BASE_USE_WIFI
+#undef  CONSOLE_NET_STA
+#undef  CONSOLE_NET_AP
+#undef  CONSOLE_NET_FTM
+#undef  CONSOLE_NET_MDNS
+#undef  CONSOLE_NET_SNTP
+#undef  CONSOLE_NET_PING
+#undef  CONSOLE_NET_IPERF
+#undef  CONSOLE_NET_TSYNC
+#endif
 
 static const char * TAG = "Command";
 
@@ -35,19 +87,17 @@ static const char * TAG = "Command";
  * */
 static bool arg_noerror(int argc, char **argv, void **argtable) {
     if (arg_parse(argc, argv, argtable) != 0) {
-        struct arg_hdr **table = (struct arg_hdr **) argtable;
+        arg_hdr_t **table = (arg_hdr_t **) argtable;
         int tabindex = 0;
         while (!(table[tabindex]->flag & ARG_TERMINATOR)) { tabindex++; }
-        arg_print_errors(stdout, (struct arg_end *) table[tabindex], argv[0]);
+        arg_print_errors(stdout, (arg_end_t *) table[tabindex], argv[0]);
         return false;
     }
     return true;
 }
 
 static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
-    for (size_t i = 0; i < ncmd; i++) {
-        ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) );
-    }
+    LOOPN(i, ncmd) { ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) ); }
 }
 
 #define ARG_STR(p, s)   ((p)->count ? (p)->sval[0] : (s))
@@ -83,14 +133,14 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
 
 #ifdef CONSOLE_SYSTEM_RESTART
 static struct {
-    struct arg_lit *halt;
-    struct arg_lit *cxel;
-    struct arg_int *tout;
-    struct arg_end *end;
+    arg_lit_t *halt;
+    arg_lit_t *cxel;
+    arg_int_t *tout;
+    arg_end_t *end;
 } system_restart_args = {
     .halt = arg_lit0("h", "halt", "shutdown instead of reboot"),
     .cxel = arg_lit0("c", "cancel", "cancel pending reboot (if available)"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "reboot timeout in ms"),
+    .tout = arg_int0("t", NULL, "0-65535", "reboot timeout in ms"),
     .end  = arg_end(3)
 };
 
@@ -134,16 +184,16 @@ static const char * const wakeup_reason_list[] = {
 };
 
 static struct {
-    struct arg_str *mode;
-    struct arg_int *tout;
-    struct arg_int *pin;
-    struct arg_int *lvl;
-    struct arg_end *end;
+    arg_str_t *mode;
+    arg_int_t *tout;
+    arg_int_t *pin;
+    arg_int_t *lvl;
+    arg_end_t *end;
 } system_sleep_args = {
-    .mode = arg_str0(NULL, NULL, "<light|deep>", "sleep mode"),
-    .tout = arg_int0("t", NULL, "<0-2^31>", "wakeup timeout in ms"),
-    .pin  = arg_intn("p", NULL, "<0-49>", 0, 8, "wakeup from GPIO[s]"),
-    .lvl  = arg_intn("l", NULL, "<0|1>", 0, 8, "GPIO level[s] to detect"),
+    .mode = arg_str0(NULL, NULL, "light|deep", "sleep mode"),
+    .tout = arg_int0("t", NULL, "0-2^31", "wakeup timeout in ms"),
+    .pin  = arg_intn("p", NULL, NULL, 0, 8, "wakeup from GPIO[s]"),
+    .lvl  = arg_intn("l", NULL, "0|1", 0, 8, "GPIO level[s] to detect"),
     .end  = arg_end(4)
 };
 
@@ -215,7 +265,7 @@ static int system_sleep(int argc, char **argv) {
     }
     esp_err_t err;
     if (light) {
-#ifdef CONFIG_USE_UART
+#ifdef CONFIG_BASE_USE_UART
         fprintf(stderr, "Use UART wakeup, num: %d\n", NUM_UART);
         ESP_ERROR_CHECK( uart_set_wakeup_threshold(NUM_UART, 3) );
         ESP_ERROR_CHECK( esp_sleep_enable_uart_wakeup(NUM_UART) );
@@ -227,7 +277,7 @@ static int system_sleep(int argc, char **argv) {
 
     fprintf(stderr, "Turn to %s sleep mode\n", mode);
     fflush(stderr); fsync(fileno(stderr));
-#ifdef CONFIG_USE_UART
+#ifdef CONFIG_BASE_USE_UART
     uart_tx_wait_idle(NUM_UART);
 #endif
     if (light) {
@@ -243,16 +293,16 @@ static int system_sleep(int argc, char **argv) {
 
 #ifdef CONSOLE_SYSTEM_UPDATE
 static struct {
-    struct arg_str *cmd;
-    struct arg_str *part;
-    struct arg_str *url;
-    struct arg_lit *fetch;
-    struct arg_lit *reset;
-    struct arg_end *end;
+    arg_str_t *cmd;
+    arg_str_t *part;
+    arg_str_t *url;
+    arg_lit_t *fetch;
+    arg_lit_t *reset;
+    arg_end_t *end;
 } system_update_args = {
-    .cmd   = arg_str0(NULL, NULL, "<boot|fetch|reset>", ""),
-    .part  = arg_str0("p", NULL, "<label>", "partition to boot from"),
-    .url   = arg_str0("u", NULL, "<url>", "specify URL to fetch"),
+    .cmd   = arg_str0(NULL, NULL, "boot|fetch|reset", ""),
+    .part  = arg_str0("p", NULL, "LABEL", "partition to boot from"),
+    .url   = arg_str0("u", NULL, "URL", "specify URL to fetch"),
     .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
     .reset = arg_lit0("r", "reset", "clear OTA internal states"),
     .end   = arg_end(5)
@@ -310,26 +360,16 @@ static void register_system() {
 
 #ifdef CONSOLE_DRIVER_GPIO
 static struct {
-    struct arg_int *pin;
-    struct arg_int *lvl;
-    struct arg_lit *i2c;
-    struct arg_lit *spi;
-    struct arg_end *end;
+    arg_int_t *pin;
+    arg_int_t *lvl;
+    arg_lit_t *i2c;
+    arg_lit_t *spi;
+    arg_end_t *end;
 } driver_gpio_args = {
-    .pin = arg_int0(
-        NULL, NULL,
-        "<0-49"
-#   ifdef CONFIG_USE_I2C_GPIOEXP
-        "|24 I2C"
-#   endif
-#   ifdef CONFIG_USE_SPI_GPIOEXP
-        "|16 SPI"
-#   endif
-        ">", "gpio number"
-    ),
-    .lvl = arg_int0(NULL, NULL, "<0|1>", "set pin to LOW / HIGH"),
-    .i2c = arg_lit0(NULL, "i2c_ext", "list I2C GPIO Expander"),
-    .spi = arg_lit0(NULL, "spi_ext", "list SPI GPIO Expander"),
+    .pin = arg_int0(NULL, NULL, NULL, "gpio number"),
+    .lvl = arg_int0(NULL, NULL, "0|1", "set pin to LOW / HIGH"),
+    .i2c = arg_lit0(NULL, "i2c", "list pin of I2C GPIO Expander"),
+    .spi = arg_lit0(NULL, "spi", "list pin of SPI GPIO Expander"),
     .end = arg_end(4)
 };
 
@@ -344,9 +384,9 @@ static int driver_gpio(int argc, char **argv) {
     }
     bool level = lvl;
     if (lvl < 0) {
-        err = gpioext_get_level(pin, &level, true);
+        err = gexp_get_level(pin, &level, true);
     } else {
-        err = gpioext_set_level(pin, level);
+        err = gexp_set_level(pin, level);
     }
     if (err) {
         printf("%s GPIO %d level failed: %s\n",
@@ -360,21 +400,13 @@ static int driver_gpio(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_USB
 static struct {
-    struct arg_str *mode;
-    struct arg_lit *now;
-    struct arg_str *key;
-    struct arg_str *mse;
-    struct arg_str *dial;
-    struct arg_int *tout;
-    struct arg_end *end;
+    arg_str_t *mode;
+    arg_lit_t *now;
+    arg_end_t *end;
 } driver_usb_args = {
-    .mode = arg_str0(NULL, NULL, "<0-6|CMH|S>", "specify USB mode"),
+    .mode = arg_str0(NULL, NULL, "0-6|CMH|S", "specify USB mode"),
     .now  = arg_lit0(NULL, "now", "reboot now"),
-    .key  = arg_str0("k", NULL, "<CODE>", "HID report keypress"),
-    .mse  = arg_str0("m", NULL, "<B|XYVH>", "HID report mouse"),
-    .dial = arg_str0("d", NULL, "<B|LRUD>", "HID report S-Dial"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "key/mouse timeout in ms"),
-    .end  = arg_end(5)
+    .end  = arg_end(2)
 };
 
 static int driver_usb(int argc, char **argv) {
@@ -382,36 +414,8 @@ static int driver_usb(int argc, char **argv) {
     static const char *choices = "CcMmHhS", *c;
     esp_err_t err = ESP_OK;
     bool reboot = driver_usb_args.now->count;
-    uint16_t tout_ms = ARG_INT(driver_usb_args.tout, 50);
     const char *mode = ARG_STR(driver_usb_args.mode, NULL);
-    const char *dial = ARG_STR(driver_usb_args.dial, NULL);
-    const char *press = ARG_STR(driver_usb_args.key, NULL);
-    const char *mouse = ARG_STR(driver_usb_args.mse, NULL);
-    if (dial) {
-        switch (dial[0]) {
-            case 'l': case 'L': hid_report_dial(DIAL_L); break;
-            case 'r': case 'R': hid_report_dial(DIAL_R); break;
-            case 'u': case 'U': hid_report_dial(DIAL_UP); break;
-            case 'd': case 'D': hid_report_dial(DIAL_DN); break;
-            default: if (strbool(dial)) hid_report_dial_button(tout_ms);
-        }
-    } else if (mouse) {
-        int num, vals[4] = { 0 };
-        if (!strcasecmp(mouse, "square")) {
-            hid_report_mouse_move(50, 0); msleep(250);
-            hid_report_mouse_move(0, 50); msleep(250);
-            hid_report_mouse_move(-50, 0); msleep(250);
-            hid_report_mouse_move(0, -50); msleep(250);
-        } else if (!( num = parse_all(mouse, vals, sizeof(vals)) )) {
-            hid_report_mouse_click(mouse, tout_ms);
-        } else if (num == 1) {
-            hid_report_mouse_button(vals[0]);
-        } else {
-            hid_report_mouse(0, vals[0], vals[1], vals[2], vals[3]);
-        }
-    } else if (press) {
-        hid_report_keyboard_press(press, tout_ms);
-    } else if (!mode) {
+    if (!mode) {
         usbmode_status();
     } else if ('0' <= mode[0] && mode[0] <= '6') {
         err = usbmode_switch((usbmode_t)(mode[0] - '0'), reboot);
@@ -427,23 +431,16 @@ static int driver_usb(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_LED
 static struct {
-    struct arg_int *idx;
-    struct arg_str *lgt;
-    struct arg_str *clr;
-    struct arg_int *blk;
-    struct arg_end *end;
+    arg_int_t *idx;
+    arg_str_t *lgt;
+    arg_str_t *clr;
+    arg_int_t *blk;
+    arg_end_t *end;
 } driver_led_args = {
-    .idx = arg_int0(
-        NULL, NULL,
-        "<0"
-#   if CONFIG_LED_NUM > 1
-        "-" STR(CONFIG_LED_NUM)
-#   endif
-        ">", "LED index"
-    ),
-    .lgt = arg_str0("l", NULL, "<0-255|on|off>", "set lightness"),
-    .clr = arg_str0("c", NULL, "<uint24>", "set RGB color"),
-    .blk = arg_int0("b", NULL, "<-1-6>", "set blink effect"),
+    .idx = arg_int0(NULL, NULL, NULL, "LED index"),
+    .lgt = arg_str0("l", NULL, "0-255|on|off", "set lightness"),
+    .clr = arg_str0("c", NULL, "0xRRGGBB", "set RGB color"),
+    .blk = arg_int0("b", NULL, NULL, "set blink effect"),
     .end = arg_end(4)
 };
 
@@ -451,15 +448,16 @@ static int driver_led(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_led_args);
     esp_err_t err = ESP_OK;
     int idx = ARG_INT(driver_led_args.idx, -1);
-    int blk = ARG_INT(driver_led_args.blk, -2);
+    int blk = ARG_INT(driver_led_args.blk, LED_BLINK_RESET - 1);
     const char *light = ARG_STR(driver_led_args.lgt, NULL);
     const char *color = ARG_STR(driver_led_args.clr, NULL);
-    if (blk > -2) {
-        if (!( err = led_set_blink(blk) )) {
-            if (blk >= 0)
+    if (blk >= LED_BLINK_RESET) {
+        if (!( err = led_set_blink((led_blink_t)blk) )) {
+            if (blk > LED_BLINK_RESET) {
                 printf("LED: set blink to %d\n", blk);
-            else
+            } else {
                 puts("LED: stop blink");
+            }
         }
         return err;
     }
@@ -495,12 +493,12 @@ static int driver_led(int argc, char **argv) {
             return err;
         printf("LED%s: set color to %06X\n", buf, rgb);
     }
-    if (idx >= CONFIG_LED_NUM) {
+    if (idx >= CONFIG_BASE_LED_NUM) {
         printf("Invalid LED index: `%d`\n", idx);
         err = ESP_ERR_INVALID_ARG;
     } else {
-        printf("LED%s: color 0x%06X, brightness %d\n",
-            buf, led_get_color(idx), led_get_light(idx));
+        printf("LED%s: color 0x%06X, brightness %d, blink %d\n",
+            buf, led_get_color(idx), led_get_light(idx), led_get_blink());
     }
     return err;
 }
@@ -508,34 +506,32 @@ static int driver_led(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_I2C
 static struct {
-    struct arg_int *bus;
-    struct arg_int *addr;
-    struct arg_int *reg;
-    struct arg_int *val;
-    struct arg_int *len;
-    struct arg_lit *hex;
-    struct arg_end *end;
+    arg_int_t *bus;
+    arg_int_t *addr;
+    arg_int_t *reg;
+    arg_int_t *val;
+    arg_int_t *len;
+    arg_lit_t *hex;
+    arg_end_t *end;
 } driver_i2c_args = {
-#   ifndef CONFIG_USE_I2C1
-    .bus = arg_int0(NULL, NULL, "<" STR(CONFIG_I2C_NUM) ">", "I2C bus"),
-#   elif CONFIG_I2C_NUM > 1
-    .bus = arg_int1(NULL, NULL, "<1|" STR(CONFIG_I2C_NUM) ">", "I2C bus"),
+#   if defined(CONFIG_BASE_USE_I2C0) && defined(CONFIG_BASE_USE_I2C1)
+    .bus = arg_int1(NULL, NULL, "0|1", "I2C bus"),
 #   else
-    .bus = arg_int1(NULL, NULL, "<" STR(CONFIG_I2C_NUM) "|1>", "I2C bus"),
+    .bus = arg_int0(NULL, NULL, STR(CONFIG_BASE_I2C_NUM), "I2C bus"),
 #   endif
-    .addr = arg_int0(NULL, NULL, "<0x00-0x7F>", "I2C client 7-bit address"),
-    .reg = arg_int0(NULL, NULL, "regaddr", "register 8-bit address"),
-    .val = arg_int0(NULL, NULL, "regval", "register value"),
-    .len = arg_int0("l", "len", "<uint8>", "read specified length of regs"),
+    .addr = arg_int0(NULL, NULL, "0x00-0x7F", "I2C client 7-bit address"),
+    .reg = arg_int0(NULL, NULL, "REG", "register 8-bit address"),
+    .val = arg_int0(NULL, NULL, "VAL", "register value"),
+    .len = arg_int0("l", NULL, "NUM", "read specified length of regs"),
     .hex = arg_lit0("w", "word", "read/write in word (16-bit) mode"),
     .end = arg_end(6)
 };
 
 static int driver_i2c(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_i2c_args);
-    int bus = ARG_INT(driver_i2c_args.bus, CONFIG_I2C_NUM);
+    int bus = ARG_INT(driver_i2c_args.bus, CONFIG_BASE_I2C_NUM);
     int addr = ARG_INT(driver_i2c_args.addr, -1);
-    if (0 > bus || bus > 1) {
+    if (bus < 0 || bus >= I2C_NUM_MAX) {
         printf("Invalid I2C bus number: %d\n", bus);
         return ESP_ERR_INVALID_ARG;
     }
@@ -576,35 +572,57 @@ static int driver_i2c(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_SCN
 static struct {
-    struct arg_int *bar;
-    struct arg_end *end;
+    arg_int_t *btn;
+    arg_int_t *bar;
+    arg_int_t *rot;
+    arg_int_t *fps;
+    arg_str_t *font;
+    arg_end_t *end;
 } driver_scn_args = {
-    .bar = arg_int0("p", NULL, "<0-100>", "draw progress bar on screen"),
-    .end = arg_end(2)
+    .btn  = arg_int0(NULL, NULL, "0-6", "trigger virtual button press"),
+    .bar  = arg_int0("p", NULL, "0-100", "draw progress bar on screen"),
+    .rot  = arg_int0("r", NULL, "0-3", "software rotation of screen"),
+    .fps  = arg_int0("f", NULL, "0-100", "set LVGL refresh period in FPS"),
+    .font = arg_str0(NULL, "font", "PATH", "load font from file"),
+    .end  = arg_end(5)
 };
 
 static int driver_scn(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_scn_args);
+    int btn = ARG_INT(driver_scn_args.btn, -1);
     int bar = ARG_INT(driver_scn_args.bar, -1);
-    if (bar >= 0) return scn_progbar(CONS(bar, 0, 100));
+    int rot = ARG_INT(driver_scn_args.rot, -1);
+    int fps = ARG_INT(driver_scn_args.fps, -1);
+    const char *font = ARG_STR(driver_scn_args.font, NULL);
+    if (bar >= 0) {
+        return screen_command(SCN_PBAR, &bar);
+    } else if (btn >= 0) {
+        return screen_command(SCN_BTN, &btn);
+    } else if (rot >= 0) {
+        return screen_command(SCN_ROT, &rot);
+    } else if (fps >= 0) {
+        return screen_command(SCN_FPS, &fps);
+    } else if (font) {
+        return screen_command(SCN_FONT, font);
+    }
+    screen_status();
     return ESP_OK;
 }
 #endif // CONSOLE_DRIVER_SCN
 
 #ifdef CONSOLE_DRIVER_ALS
 static struct {
-    struct arg_int *idx;
-    struct arg_str *rlt;
-    struct arg_end *end;
+    arg_int_t *idx;
+    arg_str_t *rlt;
+    arg_end_t *end;
 } driver_als_args = {
-    .idx = arg_int0(NULL, NULL, "<0-4>", "index of ALS chip"),
-    .rlt = arg_str0("t", NULL, "<0|1|2|3|H|V|A>", "run light tracking"),
+    .idx = arg_int0(NULL, NULL, "0-3", "index of ALS chip"),
+    .rlt = arg_str0("t", NULL, "0-3|HVA", "run light tracking"),
     .end = arg_end(2)
 };
 
 static int driver_als(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_als_args);
-    static const char *tpl = "Brightness of ALS %d is %.2f lux\n";
     static const char *choices = "0123HVA", *c;
     const char *method = ARG_STR(driver_als_args.rlt, NULL);
     int idx = ARG_INT(driver_als_args.idx, -1);
@@ -619,8 +637,10 @@ static int driver_als(int argc, char **argv) {
             printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
     } else if (idx < 4) {
         LOOPN(i, 4) {
-            if (idx >= 0 && i != idx) continue;
-            printf(tpl, idx, als_brightness(idx));
+            if (idx < 0 || i == idx) {
+                printf("Brightness of ALS %d is %.2f lux\n",
+                        i, als_brightness(i));
+            }
         }
     } else {
         gy39_data_t dat;
@@ -635,48 +655,131 @@ static int driver_als(int argc, char **argv) {
 
 #ifdef CONSOLE_DRIVER_ADC
 static struct {
-    struct arg_int *intv;
-    struct arg_int *tout;
-    struct arg_end *end;
+    arg_int_t *idx;
+    arg_lit_t *joy;
+    arg_lit_t *hall;
+    arg_lit_t *tpad;
+    arg_int_t *intv;
+    arg_int_t *tout;
+    arg_end_t *end;
 } driver_adc_args = {
-    .intv = arg_int0("i", NULL, "<10-1000>", "interval in ms, default 500"),
-    .tout = arg_int0("t", NULL, "<0-2^31>", "loop until timeout in ms"),
-    .end = arg_end(2)
+#   ifdef PIN_ADC2
+    .idx  = arg_int0(NULL, NULL, "0|1", "index of ADC channel"),
+#   else
+    .idx  = arg_int0(NULL, NULL, "0", "index of ADC channel"),
+#   endif
+    .joy  = arg_lit0(NULL, "joy", "read joystick value"),
+    .hall = arg_lit0(NULL, "hall", "read hall sensor value"),
+    .tpad = arg_lit0(NULL, "tpad", "read touch pad value"),
+    .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
+    .tout = arg_int0("t", NULL, "0-2^31", "loop until timeout in ms"),
+    .end  = arg_end(6)
 };
 
 static int driver_adc(int argc, char **argv) {
     ARG_PARSE(argc, argv, &driver_adc_args);
-    if (!driver_adc_args.tout->count) {
-        printf("ADC value: %4umV\n", adc_read());
-        return ESP_OK;
-    }
+#   ifdef PIN_ADC2
+    int idx = ARG_INT(driver_adc_args.idx, -1);
+#   else
+    int idx = ARG_INT(driver_adc_args.idx, 0);
+#   endif
     uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.intv, 500), 10, 1000);
-    uint32_t tout_ms = driver_adc_args.tout->ival[0];
-    while (tout_ms >= intv_ms) {
-        fprintf(stderr, "\rADC value: %4umV (remain %6ds)",
-                adc_read(), tout_ms / 1000);
-        fflush(stderr);
-        msleep(intv_ms);
-        tout_ms -= intv_ms;
-    }
+    uint32_t tout_ms = ARG_INT(driver_adc_args.tout, 0);
+    do {
+        if (driver_adc_args.tpad->count) {
+            fprintf(stderr, "\rTouch pad: %4d", tpad_read());
+        } else if (driver_adc_args.joy->count) {
+            int xy, dx, dy;
+            if (( xy = adc_joystick(&dx, &dy) ) == -1) {
+                fprintf(stderr, "\rCould not read joystick value");
+                break;
+            }
+            fprintf(stderr, "\rJoystick: x %3d y %3d (%4d %4d)",
+                    xy >> 16, xy & 0xFFFF, dx, dy);
+        } else if (driver_adc_args.hall->count) {
+            fprintf(stderr, "\rADC hall: %4d", adc_hall());
+        } else if (idx < 0 || idx > 1) {
+            fprintf(stderr, "\rADC: %4dmV %4dmV", adc_read(0), adc_read(1));
+        } else {
+            fprintf(stderr, "\rADC %d: %4dmV", idx, adc_read(idx));
+        }
+        if (tout_ms >= intv_ms) {
+            fprintf(stderr, " (remain %3ds)", tout_ms / 1000);
+            fflush(stderr);
+            tout_ms -= intv_ms;
+            msleep(intv_ms);
+        }
+    } while (tout_ms >= intv_ms);
     fputc('\n', stderr);
-    fputc('\n', stdout);
+    return ESP_OK;
+}
+#endif
+
+#ifdef CONSOLE_DRIVER_DAC
+static struct {
+    arg_int_t *val;
+    arg_str_t *cos;
+    arg_int_t *frq;
+    arg_int_t *amp;
+    arg_end_t *end;
+} driver_dac_args = {
+    .val = arg_int0(NULL, NULL, "0-255", "output value / offset of wave"),
+    .cos = arg_str0(NULL, "cos", "on|off", "cosine wave enable / disable"),
+    .frq = arg_int0("f", NULL, "130-55000", "frequency of cosine wave"),
+    .amp = arg_int0("a", NULL, "0-3", "amplitude of cosine wave"),
+    .end = arg_end(3)
+};
+
+static int driver_dac(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &driver_dac_args);
+    static uint8_t val, amp;
+    static uint16_t freq;
+    static bool cwave;
+    const char * cos = ARG_STR(driver_dac_args.cos, NULL);
+    int v = ARG_INT(driver_dac_args.val, -1);
+    int f = ARG_INT(driver_dac_args.frq, -1);
+    int a = ARG_INT(driver_dac_args.amp, -1);
+    if (v != -1) val = v;
+    if (a != -1) {
+        if (a < 0 || a > 3) return ESP_ERR_INVALID_ARG;
+        amp = a;
+    }
+    if (f != -1) {
+        if (f < 130 || f > 55000) return ESP_ERR_INVALID_ARG;
+        freq = f;
+    }
+    if (cos && cwave != strbool(cos)) {
+        if (!freq) f = freq = 130;
+        cwave = !cwave;
+        v = val;
+    }
+    if (cwave && (f != -1 || a != -1 || v != -1)) {
+        return dac_cwave((freq << 16) | (amp << 8) | val);
+    } else if (!cwave && v != -1) {
+        return dac_write(val);
+    }
+    if (cwave) {
+        printf("DAC: cosine wave %dHz %d±%dmV\n",
+               freq, 3300 * val / 255, 3300 / (1 << amp) / 2);
+    } else {
+        printf("DAC: output %dmV\n", 3300 * val / 255);
+    }
     return ESP_OK;
 }
 #endif
 
 #ifdef CONSOLE_DRIVER_PWM
 static struct {
-    struct arg_int *hdeg;
-    struct arg_int *vdeg;
-    struct arg_int *freq;
-    struct arg_int *pcnt;
-    struct arg_end *end;
+    arg_int_t *hdeg;
+    arg_int_t *vdeg;
+    arg_int_t *freq;
+    arg_int_t *pcnt;
+    arg_end_t *end;
 } driver_pwm_args = {
-    .hdeg = arg_int0("y", NULL, "<0-180>", "yaw degree"),
-    .vdeg = arg_int0("p", NULL, "<0-160>", "pitch degree"),
-    .freq = arg_int0("f", NULL, "<0-5000>", "tone frequency"),
-    .pcnt = arg_int0("l", NULL, "<0-100>", "tone loudness (percentage)"),
+    .hdeg = arg_int0("y", NULL, "0-180", "yaw degree"),
+    .vdeg = arg_int0("p", NULL, "0-160", "pitch degree"),
+    .freq = arg_int0("f", NULL, "0-5000", "tone frequency"),
+    .pcnt = arg_int0("l", NULL, "0-100", "tone loudness (percentage)"),
     .end  = arg_end(4)
 };
 
@@ -722,6 +825,9 @@ static void register_driver() {
 #ifdef CONSOLE_DRIVER_ADC
         ESP_CMD_ARG(driver, adc, "Read ADC and calculate value in mV"),
 #endif
+#ifdef CONSOLE_DRIVER_DAC
+        ESP_CMD_ARG(driver, dac, "Write DAC and calculate value in mV"),
+#endif
 #ifdef CONSOLE_DRIVER_PWM
         ESP_CMD_ARG(driver, pwm, "Control rotation of servo by PWM"),
 #endif
@@ -747,10 +853,10 @@ static int utils_lspart(int c, char **v) { partition_info(); return ESP_OK; }
 
 #ifdef CONSOLE_UTILS_LSTASK
 static struct {
-    struct arg_int *sort;
-    struct arg_end *end;
+    arg_int_t *sort;
+    arg_end_t *end;
 } utils_lstask_args = {
-    .sort = arg_int0(NULL, NULL, "<0-6>", "sort by column index"),
+    .sort = arg_int0(NULL, NULL, "0-6", "sort by column index"),
     .end  = arg_end(1)
 };
 
@@ -763,8 +869,8 @@ static int utils_lstask(int argc, char **argv) {
 
 #ifdef CONSOLE_UTILS_LSMEM
 static struct {
-    struct arg_lit *verbose;
-    struct arg_end *end;
+    arg_lit_t *verbose;
+    arg_end_t *end;
 } utils_lsmem_args = {
     .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
     .end     = arg_end(1)
@@ -773,16 +879,11 @@ static struct {
 static int utils_lsmem(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_lsmem_args);
     switch (utils_lsmem_args.verbose->count) {
-        case 0:
-            memory_info(); break;
-        case 2:
-            heap_caps_print_heap_info(MALLOC_CAP_DMA);
-            heap_caps_print_heap_info(MALLOC_CAP_EXEC);
-            FALLTH;
-        case 1:
-            heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
-            heap_caps_print_heap_info(MALLOC_CAP_INTERNAL);
-            break;
+    case 0: memory_info(); break;
+    case 2: heap_caps_print_heap_info(MALLOC_CAP_DMA);
+            heap_caps_print_heap_info(MALLOC_CAP_EXEC); FALLTH;
+    case 1: heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
+            heap_caps_print_heap_info(MALLOC_CAP_INTERNAL); break;
     }
     return ESP_OK;
 }
@@ -790,57 +891,111 @@ static int utils_lsmem(int argc, char **argv) {
 
 #ifdef CONSOLE_UTILS_LSFS
 static struct {
-    struct arg_str *dir;
-    struct arg_str *dev;
-    struct arg_end *end;
+    arg_str_t *dir;
+    arg_lit_t *ext;
+    arg_end_t *end;
 } utils_lsfs_args = {
     .dir = arg_str0(NULL, NULL, "abspath", NULL),
-    .dev = arg_str0("d", NULL, "<flash|sdcard>", "select FS from device"),
+    .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(2)
 };
 
 static int utils_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_lsfs_args);
-    const char *dir = ARG_STR(utils_lsfs_args.dir, "/");
-    const char *dev = ARG_STR(utils_lsfs_args.dev, "flash");
-    if (strstr(dev, "flash")) {
-#ifdef CONFIG_FFS_MP
-        FFS.list(dir, stdout);
-#else
-        ESP_LOGW(TAG, "Flash File System not enabled");
-#endif
-    } else if (strstr(dev, "sdcard")) {
-#ifdef CONFIG_SDFS_MP
-        SDFS.list(dir, stdout);
-#else
-        ESP_LOGW(TAG, "SDMMC File System not enabled");
-#endif
-    } else {
-        printf("Invalid device: `%s`\n", dev);
-        return ESP_ERR_INVALID_ARG;
-    }
+    filesys_listdir(
+        utils_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH,
+        ARG_STR(utils_lsfs_args.dir, "/"), stdout);
     return ESP_OK;
 }
 #endif // CONSOLE_UTILS_LSFS
 
+#ifdef CONSOLE_UTILS_HID
+static struct {
+    arg_str_t *key;
+    arg_str_t *mse;
+    arg_str_t *dial;
+    arg_int_t *tout;
+    arg_str_t *tgt;
+    arg_end_t *end;
+} utils_hid_args = {
+    .key  = arg_str0("k", NULL, "CODE", "HID report keypress"),
+    .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
+    .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
+    .tout = arg_int0("t", NULL, "0-65535", "key/mouse timeout in ms"),
+    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BLE/SCN"),
+    .end  = arg_end(5)
+};
+
+static int utils_hid(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &utils_hid_args);
+    esp_err_t err = ESP_OK;
+    static const char *choices = "UBS", *c;
+    const char *mouse = ARG_STR(utils_hid_args.mse, NULL);
+    const char *press = ARG_STR(utils_hid_args.key, NULL);
+    const char *dial = ARG_STR(utils_hid_args.dial, NULL);
+    const char *tstr = ARG_STR(utils_hid_args.tgt, NULL);
+    uint16_t tout_ms = ARG_INT(utils_hid_args.tout, 50);
+
+    hid_target_t to = HID_TARGET_ALL;
+    if (tstr) {
+        if ('0' <= tstr[0] && tstr[0] <= '2') {
+            to = (hid_target_t)(tstr[0] - '0');
+        } else if (( c = strchr(choices, tstr[0]) )) {
+            to = (hid_target_t)(c - choices);
+        } else {
+            printf("Invalid target to send: `%s`\n", tstr);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (dial) {
+        switch (dial[0]) {
+        case 'l': FALLTH; case 'L': hid_report_dial(to, DIAL_L); break;
+        case 'r': FALLTH; case 'R': hid_report_dial(to, DIAL_R); break;
+        case 'u': FALLTH; case 'U': hid_report_dial(to, DIAL_UP); break;
+        case 'd': FALLTH; case 'D': hid_report_dial(to, DIAL_DN); break;
+        default: if (strbool(dial)) hid_report_dial_button(to, tout_ms);
+        }
+    }
+    if (mouse) {
+        int num, vals[4] = { 0 };
+        if (!strcasecmp(mouse, "square")) {
+            hid_report_mouse_move(to, 50, 0); msleep(250);
+            hid_report_mouse_move(to, 0, 50); msleep(250);
+            hid_report_mouse_move(to, -50, 0); msleep(250);
+            hid_report_mouse_move(to, 0, -50); msleep(250);
+        } else if (!( num = parse_all(mouse, vals, LEN(vals)) )) {
+            hid_report_mouse_click(to, mouse, tout_ms);
+        } else if (num == 1) {
+            hid_report_mouse_button(to, vals[0]);
+        } else {
+            hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
+        }
+    }
+    if (press) {
+        hid_report_keyboard_press(to, press, tout_ms);
+    }
+    return err;
+}
+#endif // CONSOLE_UTILS_HID
+
 #ifdef CONSOLE_UTILS_CONFIG
 static struct {
-    struct arg_str *key;
-    struct arg_str *val;
-    struct arg_lit *load;
-    struct arg_lit *save;
-    struct arg_lit *stat;
-    struct arg_lit *list;
-    struct arg_lit *lall;
-    struct arg_end *end;
+    arg_str_t *key;
+    arg_str_t *val;
+    arg_lit_t *load;
+    arg_lit_t *save;
+    arg_lit_t *stat;
+    arg_lit_t *list;
+    arg_lit_t *lall;
+    arg_end_t *end;
 } utils_config_args = {
-    .key  = arg_str0(NULL, NULL, "key", "specify config by key"),
-    .val  = arg_str0(NULL, NULL, "value", "set config value"),
+    .key  = arg_str0(NULL, NULL, "KEY", "specify config by key"),
+    .val  = arg_str0(NULL, NULL, "VAL", "set config value"),
     .load = arg_lit0(NULL, "load", "load from NVS flash"),
     .save = arg_lit0(NULL, "save", "save to NVS flash"),
     .stat = arg_lit0(NULL, "stat", "summary NVS status"),
     .list = arg_lit0(NULL, "list", "list config NVS entries"),
-    .lall = arg_lit0(NULL, "list-all", "list all NVS entries"),
+    .lall = arg_lit0(NULL, "list_all", "list all NVS entries"),
     .end  = arg_end(7)
 };
 
@@ -874,18 +1029,14 @@ static int utils_config(int argc, char **argv) {
 #endif // CONSOLE_UTILS_CONFIG
 
 #ifdef CONSOLE_UTILS_LOGGING
-static const char * const log_level_str[] = {
-    "NONE", "ERROR", "WARN", "INFO", "DEBUG", "VERBOSE"
-};
-
 static struct {
-    struct arg_str *tag;
-    struct arg_str *lvl;
-    struct arg_lit *log;
-    struct arg_end *end;
+    arg_str_t *tag;
+    arg_str_t *lvl;
+    arg_lit_t *log;
+    arg_end_t *end;
 } utils_logging_args = {
     .tag = arg_str0(NULL, NULL, "TAG", "specify tag of the log entries"),
-    .lvl = arg_str0(NULL, NULL, "<0-5|NEWIDV>", "set logging level"),
+    .lvl = arg_str0(NULL, NULL, "0-5|NEWIDV", "set logging level"),
     .log = arg_lit0(NULL, "test", "test logging with specified tag"),
     .end = arg_end(3)
 };
@@ -909,11 +1060,10 @@ static int utils_logging(int argc, char **argv) {
             return ESP_ERR_INVALID_ARG;
         }
     }
-    printf("Logging level of %s is %s\n",
-            tag, log_level_str[esp_log_level_get(tag)]);
+    printf("Logging level of %s is %c\n", tag, choices[esp_log_level_get(tag)]);
     if (utils_logging_args.log->count && strcmp(tag, "*")) {
-        for (int i = 1; i < LEN(log_level_str); i++) {
-            ESP_LOG_LEVEL(i, tag, "Logging at %s", log_level_str[i]);
+        for (int i = 1; i < strlen(choices); i++) {
+            ESP_LOG_LEVEL(i, tag, "Logging at %c", choices[i]);
         }
     }
     return ESP_OK;
@@ -922,14 +1072,14 @@ static int utils_logging(int argc, char **argv) {
 
 #ifdef CONSOLE_UTILS_HISTORY
 static struct {
-    struct arg_str *cmd;
-    struct arg_str *dev;
-    struct arg_str *dst;
-    struct arg_end *end;
+    arg_str_t *cmd;
+    arg_str_t *dst;
+    arg_lit_t *ext;
+    arg_end_t *end;
 } utils_hist_args = {
-    .cmd = arg_str1(NULL, NULL, "<load|save>", ""),
-    .dev = arg_str0("d", NULL, "<flash|sdcard>", "select FS from device"),
+    .cmd = arg_str1(NULL, NULL, "load|save", ""),
     .dst = arg_str0("f", NULL, "history.txt", "relative path to file"),
+    .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(3)
 };
 
@@ -937,36 +1087,18 @@ static int utils_hist(int argc, char **argv) {
     ARG_PARSE(argc, argv, &utils_hist_args);
     esp_err_t err = ESP_ERR_INVALID_ARG;
     const char *cmd = utils_hist_args.cmd->sval[0];
-    bool save = false, exists = false;
+    const char *dst = ARG_STR(utils_hist_args.dst, "history.txt");
+    bool save = false;
     if (strstr(cmd, "save")) {
         save = true;
     } else if (!strstr(cmd, "load")) {
         printf("Invalid command: `%s`\n", cmd);
         return err;
     }
-    const char *dev = ARG_STR(utils_hist_args.dev, "flash");
-    const char *dst = ARG_STR(utils_hist_args.dst, "history.txt");
-    char path[CONFIG_SPIFFS_OBJ_NAME_LEN];
-    if (strstr(dev, "flash")) {
-#ifdef CONFIG_FFS_MP
-        snprintf(path, sizeof(path), "%s%s%s",
-                CONFIG_FFS_MP, Config.web.DIR_DATA, dst);
-        exists = FFS.exists(path + strlen(CONFIG_FFS_MP));
-#else
-        ESP_LOGW(TAG, "Flash File System not enabled");
-#endif // CONFIG_FFS_MP
-    } else if (strstr(dev, "sdcard")) {
-#ifdef CONFIG_SDFS_MP
-        snprintf(path, sizeof(path), "%s%s%s",
-                CONFIG_SDFS_MP, Config.web.DIR_DATA, dst);
-        exists = SDFS.exists(path + strlen(CONFIG_SDFS_MP));
-#else
-        ESP_LOGW(TAG, "SDMMC File System not enabled");
-#endif // CONFIG_SDFS_MP
-    } else {
-        printf("Invalid device: `%s`\n", dev);
-        return err;
-    }
+    char path[strlen(Config.sys.DIR_DATA) + strlen(dst) + 1];
+    sprintf(path, "%s%s", Config.sys.DIR_DATA, dst);
+    bool exists = filesys_exists(
+        utils_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH, path);
     if (!exists && !save) {
         printf("History file `%s` does not exist\n", path);
         err = ESP_ERR_NOT_FOUND;
@@ -998,6 +1130,9 @@ static void register_utils() {
 #ifdef CONSOLE_UTILS_LSFS
         ESP_CMD_ARG(utils, lsfs, "List file system directories and files"),
 #endif
+#ifdef CONSOLE_UTILS_HID
+        ESP_CMD_ARG(utils, hid, "Send HID report through USB / BT"),
+#endif
 #ifdef CONSOLE_UTILS_CONFIG
         ESP_CMD_ARG(utils, config, "Set / get / load / save / list configs"),
 #endif
@@ -1017,16 +1152,16 @@ static void register_utils() {
 
 #ifdef CONSOLE_NET_STA
 static struct {
-    struct arg_str *cmd;
-    struct arg_str *ssid;
-    struct arg_str *pass;
-    struct arg_int *tout;
-    struct arg_end *end;
+    arg_str_t *cmd;
+    arg_str_t *ssid;
+    arg_str_t *pass;
+    arg_int_t *tout;
+    arg_end_t *end;
 } net_sta_args = {
-    .cmd  = arg_str0(NULL, NULL, "<scan|join|leave>", ""),
-    .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
-    .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "scan/join timeout in ms"),
+    .cmd  = arg_str0(NULL, NULL, "scan|join|leave", ""),
+    .ssid = arg_str0("s", NULL, "SSID", "AP hostname"),
+    .pass = arg_str0("p", NULL, "PASS", "AP password"),
+    .tout = arg_int0("t", NULL, "0-65535", "scan/join timeout in ms"),
     .end  = arg_end(4)
 };
 
@@ -1045,20 +1180,21 @@ static int net_sta(int argc, char **argv) {
     } else if (strstr(cmd, "leave")) {
         return wifi_sta_stop();
     }
-    return wifi_sta_list_ap();
+    wifi_sta_list_ap();
+    return ESP_OK;
 }
 #endif // CONSOLE_NET_STA
 
 #ifdef CONSOLE_NET_AP
 static struct {
-    struct arg_str *cmd;
-    struct arg_str *ssid;
-    struct arg_str *pass;
-    struct arg_end *end;
+    arg_str_t *cmd;
+    arg_str_t *ssid;
+    arg_str_t *pass;
+    arg_end_t *end;
 } net_ap_args = {
-    .cmd  = arg_str0(NULL, NULL, "<start|stop>", ""),
-    .ssid = arg_str0("s", NULL, "<SSID>", "AP hostname"),
-    .pass = arg_str0("p", NULL, "<PASS>", "AP password"),
+    .cmd  = arg_str0(NULL, NULL, "start|stop", ""),
+    .ssid = arg_str0("s", NULL, "SSID", "AP hostname"),
+    .pass = arg_str0("p", NULL, "PASS", "AP password"),
     .end  = arg_end(3)
 };
 
@@ -1072,24 +1208,73 @@ static int net_ap(int argc, char **argv) {
     } else if (strstr(cmd, "stop")) {
         return wifi_ap_stop();
     }
-    return wifi_ap_list_sta();
+    wifi_ap_list_sta();
+    return ESP_OK;
 }
 #endif // CONSOLE_NET_AP
-       //
+
+#ifdef CONSOLE_NET_BT
+static struct {
+    arg_str_t *mode;
+    arg_lit_t *now;
+    arg_lit_t *scan;
+    arg_int_t *tout;
+    arg_int_t *bat;
+    arg_str_t *dev;
+    arg_end_t *end;
+} net_bt_args = {
+    .mode = arg_str0(NULL, NULL, "0-2|dDH", "specify BT mode"),
+    .now  = arg_lit0(NULL, "now", "reboot now"),
+    .scan = arg_lit0(NULL, "scan", "run BT/BLE scan"),
+    .tout = arg_int0("t", NULL, "0-65535", "scan timeout in ms"),
+    .bat  = arg_int0("b", NULL, "0-100", "BLE report battery level"),
+    .dev  = arg_str0("c", NULL, "BDA", "connect to BLE device"),
+    .end  = arg_end(6)
+};
+
+static int net_bt(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_bt_args);
+    static const char *choices = "dDH", *c;
+    esp_err_t err = ESP_OK;
+    bool reboot = net_bt_args.now->count;
+    int bat = ARG_INT(net_bt_args.bat, -1);
+    const char *name = ARG_STR(net_bt_args.dev, NULL);
+    const char *mode = ARG_STR(net_bt_args.mode, NULL);
+    if (net_bt_args.scan->count) {
+        err = btmode_scan(ARG_INT(net_bt_args.tout, 0));
+    } else if (bat != -1) {
+        err = btmode_battery(CONS(bat, 0, 100));
+    } else if (name) {
+        scan_rst_t *dev = btmode_find_device(name, NULL);
+        return dev ? btmode_connect(dev) : ESP_ERR_NOT_FOUND;
+    } else if (!mode) {
+        btmode_status();
+    } else if ('0' <= mode[0] && mode[0] <= '2') {
+        err = btmode_switch((btmode_t)(mode[0] - '0'), reboot);
+    } else if (( c = strchr(choices, mode[0]) )) {
+        err = btmode_switch((btmode_t)(c - choices), reboot);
+    } else {
+        printf("Invalid mode to set: `%s`\n", mode);
+        err = ESP_ERR_INVALID_ARG;
+    }
+    return err;
+}
+#endif // CONSOLE_NET_BT
+
 #ifdef CONSOLE_NET_FTM
 static struct {
-    struct arg_str *ssid;
-    struct arg_int *npkt;
-    struct arg_lit *rep;
-    struct arg_str *ctrl;
-    struct arg_int *base;
-    struct arg_end *end;
+    arg_str_t *ssid;
+    arg_int_t *npkt;
+    arg_lit_t *rep;
+    arg_str_t *ctrl;
+    arg_int_t *base;
+    arg_end_t *end;
 } net_ftm_args = {
-    .ssid = arg_str0(NULL, NULL, "<SSID>", "initiator target AP hostname"),
-    .npkt = arg_int0("n", NULL, "<0-32|64>", "initiator frame count"),
+    .ssid = arg_str0(NULL, NULL, "SSID", "initiator target AP hostname"),
+    .npkt = arg_int0("n", NULL, "0-32|64", "initiator frame count"),
     .rep  = arg_lit0(NULL, "resp", "control responder"),
-    .ctrl = arg_str0("c", NULL, "<on|off>", "responder enable / disable"),
-    .base = arg_int0("o", NULL, "<cm>", "responder T1 offset in cm"),
+    .ctrl = arg_str0("c", NULL, "on|off", "responder enable / disable"),
+    .base = arg_int0("o", NULL, "NUM", "responder T1 offset in cm"),
     .end  = arg_end(5)
 };
 
@@ -1109,18 +1294,18 @@ static int net_ftm(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_MDNS
 static struct {
-    struct arg_str *ctrl;
-    struct arg_str *host;
-    struct arg_str *serv;
-    struct arg_str *prot;
-    struct arg_int *tout;
-    struct arg_end *end;
+    arg_str_t *ctrl;
+    arg_str_t *host;
+    arg_str_t *serv;
+    arg_str_t *prot;
+    arg_int_t *tout;
+    arg_end_t *end;
 } net_mdns_args = {
-    .ctrl = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
-    .host = arg_str0("h", NULL, "<HOST>", "mDNS hostname to query"),
-    .serv = arg_str0("s", NULL, "<_http>", "mDNS service to query"),
-    .prot = arg_str0("p", NULL, "<_tcp>", "mDNS protocol to query"),
-    .tout = arg_int0("t", NULL, "<0-65535>", "query timeout in ms"),
+    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .host = arg_str0("h", NULL, "HOST", "mDNS hostname to query"),
+    .serv = arg_str0("s", NULL, "http|smb", "mDNS service to query"),
+    .prot = arg_str0("p", NULL, "tcp|udp", "mDNS protocol to query"),
+    .tout = arg_int0("t", NULL, "0-65535", "query timeout in ms"),
     .end  = arg_end(5)
 };
 
@@ -1138,16 +1323,16 @@ static int net_mdns(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_SNTP
 static struct {
-    struct arg_str *ctrl;
-    struct arg_str *host;
-    struct arg_str *mode;
-    struct arg_int *intv;
-    struct arg_end *end;
+    arg_str_t *ctrl;
+    arg_str_t *host;
+    arg_str_t *mode;
+    arg_int_t *intv;
+    arg_end_t *end;
 } net_sntp_args = {
-    .ctrl = arg_str0(NULL, NULL, "<on|off>", "enable / disable"),
-    .host = arg_str0("h", NULL, "<HOST>", "SNTP server name or address"),
-    .mode = arg_str0("m", NULL, "<immed|smooth>", "SNTP time sync mode"),
-    .intv = arg_int0("i", NULL, "<0-2^31>", "interval between sync in ms"),
+    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .host = arg_str0("h", NULL, "HOST", "SNTP server name or address"),
+    .mode = arg_str0("m", NULL, "immed|smooth", "SNTP time sync mode"),
+    .intv = arg_int0("i", NULL, "0-2^31", "interval between sync in ms"),
     .end  = arg_end(4)
 };
 
@@ -1164,18 +1349,18 @@ static int net_sntp(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_PING
 static struct {
-    struct arg_str *host;
-    struct arg_int *intv;
-    struct arg_int *size;
-    struct arg_int *npkt;
-    struct arg_lit *stop;
-    struct arg_lit *dry;
-    struct arg_end *end;
+    arg_str_t *host;
+    arg_int_t *intv;
+    arg_int_t *size;
+    arg_int_t *npkt;
+    arg_lit_t *stop;
+    arg_lit_t *dry;
+    arg_end_t *end;
 } net_ping_args = {
-    .host = arg_str1(NULL, NULL, "<HOST>", "target hostname or IP address"),
-    .intv = arg_int0("i", NULL, "<0-65535>", "interval between ping in ms"),
-    .size = arg_int0("l", NULL, "<LEN>", "number of data bytes to be sent"),
-    .npkt = arg_int0("n", NULL, "<NUM>", "stop after sending num packets"),
+    .host = arg_str1(NULL, NULL, "HOST", "target hostname or IP address"),
+    .intv = arg_int0("i", NULL, "0-65535", "interval between ping in ms"),
+    .size = arg_int0("l", NULL, "LEN", "number of data bytes to be sent"),
+    .npkt = arg_int0("n", NULL, "NUM", "stop after sending num packets"),
     .stop = arg_lit0(NULL, "stop", "stop currently running ping session"),
     .dry  = arg_lit0(NULL, "dryrun", "print IP address and stop (dryrun)"),
     .end  = arg_end(6)
@@ -1197,22 +1382,22 @@ static int net_ping(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_IPERF
 static struct {
-    struct arg_lit *serv;
-    struct arg_str *host;
-    struct arg_int *port;
-    struct arg_int *size;
-    struct arg_int *intv;
-    struct arg_int *tout;
-    struct arg_lit *udp;
-    struct arg_lit *stop;
-    struct arg_end *end;
+    arg_lit_t *serv;
+    arg_str_t *host;
+    arg_int_t *port;
+    arg_int_t *size;
+    arg_int_t *intv;
+    arg_int_t *tout;
+    arg_lit_t *udp;
+    arg_lit_t *stop;
+    arg_end_t *end;
 } net_iperf_args = {
     .serv = arg_lit0("s", NULL, "run in server mode"),
-    .host = arg_str0("c", NULL, "<HOST>", "run in client mode"),
-    .port = arg_int0("p", NULL, "<PORT>", "specify port number"),
-    .size = arg_int0("l", NULL, "<LEN>", "read/write buffer size"),
-    .intv = arg_int0("i", NULL, "<0-255>", "time between reports in seconds"),
-    .tout = arg_int0("t", NULL, "<0-255>", "session timeout in seconds"),
+    .host = arg_str0("c", NULL, "HOST", "run in client mode"),
+    .port = arg_int0("p", NULL, "PORT", "specify port number"),
+    .size = arg_int0("l", NULL, "LEN", "read/write buffer size"),
+    .intv = arg_int0("i", NULL, "0-255", "time between reports in seconds"),
+    .tout = arg_int0("t", NULL, "0-255", "session timeout in seconds"),
     .udp  = arg_lit0("u", "udp", "use UDP rather than TCP"),
     .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
     .end  = arg_end(8)
@@ -1235,18 +1420,18 @@ static int net_iperf(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_TSYNC
 static struct {
-    struct arg_lit *serv;
-    struct arg_str *host;
-    struct arg_int *port;
-    struct arg_int *tout;
-    struct arg_lit *stat;
-    struct arg_lit *stop;
-    struct arg_end *end;
+    arg_lit_t *serv;
+    arg_str_t *host;
+    arg_int_t *port;
+    arg_int_t *tout;
+    arg_lit_t *stat;
+    arg_lit_t *stop;
+    arg_end_t *end;
 } net_tsync_args = {
     .serv = arg_lit0("s", NULL, "run in server mode"),
-    .host = arg_str0("c", NULL, "<HOST>", "run in client mode"),
-    .port = arg_int0("p", NULL, "<PORT>", "specify port number"),
-    .tout = arg_int0("t", NULL, "<0-2^31>", "timeout in ms"),
+    .host = arg_str0("c", NULL, "HOST", "run in client mode"),
+    .port = arg_int0("p", NULL, "PORT", "specify port number"),
+    .tout = arg_int0("t", NULL, "0-2^31", "timeout in ms"),
     .stat = arg_lit0(NULL, "stat", "print service summary"),
     .stop = arg_lit0(NULL, "stop", "stop currently running task"),
     .end  = arg_end(6)
@@ -1259,7 +1444,7 @@ static int net_tsync(int argc, char **argv) {
         return ESP_OK;
     }
     const char *host = net_tsync_args.serv->count ? NULL : "";
-    return timesync_command(
+    return tsync_command(
         ARG_STR(net_tsync_args.host, host),
         ARG_INT(net_tsync_args.port, 0),
         ARG_INT(net_tsync_args.tout, 0),
@@ -1275,6 +1460,9 @@ static void register_network() {
 #endif
 #ifdef CONSOLE_NET_AP
         ESP_CMD_ARG(net, ap, "Query / Start / Stop SoftAP"),
+#endif
+#ifdef CONSOLE_NET_BT
+        ESP_CMD_ARG(net, bt, "Set / get BT working mode"),
 #endif
 #ifdef CONSOLE_NET_FTM
         ESP_CMD_ARG(net, ftm, "RTT Fine Timing Measurement between STA & AP"),
@@ -1303,7 +1491,33 @@ static void register_network() {
  */
 
 // Put this variable into RTC memory to maintain the value during deep sleep
-RTC_DATA_ATTR static int boot_count = 0;
+RTC_DATA_ATTR static uint32_t boot_count = 0;
+
+static void optimize_datatype() {
+#ifdef CONSOLE_SYSTEM_SLEEP
+    static char sb[6];
+    snprintf(sb, sizeof(sb), "0-%d", GPIO_PIN_COUNT - 1);
+    system_sleep_args.pin->hdr.datatype = sb;
+#endif
+#ifdef CONSOLE_DRIVER_LED
+    static char lb[8], bb[8];
+    snprintf(lb, sizeof(lb), "0-%d", CONFIG_BASE_LED_NUM - 1);
+    snprintf(bb, sizeof(bb), "-1|0-%d", LED_BLINK_MAX - 1);
+    driver_led_args.idx->hdr.datatype = lb;
+    driver_led_args.blk->hdr.datatype = bb;
+#endif
+#ifdef CONSOLE_DRIVER_GPIO
+    static char gb[22];
+    size_t gl = sizeof(gb), gs = snprintf(gb, gl, "0-%d", GPIO_PIN_COUNT - 1);
+#   ifdef CONFIG_BASE_GPIOEXP_I2C
+    gs += snprintf(gb + gs, gl - gs, "|%d-%d", PIN_I2C_BASE, PIN_I2C_MAX - 1);
+#   endif
+#   ifdef CONFIG_BASE_GPIOEXP_SPI
+    gs += snprintf(gb + gs, gl - gs, "|%d-%d", PIN_SPI_BASE, PIN_SPI_MAX - 1);
+#   endif
+    driver_gpio_args.pin->hdr.datatype = gb; NOTUSED(gs);
+#endif
+}
 
 extern "C" void console_register_commands() {
     if (boot_count++) fputs("Woken up from deep sleep mode", stderr);
@@ -1320,6 +1534,7 @@ extern "C" void console_register_commands() {
     };
     ESP_ERROR_CHECK( esp_console_register_help_command() );
     ESP_ERROR_CHECK( esp_console_cmd_register(&clear) );
+    optimize_datatype();
     register_network();
     register_driver();
     register_system();

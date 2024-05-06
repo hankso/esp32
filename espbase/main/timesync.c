@@ -47,7 +47,7 @@ const char * format_datetime(struct timespec *ts) {
 }
 
 const char * format_datetime_us(struct timeval *ts) {
-    static struct timespec tmp;
+    struct timespec tmp;
     ts = (ts != NULL) ? ts : get_systime_us();
     tmp.tv_sec = ts->tv_sec;
     tmp.tv_nsec = ts->tv_usec * TIMESTAMP_U2N;
@@ -64,7 +64,7 @@ const char * format_timestamp(struct timespec *ts) {
 }
 
 const char * format_timestamp_us(struct timeval *ts) {
-    static struct timespec tmp;
+    struct timespec tmp;
     ts = (ts != NULL) ? ts : get_systime_us();
     tmp.tv_sec = ts->tv_sec;
     tmp.tv_nsec = ts->tv_usec * TIMESTAMP_U2N;
@@ -161,8 +161,8 @@ typedef struct {
 
 const char * getsockaddr(int fd) {
     static char ret[INET_ADDRSTRLEN + 6];
-    static struct sockaddr_in raddr;
-    static socklen_t len = sizeof(raddr);
+    struct sockaddr_in raddr;
+    socklen_t len = sizeof(raddr);
     if (getpeername(fd, (struct sockaddr *)&raddr, &len) < 0) return "unknown";
     sprintf(ret, "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
     return ret;
@@ -204,9 +204,9 @@ static int timesync_server_find(int fd) {
  *   - register to pollfds
  */
 static void timesync_server_add(int fd) {
-    static int nodelay = 1;
-    static struct timeval timeout = { .tv_sec = 0, .tv_usec = 500 }; // 0.5ms
-    static size_t tlen = sizeof(timeout), nlen = sizeof(nodelay);
+    int nodelay = 1;
+    struct timeval timeout = { .tv_sec = 0, .tv_usec = 500 }; // 0.5ms
+    size_t tlen = sizeof(timeout), nlen = sizeof(nodelay);
     lock_acquire();
     LOOPN(i, TIMESYNC_CLIENTS_NUM) {
         if (clients[i].fd == fd || clients[i].fd > 0) continue;
@@ -403,7 +403,7 @@ int timesync_server_exit() {
 }
 
 static const char *TSC = "TSC";
-static timesync_client_t client = { -1 };
+static timesync_client_t client = { 0 };
 
 /* TS Client Side initialization
  *   - create socket()
@@ -411,6 +411,7 @@ static timesync_client_t client = { -1 };
  *   - connect()
  */
 int timesync_client_init(const char *host, uint16_t port) {
+    if (client.fd == 0) client.fd = -1;
     if (client.fd >= 0) return 0;
     ESP_LOGD(TSC, "TimeSync Client init");
     char address[INET_ADDRSTRLEN];
@@ -457,8 +458,7 @@ int timesync_client_init(const char *host, uint16_t port) {
  *   - calculate time offset
  */
 int timesync_client_sync(double *offset, uint8_t ack) {
-    static timesync_result_t *result;
-    static int msglen = 0, packlen = sizeof(TIMESYNC_PACKTYPE);
+    static int packlen = sizeof(TIMESYNC_PACKTYPE);
     static char rcvbuf[TIMESYNC_RCVBUF_SIZE];
     static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = "timeinit";
     static char ackbuf[8 + sizeof(TIMESYNC_PACKTYPE) * 2] = "timedone";
@@ -472,8 +472,7 @@ int timesync_client_sync(double *offset, uint8_t ack) {
         return -1;
     }
     // wait for timesync response
-    memset(rcvbuf, 0, msglen > 0 ? msglen : 0);
-    msglen = read(client.fd, rcvbuf, TIMESYNC_RCVBUF_SIZE - 1);
+    int msglen = read(client.fd, rcvbuf, TIMESYNC_RCVBUF_SIZE - 1);
     double ts_recv = get_timestamp(0);
     // recv timeout
     if (msglen < 0) return 1;
@@ -485,7 +484,7 @@ int timesync_client_sync(double *offset, uint8_t ack) {
     // parse response to calculate timesync offset
     memcpy(ts_convert.b, rcvbuf + 8, packlen);
     double ts_server_sync = ts_convert.d;
-    result = &client.results[client.count++ % 3];
+    timesync_result_t *result = &client.results[client.count++ % 3];
     result->sync = (ts_recv + ts_send) / 2;
     result->offset = ts_server_sync - result->sync;
     if (client.count == 1) {

@@ -40,20 +40,23 @@
 
 #include "globals.h"
 
-#if defined(CONFIG_USE_WEBSERVER) && !__has_include("ESPAsyncWebServer.h")
+#ifndef CONFIG_BASE_USE_WIFI
+#   undef CONFIG_BASE_USE_WEBSERVER
+#endif
+
+#if defined(CONFIG_BASE_USE_WEBSERVER) && !__has_include("ESPAsyncWebServer.h")
 #   warning "Run `git clone git@github.com:me-no-dev/ESPAsyncWebServer`"
-#   undef CONFIG_USE_WEBSERVER
+#   undef CONFIG_BASE_USE_WEBSERVER
 #endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+void server_initialize();
 void server_loop_begin();
 void server_loop_end();
-bool server_get_logging();
-void server_set_logging(bool);
 
 #ifdef __cplusplus
 }
-#endif // __cplusplus
+#endif

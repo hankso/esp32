@@ -9,13 +9,13 @@
 #include "drivers.h"
 #include "console.h"
 #include "filesys.h"
+#include "ledmode.h"
 
-#ifndef CONFIG_USE_WEBSERVER
+#ifndef CONFIG_BASE_USE_WEBSERVER
 
+void server_initialize() {}
 void server_loop_begin() {}
 void server_loop_end() {}
-bool server_get_logging() { return false; }
-void server_set_logging(bool l) { NOTUSED(l); }
 
 #else
 
@@ -54,15 +54,11 @@ static const char
 "<body>"
 "</html>";
 
-static bool started = false, log_request = true;
-
 void log_msg(AsyncWebServerRequest *req, const char *msg = "") {
-    if (!log_request) return;
     ESP_LOGI(TAG, "%4s %s %s", req->methodToString(), req->url().c_str(), msg);
 }
 
 void log_param(AsyncWebServerRequest *req) {
-    if (!log_request) return;
     size_t len = req->params();
     if (!len) return;
     AsyncWebParameter *p;
@@ -79,7 +75,7 @@ void log_param(AsyncWebServerRequest *req) {
 
 String getWebpage() {
     static String basename = "index.html", none = "";
-    String path = Config.web.DIR_ROOT + basename;
+    String path = Config.sys.DIR_HTML + basename;
     return (FFS.exists(path) || FFS.exists(path + ".gz")) ? path : none;
 }
 
@@ -105,7 +101,7 @@ void onCommand(AsyncWebServerRequest *req) {
     } else if (req->hasParam("gcode", true)) {
         const char *gcode = req->getParam("gcode", true)->value().c_str();
         ESP_LOGW(TAG, "GCode parser: `%s`", gcode);
-        req->send(500, TYPE_TEXT, "GCode parser not implemented yet");
+        req->send(500, TYPE_TEXT, "GCode parser is not implemented yet");
     } else {
         req->send(400, TYPE_TEXT, "Invalid parameter");
     }
@@ -263,9 +259,9 @@ void onDelete(AsyncWebServerRequest *req) {
     if (!FFS.exists(path))
         return req->send(403, TYPE_TEXT, "File/dir does not exist");
     if (
-        path == Config.web.DIR_DATA ||
-        path == Config.web.DIR_DOCS ||
-        path == Config.web.DIR_ROOT
+        path == Config.sys.DIR_DATA ||
+        path == Config.sys.DIR_DOCS ||
+        path == Config.sys.DIR_HTML
     )
         return req->send(400, TYPE_TEXT, "No access to delete");
     if (!FFS.remove(path)) {
@@ -309,7 +305,7 @@ void onUploadStrict(
     AsyncWebServerRequest *req, String filename,
     size_t index, uint8_t *data, size_t len, bool isFinal
 ) {
-    if (!filename.startsWith(Config.web.DIR_DATA)) {
+    if (!filename.startsWith(Config.sys.DIR_DATA)) {
         log_msg(req, "No access to upload.");
         return req->send(400, TYPE_TEXT, "No access to upload.");
     }
@@ -381,7 +377,7 @@ static void onWebSocketData(
         if (info->index == 0) {
             // We are starting this only frame
             ctx->len = ((info->opcode == WS_TEXT) ? 1 : 2) * info->len + 1;
-            if (EALLOC(ctx->buf, ctx->len)) goto clean;
+            if (EMALLOC(ctx->buf, ctx->len)) goto clean;
             ctx->idx = 0;
         } else if (!ctx->buf) {
             ESP_LOGW(TAG, "%s error: lost first packets. Skip", ctx->name);
@@ -395,7 +391,7 @@ static void onWebSocketData(
         size_t len = ((info->message_opcode == WS_TEXT) ? 1 : 2) * info->len;
         if (info->num == 0) {
             // Starting the first frame
-            if (EALLOC(ctx->buf, ctx->len = len + 1)) goto clean;
+            if (EMALLOC(ctx->buf, ctx->len = len + 1)) goto clean;
             ctx->idx = 0;
         } else if (!ctx->buf) {
             ESP_LOGW(TAG, "%s error: lost first frame. Skip", ctx->name);
@@ -442,11 +438,10 @@ static void onWebSocket(
     wsdata_ctx_t *ctx;
     server->cleanupClients();
     if (!( ctx = (wsdata_ctx_t *)client->_tempObject )) {
-        if (EALLOC(ctx, sizeof(wsdata_ctx_t))) {
+        if (ECALLOC(ctx, 1, sizeof(wsdata_ctx_t))) {
             ESP_LOGE(TAG, "Could not allocate context for websocket");
             return client->close();
         }
-        memset(ctx, 0, sizeof(wsdata_ctx_t));
         ctx->client = client;
         snprintf(ctx->name, sizeof(ctx->name), "ws#%u %s:%d",
                  client->id(), client->remoteIP().toString().c_str(),
@@ -454,30 +449,29 @@ static void onWebSocket(
         client->_tempObject = ctx;
     }
     switch (type) {
-        case WS_EVT_CONNECT:
-            ESP_LOGI(TAG, "%s connected", ctx->name);
-            client->ping();
-            break;
-        case WS_EVT_DISCONNECT:
-            ESP_LOGI(TAG, "%s disconnected", ctx->name);
-            TRYFREE(client->_tempObject);
-            break;
-        case WS_EVT_PONG:
-            break;
-        case WS_EVT_ERROR:
-            ESP_LOGW(TAG, "%s error(%u)", ctx->name, *((uint16_t *)arg));
-            break;
-        case WS_EVT_DATA:
-            onWebSocketData(ctx, (AwsFrameInfo *)arg, data, datalen);
-            break;
-        default:
-            ESP_LOGD(TAG, "%s event %d datalen %u", ctx->name, type, datalen);
-            break;
+    case WS_EVT_CONNECT:
+        ESP_LOGI(TAG, "%s connected", ctx->name);
+        client->ping();
+        break;
+    case WS_EVT_DISCONNECT:
+        ESP_LOGI(TAG, "%s disconnected", ctx->name);
+        TRYFREE(client->_tempObject);
+        break;
+    case WS_EVT_PONG:
+        break;
+    case WS_EVT_ERROR:
+        ESP_LOGW(TAG, "%s error(%u)", ctx->name, *((uint16_t *)arg));
+        break;
+    case WS_EVT_DATA:
+        onWebSocketData(ctx, (AwsFrameInfo *)arg, data, datalen);
+        break;
+    default:
+        ESP_LOGD(TAG, "%s event %d datalen %u", ctx->name, type, datalen);
     }
 }
 
 /******************************************************************************
- * Web Server implementation
+ * Web Server API
  */
 
 class APIRewrite : public AsyncWebRewrite {
@@ -493,9 +487,22 @@ class APIRewrite : public AsyncWebRewrite {
 
 static AsyncWebServer webserver = AsyncWebServer(80);
 static AsyncWebSocket websocket = AsyncWebSocket("/ws");
+static bool started = false;
 
 void server_loop_begin() {
     if (started) return;
+    webserver.begin();
+    started = true;
+}
+
+void server_loop_end() {
+    if (started) {
+        webserver.end();
+        started = false;
+    }
+}
+
+void server_initialize() {
     webserver.reset();
     webserver.addRewrite(new APIRewrite());
 
@@ -513,14 +520,14 @@ void server_loop_begin() {
     webserver.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
     webserver.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
         .setFilter(ON_AP_FILTER);
-    // WebSocket API
+    // WebSocket Handler
     websocket.onEvent(onWebSocket);
     websocket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
     webserver.addHandler(&websocket);
     // Static files
-    webserver.serveStatic("/data/", FFS, Config.web.DIR_DATA);
-    webserver.serveStatic("/docs/", FFS, Config.web.DIR_DOCS);
-    webserver.serveStatic("/", FFS, Config.web.DIR_ROOT)
+    webserver.serveStatic("/data/", FFS, Config.sys.DIR_DATA);
+    webserver.serveStatic("/docs/", FFS, Config.sys.DIR_DOCS);
+    webserver.serveStatic("/",      FFS, Config.sys.DIR_HTML)
         .setDefaultFile("index.html")
         .setCacheControl("max-age=3600")
         .setLastModified(__DATE__ " " __TIME__ " GMT")
@@ -528,19 +535,10 @@ void server_loop_begin() {
     webserver.onFileUpload(onUploadStrict);
     webserver.onNotFound(onError);
 
+    // Headers
     DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-    webserver.begin();
-    started = true;
+
+    server_loop_begin();
 }
 
-void server_loop_end() {
-    if (started) {
-        webserver.end();
-        started = false;
-    }
-}
-
-bool server_get_logging() { return log_request; }
-void server_set_logging(bool val) { log_request = val; }
-
-#endif // CONFIG_USE_WEBSERVER
+#endif // CONFIG_BASE_USE_WEBSERVER

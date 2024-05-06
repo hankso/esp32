@@ -9,7 +9,11 @@
 #include "console.h"
 #include "filesys.h"
 #include "network.h"
+#include "sensors.h"
 #include "usbmode.h"
+#include "ledmode.h"
+#include "screen.h"
+#include "btmode.h"
 #include "update.h"
 #include "config.h"
 #include "server.h"
@@ -21,16 +25,26 @@
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 void setup() {
+    // 1. low level driver
     config_initialize();
     driver_initialize();
+
+    // 2. necessary modules
     update_initialize();
     filesys_initialize();
-    usbmode_initialize();
     console_initialize();
+
+    // 3. import apps
+    screen_initialize();
+    sensors_initialize();
+
+    // 4. optional apps
     network_initialize();
+    usbmode_initialize();
+    btmode_initialize();
+    server_initialize();
 
     led_set_blink(0);
-    server_loop_begin();    // Core 0 (i.e. Pro CPU)
     console_loop_begin(1);  // Core 1 (i.e. App CPU)
     esp_register_shutdown_handler(shutdown);
 }
@@ -40,7 +54,7 @@ void loop() {
     asleep(500);
 }
 
-#if !CONFIG_AUTOSTART_ARDUINO
+#ifndef CONFIG_AUTOSTART_ARDUINO
 void loopTask(void *pvParameters) {
     setup();
     for (;;) {
@@ -52,4 +66,4 @@ void app_main(void) {
     //                      function  task name  stacksize param prio hdlr cpu
     xTaskCreatePinnedToCore(loopTask, "mainloop", 1024 * 4, NULL, 1, NULL, 1);
 }
-#endif // CONFIG_AUTOSTART_ARDUINO
+#endif

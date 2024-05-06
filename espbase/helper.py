@@ -34,10 +34,12 @@ except Exception:
 
 # these are default values
 __basedir__ = op.dirname(op.abspath(__file__))
+__codedir__ = op.join(__basedir__, 'main')
 __cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
 __partcsv__ = op.join(__basedir__, 'partitions.csv')
 __nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
 __nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
+__lvgldir__ = op.join(__basedir__, 'managed_components', 'lvgl__lvgl')
 __distdir__ = tuple(filter(
     lambda p: op.isdir(p) and os.listdir(p),
     [
@@ -139,6 +141,92 @@ def genid(args):
             f.write(data)
     if args.pack:
         _process_nvs(args)
+
+
+def font_output(args):
+    if args.out:
+        out = args.out
+    elif args.bin:
+        out = op.join(__basedir__, 'files', 'data', 'chinese')
+    else:
+        out = op.join(__basedir__, 'main', 'scnfont.c')
+    dirname, basename = op.split(out)
+    if args.bin and not basename.startswith('lv_font'):
+        basename = 'lv_font_' + basename
+    if args.bin and not basename.endswith('bin'):
+        basename += '_%d.bin' % args.size
+    return op.join(dirname, basename)
+
+
+def font_icon(args):
+    if not op.exists(__lvgldir__):
+        return ''
+    fontdir = op.join(__lvgldir__, 'scripts', 'built_in_font')
+    if args.size % 8:
+        print('Skip UNSCII-8 because size is not multiple of 8')
+        cmd = '-r 0x20-0x7F --font "%s"' % op.join(fontdir, 'unscii-8.ttf')
+    else:
+        cmd = '--font "%s" -r 0x20-0x7F' % op.join(fontdir, 'unscii-8.ttf')
+    return cmd + (
+        ' -r 0x2580-0x25FF'             # block elements + geometric shapes
+        ' -r 0x2600-0x26FF'             # miscellaneous symbols
+        ' -r 0x2800-0x28FF'             # braille patterns
+        ' --font "%s" -r "%s"'
+    ) % (
+        op.join(fontdir, 'FontAwesome5-Solid+Brands+Regular.woff'),
+        ','.join(map(str, [                             # LVGL symbols
+            61441, 61448, 61451, 61452, 61453, 61457,
+            61459, 61461, 61465, 61468, 61473, 61478,
+            61479, 61480, 61502, 61507, 61512, 61515,
+            61516, 61517, 61521, 61522, 61523, 61524,
+            61543, 61544, 61550, 61552, 61553, 61556,
+            61559, 61560, 61561, 61563, 61587, 61589,
+            61636, 61637, 61639, 61641, 61664, 61671,
+            61674, 61683, 61724, 61732, 61787, 61931,
+            62016, 62017, 62018, 62019, 62020, 62087,
+            62099, 62189, 62212, 62810, 63426, 63650,
+        ]))
+    )
+
+
+def font_postproc(fn):
+    with open(fn, 'r', encoding='utf8') as f:
+        content = f.read()
+    content = content.replace('lvgl/lvgl.h', 'lvgl.h')
+    content = content.replace('const lv_font_t', 'lv_font_t')
+    if '.fallback' not in content:
+        content = content.replace(
+            '.line_height', '.fallback = LV_FONT_DEFAULT,\n    .line_height')
+    with open(fn, 'w', encoding='utf8') as f:
+        f.write(content)
+
+
+def genfont(args):
+    '''
+    1. npm install -g lv_font_conv
+    2. lv_font_conv --help
+    '''
+    symbols = set()
+    for root, dirs, files in os.walk(__codedir__):
+        for fn in filter(lambda fn: fn.endswith(('.c', '.cpp')), files):
+            with open(op.join(root, fn), encoding='utf-8') as f:
+                symbols.update(re.findall(r'[\u4E00-\u9FA5]', f.read()))
+    if not symbols:
+        return print('No chinese characters found. Skip')
+    if not op.exists(args.font):
+        return print('Font %s not found' % args.font)
+    args.out = font_output(args)
+    cmd = (
+        'lv_font_conv --bpp %d --size %d --no-kerning --format %s -o "%s"'
+        ' --font "%s" --symbols "%s" -r 0x3000-0x301F %s'  # chinese characters
+    ) % (
+        args.bpp, args.size, 'bin' if args.bin else 'lvgl', args.out,
+        args.font, ''.join(sorted(symbols)), font_icon(args)
+    )
+    print('Executing command', cmd)
+    rc = os.system(cmd)
+    if rc == 0 and not args.bin:
+        font_postproc(args.out)
 
 
 def _relpath(p, ref='.', strip=False):
@@ -374,6 +462,17 @@ def make_parser():
     sparser.add_argument(
         '-f', '--tpl', default=__nvsfile__, help='render nvs from template')
     sparser.set_defaults(func=genid)
+
+    sparser = subparsers.add_parser(
+        'genfont', help='Scan .c files and generate font for LVGL')
+    sparser.add_argument('font', help='input font file (TTL/WOFF)')
+    sparser.add_argument('--bin', action='store_true', help='output binary')
+    sparser.add_argument('--bpp', type=int, default=1, help='bits per pixel')
+    sparser.add_argument(
+        '-s', '--size', type=int, default=12, help='font size in pixels')
+    sparser.add_argument(
+        '-o', '--out', help='output font path')
+    sparser.set_defaults(func=genfont)
 
     return parser
 

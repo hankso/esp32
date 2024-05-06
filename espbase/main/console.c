@@ -9,7 +9,7 @@
 #include "drivers.h"
 #include "config.h"
 
-#ifdef CONFIG_USE_CONSOLE
+#ifdef CONFIG_BASE_USE_CONSOLE
 
 #include <sys/fcntl.h>
 #include "cJSON.h"
@@ -64,7 +64,7 @@ void console_initialize() {
     esp_vfs_dev_uart_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
     esp_vfs_dev_uart_use_driver(UART_NUM_0);
-#elif defined(CONFIG_ESP_CONSOLE_UART_CUSTOM) && defined(CONFIG_USE_UART)
+#elif defined(CONFIG_ESP_CONSOLE_UART_CUSTOM) && defined(CONFIG_BASE_USE_UART)
     esp_vfs_dev_uart_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
     esp_vfs_dev_uart_use_driver(NUM_UART);
@@ -84,7 +84,6 @@ void console_initialize() {
     fcntl(fileno(stdin), F_SETFL, 0);
 #endif
 
-    esp_log_level_set(TAG, ESP_LOG_WARN);
     setvbuf(stdin, NULL, _IONBF, 0);
     setvbuf(stdout, NULL, _IONBF, 0);
     linenoiseSetMultiLine(1);
@@ -312,7 +311,7 @@ exit:
     return ret;
 }
 
-#else // CONFIG_USE_CONSOLE
+#else // CONFIG_BASE_USE_CONSOLE
 
 void console_initialize() {}
 
@@ -330,4 +329,4 @@ void console_loop_begin(int x) { return; NOTUSED(x); }
 
 char * console_handle_rpc(const char *j) { return NULL; NOTUSED(j); }
 
-#endif // CONFIG_USE_CONSOLE
+#endif // CONFIG_BASE_USE_CONSOLE

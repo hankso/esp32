@@ -7,19 +7,39 @@
 #pragma once
 
 #include "globals.h"
+#include "hidtool.h"
 
-#ifdef CONFIG_USE_USB
-#   include "soc/soc_caps.h"
-#   if !SOC_USB_OTG_SUPPORTED
-#       undef CONFIG_USE_USB
+#if defined(CONFIG_BASE_USE_USB) && !defined(SOC_USB_OTG_SUPPORTED)
+#   undef CONFIG_BASE_USE_USB
+#endif
+
+#ifdef CONFIG_BASE_USB_MSC_DEVICE
+#   if defined(TARGET_IDF_5) && !__has_include("tusb_msc_storage.h")
+#       warning "Run `idf.py add-dependency esp_tinyusb`"
+#       undef CONFIG_BASE_USB_MSC_DEVICE
 #   endif
 #endif
 
-#ifdef CONFIG_USB_MSC_DEVICE
-#   if !defined(CONFIG_FFS_FAT) && !defined(CONFIG_USE_SDFS)
-#       warning "Internal Flash and SDCard storage are not supported"
-#       undef CONFIG_USB_MSC_DEVICE
+#ifdef CONFIG_BASE_USB_HID_DEVICE
+#   if defined(TARGET_IDF_5) && !__has_include("class/hid/hid_device.h")
+#       warning "Run `idf.py add-dependency esp_tinyusb`"
+#       undef CONFIG_BASE_USB_HID_DEVICE
 #   endif
+#endif
+
+#if defined(CONFIG_BASE_USB_CDC_HOST) && !__has_include("usb/cdc_acm_host.h")
+#   warning "Run `idf.py add-dependency usb_host_cdc_acm`"
+#   undef CONFIG_BASE_USB_CDC_HOST
+#endif
+
+#if defined(CONFIG_BASE_USB_MSC_HOST) && !__has_include("msc_host.h")
+#   warning "Run `idf.py add-dependency usb_host_msc`"
+#   undef CONFIG_BASE_USB_MSC_HOST
+#endif
+
+#if defined(CONFIG_BASE_USB_HID_HOST) && !__has_include("usb/hid_host.h")
+#   warning "Run `idf.py add-dependency usb_host_hid`"
+#   undef CONFIG_BASE_USB_HID_HOST
 #endif
 
 #ifdef __cplusplus
@@ -45,42 +65,9 @@ void usbmode_initialize();
 
 void usbmode_status();
 
-// HID device utilities
-typedef enum {
-    DIAL_UP = 0x00, // button release
-    DIAL_DN = 0x01, // button press
-    DIAL_L  = 0x38, // knob rotate ccw
-    DIAL_R  = 0xC8, // knob rotate cw
-} hid_dial_keycode_t;
-
-bool hid_report_dial(hid_dial_keycode_t);
-bool hid_report_dial_button(uint32_t ms);
-bool hid_report_mouse(uint8_t b, int8_t x, int8_t y, int8_t v, int8_t h);
-bool hid_report_mouse_click(const char *str, uint32_t ms);
-#define hid_report_mouse_move(x, y)    hid_report_mouse(0, (x), (y), 0, 0)
-#define hid_report_mouse_scroll(v, h)  hid_report_mouse(0, 0, 0, (v), (h))
-#define hid_report_mouse_button(btn)   hid_report_mouse((btn), 0, 0, 0, 0)
-bool hid_report_keyboard(uint8_t modifier, const uint8_t *keycode, size_t len);
-bool hid_report_keyboard_press(const char *str, uint32_t ms);
-
-// private functions implemented in usbmodeh.c
-void usbmodeh_status(usbmode_t mode);
-esp_err_t cdc_host_init();
-esp_err_t cdc_host_exit();
-esp_err_t msc_host_init();
-esp_err_t msc_host_exit();
-esp_err_t hid_host_init();
-esp_err_t hid_host_exit();
-
-// private functions implemented in usbmoded.c
-bool usbmoded_device(const void *desc);
-void usbmoded_status(usbmode_t mode);
-esp_err_t cdc_device_init();
-esp_err_t cdc_device_exit();
-esp_err_t msc_device_init();
-esp_err_t msc_device_exit();
-esp_err_t hid_device_init();
-esp_err_t hid_device_exit();
+#ifdef CONFIG_BASE_USB_HID_DEVICE
+bool hidu_send_report(hid_report_t *);
+#endif
 
 #ifdef __cplusplus
 }

@@ -24,7 +24,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 ### I2C assignment
 
 - I2C master 0
-  + 50 KHz
+  + 400 KHz
   + GPIO Expander
     * ADDR 0x20, 0x21, 0x22
   + VLX Sensor
@@ -33,10 +33,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
     * ADDR: 0x44, 0x45, 0x46, 0x47
   + GY39 Sensor
     * ADDR 0x5B
-
-- I2C master 1
-  + 50 KHz
-  + U8G2 Screen
+  + I2C Screen / Touch
     * ADDR 0x3C
 
 ### SPI assignment
@@ -45,6 +42,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
   + host 0
     * CS0: SDCard / SDFS
     * CS1: GPIO Expander
+    * CS2: SPI Screen
 
 ### ESP32 GPIO assignment
 
@@ -101,6 +99,55 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 4. GPIO1 & GPIO3 are usually used for flashing and debugging.
 5. ADC2: ADC2 pins cannot be used when Wi-Fi is used. So, if you are using Wi-Fi and you are having trouble getting the value from an ADC2 GPIO, you may consider using an ADC1 GPIO instead, that should solve your problem.
 6. GPIO20 is only available on ESP32-PICO-V3 chip package.
+
+#### Example output of `gpio` command
+
+- ESP32 DevKit
+    + LED: GPIO2
+    + No GPIO0, 20, 37, 38
+- ESP32 Pico DevKit
+    + LED: N/A
+    + No GPIO20
+
+```
+Native GPIO 0-39
+PIN Value Usage
+0    HIGH Strapping PU
+1    HIGH UART0 TXD
+2     LOW Strapping PD
+3    HIGH UART0 RXD
+4     LOW Buzzer
+5     LOW LED
+6     LOW Flash SPICLK
+7    HIGH Flash SPIQ
+8     LOW Flash SPID
+9    HIGH Flash SPIHD
+10   HIGH Flash SPIWP
+11   HIGH Flash SPICS0
+12    LOW SPI MISO
+13    LOW SPI MOSI
+14    LOW SPI SCLK
+15   HIGH SPI CS0 (SDCard)
+16   HIGH Flash D2WD
+17   HIGH Flash D2WD
+18   HIGH SPI CS1 (Screen)
+19   HIGH SPI CS2 (GPIOExp)
+20    LOW ESP32-PICO-V3
+21   HIGH I2C0 SDA
+22   HIGH I2C0 SCL
+23   HIGH I2C1 SDA
+25   HIGH I2C1 SCL
+26    LOW DAC
+27    LOW SPI Screen D/C
+32    LOW Servo Pitch
+33    LOW Servo Yaw
+34    LOW Interrupt
+35    LOW Button
+36    LOW ADC1
+37    LOW Knob encoder A
+38    LOW Knob encoder B
+39    LOW ADC2
+```
 
 ### ESP32-S3 GPIO assignment
 
@@ -164,3 +211,62 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 
 1. Strapping pin: GPIO0, GPIO3, GPIO45 and GPIO46 are strapping pins.
 2. USB-JTAG: GPIO19 and GPIO20 are used by USB-JTAG by default.
+
+- ESP32-S3 LuatOS
+    + LED: GPIO10, GPIO11
+    + Export: GPIO0-18
+- ESP32-S3 NoLogo
+    + LED: GPIO48
+    + Export: GPIO1-13
+    + Export: GPIO14-48 by pad
+    + No GPIO0
+
+```
+Native GPIO 0-48
+PIN Value Usage
+0    HIGH Strapping PU
+1     LOW ADC1
+2     LOW ADC2
+3     LOW Buzzer
+4     LOW Button
+5    HIGH I2C0 SDA
+6    HIGH I2C0 SCL
+7    HIGH SPI Screen D/C
+8    HIGH SPI CS0 (SDCard)
+9    HIGH SPI CS1 (Screen)
+10   HIGH SPI CS2 (GPIOExp)
+11    LOW SPI MOSI
+12    LOW SPI SCLK
+13    LOW SPI MISO
+14   HIGH Interrupt
+15    LOW Knob encoder A
+16    LOW Knob encoder B
+17    LOW Servo Pitch
+18    LOW Servo Yaw
+19    LOW USB DN
+20    LOW USB DP
+21    LOW
+26   HIGH Flash SPICS1
+27   HIGH Flash SPIHD
+28   HIGH Flash SPIWP
+29   HIGH Flash SPICS0
+30    LOW Flash SPICLK
+31   HIGH Flash SPIQ
+32   HIGH Flash SPID
+33    LOW
+34    LOW
+35    LOW
+36    LOW
+37    LOW
+38    LOW
+39    LOW
+40    LOW
+41   HIGH I2C1 SDA
+42   HIGH I2C1 SCL
+43   HIGH UART0 TXD
+44   HIGH UART0 RXD
+45    LOW Strapping PD
+46    LOW Strapping PD
+47    LOW
+48    LOW LED
+```

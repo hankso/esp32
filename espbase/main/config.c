@@ -19,6 +19,14 @@ static const char * TAG = "Config";
 
 // default values
 config_t Config = {
+    .sys = {
+        .DIR_DATA  = "/data/",
+        .DIR_DOCS  = "/docs/",
+        .DIR_HTML  = "/www/",
+        .USB_MODE  = "HID_DEVICE",
+        .BT_MODE   = "BLE_HIDD",
+        .BT_SCAN   = "1",
+    },
     .net = {
         .STA_SSID  = "",
         .STA_PASS  = "",
@@ -34,18 +42,14 @@ config_t Config = {
         .WS_PASS   = "",
         .HTTP_NAME = "",
         .HTTP_PASS = "",
-        .DIR_DATA  = "/data/",
-        .DIR_DOCS  = "/docs/",
-        .DIR_ROOT  = "/www/",
     },
     .app = {
         .MDNS_RUN  = "1",
         .MDNS_HOST = "",
         .SNTP_RUN  = "1",
         .SNTP_HOST = "pool.ntp.org",
-        .OTA_RUN   = "1",
+        .OTA_AUTO  = "1",
         .OTA_URL   = "",
-        .USB_MODE  = "",
         .TIMEZONE  = "CST-8",   // China Standard Time
         .PROMPT    = "esp32> ",
     },
@@ -70,6 +74,13 @@ typedef struct {
 } config_entry_t;
 
 static config_entry_t rwlst[] = {       // read/write entries
+    {"sys.path.data",   &Config.sys.DIR_DATA,   NULL},
+    {"sys.path.docs",   &Config.sys.DIR_DOCS,   NULL},
+    {"sys.path.html",   &Config.sys.DIR_HTML,   NULL},
+    {"sys.usb.mode",    &Config.sys.USB_MODE,   NULL},
+    {"sys.bt.mode",     &Config.sys.BT_MODE,    NULL},
+    {"sys.bt.scan",     &Config.sys.BT_SCAN,    NULL},
+
     {"net.sta.ssid",    &Config.net.STA_SSID,   NULL},
     {"net.sta.pass",    &Config.net.STA_PASS,   NULL},
     {"net.sta.host",    &Config.net.STA_HOST,   NULL},
@@ -83,17 +94,13 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.ws.pass",     &Config.web.WS_PASS,    NULL},
     {"web.http.name",   &Config.web.HTTP_NAME,  NULL},
     {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
-    {"web.path.data",   &Config.web.DIR_DATA,   NULL},
-    {"web.path.docs",   &Config.web.DIR_DOCS,   NULL},
-    {"web.path.root",   &Config.web.DIR_ROOT,   NULL},
 
     {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
     {"app.sntp.host",   &Config.app.SNTP_HOST,  NULL},
-    {"app.ota.run",     &Config.app.OTA_RUN,    NULL},
+    {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
-    {"app.usb.mode",    &Config.app.USB_MODE,   NULL},
     {"app.timezone",    &Config.app.TIMEZONE,   NULL},
     {"app.prompt",      &Config.app.PROMPT,     NULL},
 };
@@ -104,7 +111,7 @@ static config_entry_t rolst[] = {       // readonly entries
     {"uid",  &Config.info.UID,  NULL},
 };
 
-static uint16_t rwlen = LEN(rwlst);
+static const uint16_t rwlen = LEN(rwlst);
 
 /******************************************************************************
  * Configuration I/O
@@ -151,7 +158,7 @@ const char * config_get(const char *key) {
 }
 
 void config_list() {
-#ifdef CONFIG_AUTO_ALIGN
+#ifdef CONFIG_BASE_AUTO_ALIGN
     size_t keylen = 0;
     LOOPN(i, rwlen) { keylen = MAX(keylen, strlen(rwlst[i].key)); }
 #else
@@ -195,7 +202,7 @@ static void json_parse_object_recurse(
         char *key;
         uint8_t rlen = strlen(root);
         uint8_t slen = strlen(item->string) + (rlen ? rlen + 1 : 0) + 1;
-        if (EALLOC(key, slen)) continue;
+        if (EMALLOC(key, slen)) continue;
         snprintf(key, slen, "%s%s%s", root, rlen ? "." : "", item->string);
 
         (*cb)(key, item);
@@ -237,7 +244,7 @@ static esp_err_t nvs_load_str(config_entry_t *ent) {
     size_t len = 0;
     char *buf = NULL;
     esp_err_t err = nvs_get_str(ctx.handle, ent->key, NULL, &len);
-    if (!err) err = EALLOC(buf, len);
+    if (!err) err = EMALLOC(buf, len);
     if (!err) err = nvs_get_str(ctx.handle, ent->key, buf, &len);
     if (!err) err = config_set_safe(ent, buf, false);
     TRYFREE(buf);
@@ -253,14 +260,14 @@ static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
     if (err) return err;
     if (info->type == NVS_TYPE_STR) {
         if (!err) err = nvs_get_str(hdl, info->key, NULL, &len);
-        if (!err) err = EALLOC(buf, len);
+        if (!err) err = EMALLOC(buf, len);
         if (!err) err = nvs_get_str(hdl, info->key, buf, &len);
     } else if (info->type == NVS_TYPE_BLOB) {
         if (!err) err = nvs_get_blob(hdl, info->key, NULL, &len);
-        if (!err) err = EALLOC(buf, len * 3);
+        if (!err) err = EMALLOC(buf, len * 3);
         if (!err) err = nvs_get_blob(hdl, info->key, buf + len * 2, &len);
         if (!err) hexdumps((buf + len * 2), buf, len, MIN(32, len * 2));
-    } else if (!( err = EALLOC(buf, len) )) {
+    } else if (!( err = EMALLOC(buf, len) )) {
         switch (info->type) {
             case NVS_TYPE_U8:
                 err = nvs_get_u8(hdl, info->key, (uint8_t *)data);
@@ -420,22 +427,19 @@ bool config_nvs_dump() {
 }
 
 static const char * nvs_type_str(nvs_type_t type) {
-    static char buf[5];
     switch (type) {
-        CASESTR(NVS_TYPE_U8, 9);
-        CASESTR(NVS_TYPE_I8, 9);
-        CASESTR(NVS_TYPE_U16, 9);
-        CASESTR(NVS_TYPE_I16, 9);
-        CASESTR(NVS_TYPE_U32, 9);
-        CASESTR(NVS_TYPE_I32, 9);
-        CASESTR(NVS_TYPE_U64, 9);
-        CASESTR(NVS_TYPE_I64, 9);
-        CASESTR(NVS_TYPE_STR, 9);
-        CASESTR(NVS_TYPE_BLOB, 9);
-        CASESTR(NVS_TYPE_ANY, 9);
-        default:
-            snprintf(buf, sizeof(buf), "0x%02X", type);
-            return buf;
+        case NVS_TYPE_U8:   return "U8";
+        case NVS_TYPE_I8:   return "I8";
+        case NVS_TYPE_U16:  return "U16";
+        case NVS_TYPE_I16:  return "I16";
+        case NVS_TYPE_U32:  return "U32";
+        case NVS_TYPE_I32:  return "I32";
+        case NVS_TYPE_U64:  return "U64";
+        case NVS_TYPE_I64:  return "I64";
+        case NVS_TYPE_STR:  return "STR";
+        case NVS_TYPE_BLOB: return "BLOB";
+        case NVS_TYPE_ANY:  return "ANY";
+        default:            return "Unknown";
     }
 }
 
@@ -452,7 +456,7 @@ void config_nvs_list(bool all) {
                  all ? "all" : ns, ctx.part->label);
         return;
     }
-#   ifdef CONFIG_AUTO_ALIGN
+#   ifdef CONFIG_BASE_AUTO_ALIGN
     size_t nslen = 0, keylen = 0;
     while (iter) {
         nvs_entry_info(iter, &info);

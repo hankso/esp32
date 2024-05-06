@@ -57,9 +57,9 @@ esp_err_t iperf_command(const char *host, uint16_t port,
                         uint8_t timeout_sec, bool udp, bool abort);
 #define   iperf_abort() iperf_command(NULL, 0, 0, 0, 0, false, true)
 
-esp_err_t timesync_command(const char *host, uint16_t port,
+esp_err_t tsync_command(const char *host, uint16_t port,
                            uint32_t timeout_ms, bool abort);
-#define   timesync_abort() timesync_command(NULL, 0, 0, true)
+#define   tsync_abort() tsync_command(NULL, 0, 0, true)
 
 #ifdef __cplusplus
 }

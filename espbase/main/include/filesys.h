@@ -17,8 +17,8 @@ extern "C" {
 #endif
 
 typedef enum {
-    FILESYS_FLASH,              // if defined CONFIG_USE_FFS
-    FILESYS_SDCARD,             // if defined CONFIG_USE_SDFS
+    FILESYS_FLASH,              // if defined CONFIG_BASE_USE_FFS
+    FILESYS_SDCARD,             // if defined CONFIG_BASE_USE_SDFS
 } filesys_type_t;
 
 typedef struct {
@@ -28,7 +28,7 @@ typedef struct {
     size_t blksize;
     int pdrv;                   // available if FAT Flash or FAT SDCard
     union {
-        wl_handle_t wlhdl;      // if defined CONFIG_FFS_FAT
+        wl_handle_t wlhdl;      // if defined CONFIG_BASE_FFS_FAT
         sdmmc_card_t *card;
     };
     filesys_type_t type;
@@ -38,6 +38,8 @@ void filesys_initialize();
 bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
 bool filesys_release(filesys_type_t);                 // give write lock
 bool filesys_get_info(filesys_type_t, filesys_info_t *);
+bool filesys_exists(filesys_type_t, const char *);
+void filesys_listdir(filesys_type_t, const char *, FILE *);
 
 #ifdef __cplusplus
 }
@@ -46,12 +48,12 @@ bool filesys_get_info(filesys_type_t, filesys_info_t *);
 /* Framework EspAsyncWebServer depends on Arduino FS libraries, so we have to
  * implement our file system based on Arduino FS instead of native ESP32 VFS.
  *
- * - SDMMCFS is implemented for SD Card FAT File System.
+ * - SDMMCFS is designed for SD Card FAT File System.
  *
- * - FLASHFS supports SPIFFS and FAT format. It is configurable by defining
- *   macro `CONFIG_FFS_FAT` or `CONFIG_FFS_SPIFFS`.
+ * - FLASHFS supports SPIFFS and FAT format.
+ *   It is configured by `CONFIG_BASE_FFS_FAT` or `CONFIG_BASE_FFS_SPIFFS`.
  *
- * This module relies on Arduino FS Abstract Layer but nothing.
+ * This cpp class relies on Arduino FS Abstract Layer but nothing.
  *
  * fs::File implements an `operator bool()` operator, thus File instances
  * can be validated in a boolean context like:
@@ -186,7 +188,7 @@ public:
     }
 };
 
-#ifdef CONFIG_USE_FFS
+#ifdef CONFIG_BASE_USE_FFS
 class FLASHFS : public CFS {
 private:
     const char *_label;
@@ -195,7 +197,7 @@ public:
     // can specify partition label name
     FLASHFS(const char *label=NULL) : _label(label) {}
 
-    bool begin(bool fmt=false, const char *base=CONFIG_FFS_MP, uint8_t max=10);
+    bool begin(bool fmt=0, const char *mp=CONFIG_BASE_FFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
@@ -203,14 +205,14 @@ public:
 };
 #endif
 
-#ifdef CONFIG_USE_SDFS
+#ifdef CONFIG_BASE_USE_SDFS
 class SDMMCFS : public CFS {
 private:
     sdmmc_card_t *_card = NULL;
 public:
     SDMMCFS() {}
 
-    bool begin(bool fmt=false, const char *base=CONFIG_SDFS_MP, uint8_t max=10);
+    bool begin(bool fmt=0, const char *mp=CONFIG_BASE_SDFS_MP, uint8_t max=10);
     void end();
 
     void walk(const char *path, void (*cb)(File, void *), void *arg) override;
@@ -221,10 +223,10 @@ public:
 
 } // namespace fs
 
-#ifdef CONFIG_USE_FFS
+#ifdef CONFIG_BASE_USE_FFS
 extern fs::FLASHFS FFS;
 #endif
-#ifdef CONFIG_USE_SDFS
+#ifdef CONFIG_BASE_USE_SDFS
 extern fs::SDMMCFS SDFS;
 #endif
 

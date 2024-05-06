@@ -1,5 +1,5 @@
 <template>
-    <p>TODO: WebSocket {{ url }} {{ status }}</p>
+    <p>TODO: chatbot WebSocket {{ url }} {{ status }}</p>
 </template>
 
 <script setup>
