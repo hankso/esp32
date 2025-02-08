@@ -7,7 +7,7 @@
 #include "usbmode.h"
 #include "config.h"
 
-#include "esp_system.h" // for esp_restart
+#include "esp_system.h"
 
 #ifdef CONFIG_BASE_USE_USB
 

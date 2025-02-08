@@ -73,7 +73,7 @@ esp_err_t btmode_battery(uint8_t pcent);
 esp_err_t btmode_connect(scan_rst_t *);
 
 #ifdef CONFIG_BASE_USE_BT
-bool hidb_send_report(hid_report_t *);
+bool hidb_send_report(const hid_report_t *);
 #endif
 
 #ifdef __cplusplus

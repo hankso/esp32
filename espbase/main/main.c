@@ -25,7 +25,7 @@
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 void setup() {
-    // 1. low level driver
+    // 1. low level drivers
     config_initialize();
     driver_initialize();
 
@@ -34,24 +34,24 @@ void setup() {
     filesys_initialize();
     console_initialize();
 
-    // 3. import apps
+    // 3. external devices
     screen_initialize();
     sensors_initialize();
 
-    // 4. optional apps
+    // 4. optional modules
     network_initialize();
     usbmode_initialize();
     btmode_initialize();
     server_initialize();
 
     led_set_blink(0);
-    console_loop_begin(1);  // Core 1 (i.e. App CPU)
+    console_loop_begin(1);  // run REPL on Core 1 (i.e. App CPU)
     esp_register_shutdown_handler(shutdown);
 }
 
 void loop() {
     twdt_feed();
-    asleep(500);
+    msleep(500);
 }
 
 #ifndef CONFIG_AUTOSTART_ARDUINO

@@ -21,11 +21,11 @@
 #ifdef CONFIG_BASE_SCREEN_I2C
 #   define SCREEN_H_RES    128
 #   define SCREEN_V_RES    64
-#   define SCREEN_DEPTH    CONFIG_LV_COLOR_DEPTH
+#   define SCREEN_DEPTH    1
 #else
 #   define SCREEN_H_RES    240
 #   define SCREEN_V_RES    240
-#   define SCREEN_DEPTH    16
+#   define SCREEN_DEPTH    CONFIG_LV_COLOR_DEPTH
 #endif
 #define SCREEN_PIXELS   ( SCREEN_H_RES * SCREEN_V_RES )
 
@@ -77,6 +77,7 @@ static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     return 0;
 }
 
+#   ifdef CONFIG_BASE_SCREEN_I2C
 static uint8_t u8g2_i2c_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     static i2c_cmd_handle_t cmd;
     switch (msg) {
@@ -97,7 +98,7 @@ static uint8_t u8g2_i2c_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     }
     return 0;
 }
-
+#   else // CONFIG_BASE_SCREEN_I2C
 static uint8_t u8g2_spi_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     static spi_device_handle_t spi_hdl;
     switch (msg) {
@@ -119,24 +120,7 @@ static uint8_t u8g2_spi_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     }
     return 0;
 }
-
-static esp_err_t u8g2_ui_cmd(scn_cmd_t cmd, const char *arg) {
-    if (cmd == SCN_PBAR) {
-        static char buf[16];
-        static int ys = SCREEN_V_RES * 7 / 16, ye = SCREEN_V_RES * 9 / 16;
-        snprintf(buf, sizeof(buf), "%d %%", pcnt);
-        int x = SCREEN_H_RES * CONS(*(int *)arg, 0, 100) / 100;
-        int middle = MAX(0, SCREEN_H_RES - u8g2_GetStrWidth(&ctx.hdl, buf)) / 2;
-        u8g2_ClearBuffer(&ctx.hdl);
-        u8g2_DrawFrame(&ctx.hdl, 0, ys, SCREEN_H_RES, ye - ys);
-        u8g2_DrawBox(&ctx.hdl, 0, ys, x, ye - ys);
-        u8g2_DrawStr(&ctx.hdl, middle, ye + 10, buf);
-        u8g2_SendBuffer(&ctx.hdl);
-    } else {
-        return ESP_ERR_NOT_SUPPORTED;
-    }
-    return ESP_OK;
-}
+#   endif // CONFIG_BASE_SCREEN_I2C
 
 static void screen_u8g2_init() {
 #   ifdef CONFIG_BASE_SCREEN_I2C
@@ -150,6 +134,24 @@ static void screen_u8g2_init() {
     u8g2_InitDisplay(&ctx.hdl);
     u8g2_SetPowerSave(&ctx.hdl, 0);
     u8g2_SendBuffer(&ctx.hdl);
+}
+
+static esp_err_t u8g2_ui_cmd(scn_cmd_t cmd, const char *arg) {
+    if (cmd == SCN_PBAR) {
+        static char buf[16];
+        static int ys = SCREEN_V_RES * 7 / 16, ye = SCREEN_V_RES * 9 / 16;
+        snprintf(buf, sizeof(buf), "%d %%", MIN(*(uint8_t *)arg, 100));
+        int x = SCREEN_H_RES * CONS(*(int *)arg, 0, 100) / 100;
+        int middle = MAX(0, SCREEN_H_RES - u8g2_GetStrWidth(&ctx.hdl, buf)) / 2;
+        u8g2_ClearBuffer(&ctx.hdl);
+        u8g2_DrawFrame(&ctx.hdl, 0, ys, SCREEN_H_RES, ye - ys);
+        u8g2_DrawBox(&ctx.hdl, 0, ys, x, ye - ys);
+        u8g2_DrawStr(&ctx.hdl, middle, ye + 10, buf);
+        u8g2_SendBuffer(&ctx.hdl);
+    } else {
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    return ESP_OK;
 }
 
 #else // WITH_U8G2
@@ -182,7 +184,7 @@ static void screen_lvgl_init() {
         .pclk_hz            = ctx.speed,
         .lcd_cmd_bits       = 8,
         .lcd_param_bits     = 8,
-        .trans_queue_depth  = 2,
+        .trans_queue_depth  = 1,
     };
     esp_lcd_spi_bus_handle_t _bus = (esp_lcd_spi_bus_handle_t)ctx.bus;
     if (!err) err = esp_lcd_new_panel_io_spi(_bus, &io_conf, &ctx.io);
@@ -191,7 +193,9 @@ static void screen_lvgl_init() {
     if (!err) err = esp_lcd_panel_reset(ctx.hdl);
     if (!err) err = esp_lcd_panel_init(ctx.hdl);
     if (!err) err = esp_lcd_panel_mirror(ctx.hdl, true, true);
+
     // we can draw startup logo here before we turn on the screen
+#   if SCREEN_DEPTH == 1
     const uint8_t pattern[32] = {
         0x00, 0x7E, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00, // square
         0x00, 0x7E, 0x42, 0x42, 0x42, 0x42, 0x7E, 0x00,
@@ -206,16 +210,17 @@ static void screen_lvgl_init() {
                 pattern + ((i & 1) * 16));
         }
     }
-    /*
+#   else
     uint8_t cbuf[16 * 16 * SCREEN_DEPTH / 8];
-    memset(cbuf, 0xFF, sizeof(cbuf));
+    memset(cbuf, 0xAA, sizeof(cbuf));
     LOOPN(i, err ? 0 : (SCREEN_H_RES / 16)) {
         LOOPN(j, err ? 0 : (SCREEN_V_RES / 16)) {
             err = esp_lcd_panel_draw_bitmap(
                 ctx.hdl, i * 16, j * 16, (i + 1) * 16, (j + 1) * 16, cbuf);
         }
     }
-    */
+#   endif
+
     if (!err) err = esp_lcd_panel_disp_on_off(ctx.hdl, true);
 
 #   ifdef WITH_LVGL
@@ -223,7 +228,8 @@ static void screen_lvgl_init() {
     const lvgl_port_cfg_t lvgl_conf = ESP_LVGL_PORT_INIT_CONFIG();
 #       else
     lvgl_port_cfg_t lvgl_conf = ESP_LVGL_PORT_INIT_CONFIG();
-    lvgl_conf.task_affinity = 1; // run LVGL task on CPU1 if possible
+    lvgl_conf.task_affinity = 1;    // run LVGL task on CPU1 if possible
+    lvgl_conf.stack_stack = 8192;   // 8k stack size
 #       endif
     const lvgl_port_display_cfg_t disp_conf = {
         .io_handle = ctx.io,
@@ -252,12 +258,14 @@ static void screen_lvgl_init() {
 #   endif // WITH_LVGL
     if (err) {
         ctx.probed = false;
-        ESP_LOGE(TAG, "Screen initialize failed: %s", esp_err_to_name(err));
+        TRYNULL(ctx.hdl, esp_lcd_panel_del);
 #   ifdef WITH_LVGL
         TRYNULL(ctx.disp, lvgl_port_remove_disp);
 #   endif
     }
 }
+
+int lvgl_ui_cmd(scn_cmd_t cmd, const char *arg); // defined in scnlvgl.c
 
 #endif // WITH_U8G2
 
@@ -304,13 +312,13 @@ void screen_initialize() {
     if (!err) ctx.probed = smbus_probe(ctx.bus, ctx.addr) == ESP_OK;
 #endif // CONFIG_BASE_SCREEN_SPI
 
-    if (ctx.probed) {
+    if (!ctx.probed) return;
 #ifdef WITH_U8G2
-        screen_u8g2_init();
+    screen_u8g2_init();
 #else
-        screen_lvgl_init();
+    screen_lvgl_init();
 #endif
-    }
+    if (!ctx.probed) ESP_LOGE(TAG, "Screen initialize failed");
 }
 
 void screen_status() {
@@ -318,12 +326,16 @@ void screen_status() {
         puts("Screen not probed");
         return;
     }
+    printf("Using Screen %dx%d %dbpp at ",
+           SCREEN_H_RES, SCREEN_V_RES, SCREEN_DEPTH);
 #ifdef CONFIG_BASE_SCREEN_I2C
-    printf("Using Screen at I2C%d-0x%02X %dKHz SDA:%d SCL:%d",
+    printf("I2C%d-0x%02X %dKHz SDA:%d SCL:%d",
            ctx.bus, ctx.addr, ctx.speed / 1000, ctx.sda, ctx.scl);
 #else
-    printf("Using Screen at SPI%d %dKHz CS:%d DC:%d RST:%d",
-           ctx.bus, ctx.speed / 1000, ctx.cs, ctx.dc, ctx.rst);
+    bool mhz = ctx.speed > 1000000;
+    printf("SPI%d %d%cHz CS:%d DC:%d RST:%d",
+           ctx.bus, ctx.speed / 1000 / (mhz ? 1000 : 1),
+           "KM"[mhz], ctx.cs, ctx.dc, ctx.rst);
 #endif
 #if defined(WITH_U8G2)
     puts(" (U8G2)");
@@ -334,8 +346,6 @@ void screen_status() {
     puts(" (ESP_LCD)");
 #endif
 }
-
-int lvgl_ui_cmd(scn_cmd_t cmd, const char *arg); // defined in scnlvgl.c
 
 esp_err_t screen_command(scn_cmd_t cmd, const void *arg) {
     if (!ctx.probed) return ESP_ERR_NOT_FOUND;

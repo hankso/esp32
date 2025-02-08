@@ -415,7 +415,7 @@ static void spi_initialize() {
 #ifdef CONFIG_BASE_USE_I2C
 static void i2c_initialize() {
     const i2c_config_t i2c_conf = {
-        .mode = I2C_MODE_MASTER,
+        .mode               = I2C_MODE_MASTER,
         .sda_io_num         = PIN_SDA,
         .sda_pullup_en      = GPIO_PULLUP_ENABLE,
         .scl_io_num         = PIN_SCL,
@@ -423,7 +423,7 @@ static void i2c_initialize() {
         .master.clk_speed   = CONFIG_BASE_I2C_SPEED,
     };
     ESP_ERROR_CHECK( i2c_param_config(NUM_I2C, &i2c_conf) );
-    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, I2C_MODE_MASTER, 0, 0, 0) );
+    ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, i2c_conf.mode, 0, 0, 0) );
     
 }
 
@@ -512,18 +512,31 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num) {
     esp_err_t err = EMALLOC(buf, num);
     if (!err) err = smbus_rregs(bus, addr, reg, buf, num);
     if (!err && num) {
-        printf("I2C %d-%02X register table\n", bus, addr);
-        printf("ADDR:");
+        printf("I2C %d-%02X register table 0x%02X - 0x%02X\n  ",
+               bus, addr, reg, reg + num);
         LOOPN(i, LENGTH) { printf(" %02X", i); }
-        printf("\n%04X:%*s", reg - (reg % LENGTH), 3 * (reg % LENGTH), "");
+        if (reg % LENGTH) // pad start spaces
+            printf("\n%02X%*s", reg - (reg % LENGTH), 3 * (reg % LENGTH), "");
         LOOPN(i, num) {
-            if (i % LENGTH == 0) printf("\n%04X:", i + reg);
+            if ((i + reg) % LENGTH == 0) printf("\n%02X", i + reg); // newline
             printf(" %02X", buf[i]);
         }
         putchar('\n');
     }
     TRYFREE(buf);
     return err;
+}
+
+esp_err_t smbus_toggle(int bus, uint8_t addr, uint8_t reg, uint8_t bit) {
+    uint8_t val, mask = BIT(bit);
+    esp_err_t err = smbus_read_byte(bus, addr, reg, &val);
+    if (!err) return err;
+    if (val & mask) {
+        val &= ~mask;
+    } else {
+        val |= mask;
+    }
+    return smbus_write_byte(bus, addr, reg, val);
 }
 
 static bool i2c_master_inited(int bus) {
@@ -655,7 +668,7 @@ static void gexp_initialize() {
         .duty_cycle_pos = 128,              // 128/256 = 50% (Tlow = Thigh)
         .cs_ena_pretrans = 0,
         .cs_ena_posttrans = 0,
-        .clock_speed_hz = 5 * 1000 * 1000,  // 5MHz
+        .clock_speed_hz = SPI_MASTER_FREQ_8M,
         .input_delay_ns = 0,
         .spics_io_num = PIN_CS2,
         .flags = 0,

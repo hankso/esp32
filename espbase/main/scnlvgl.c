@@ -8,9 +8,6 @@
 #include "screen.h"
 #include "config.h"
 #include "hidtool.h"
-#ifdef WITH_TUSB
-#   include "tusb.h"
-#endif
 
 /******************************************************************************
  * Compatibility

@@ -27,51 +27,53 @@
 #include "argtable3/argtable3.h"
 
 #ifndef CONFIG_BASE_USE_USB
-#undef  CONSOLE_DRIVER_USB
+#   undef CONSOLE_DRIVER_USB
 #endif
 #ifndef CONFIG_BASE_USE_LED
-#undef  CONSOLE_DRIVER_LED
+#   undef CONSOLE_DRIVER_LED
 #endif
 #ifndef CONFIG_BASE_USE_I2C
-#undef  CONSOLE_DRIVER_I2C
-#endif
-#ifndef CONFIG_BASE_USE_SCREEN
-#undef  CONSOLE_DRIVER_SCN
-#endif
-#ifndef CONFIG_BASE_ALS_TRACK
-#undef  CONSOLE_DRIVER_ALS
+#   undef CONSOLE_DRIVER_I2C
 #endif
 #ifndef CONFIG_BASE_USE_ADC
-#undef  CONSOLE_DRIVER_ADC
+#   undef CONSOLE_DRIVER_ADC
 #endif
 #ifndef CONFIG_BASE_USE_DAC
-#undef  CONSOLE_DRIVER_DAC
+#   undef CONSOLE_DRIVER_DAC
 #endif
 #if !defined(CONFIG_BASE_USE_SERVO) && !defined(CONFIG_BASE_USE_BUZZER)
-#undef  CONSOLE_DRIVER_PWM
+#   undef CONSOLE_DRIVER_PWM
 #endif
 
 #if !defined(CONFIG_BASE_USE_FFS) && !defined(CONFIG_BASE_USE_SDFS)
-#undef  CONSOLE_UTILS_LSFS
-#endif
-#if !defined(CONFIG_BASE_USE_USB) \
- && !defined(CONFIG_BASE_USE_BT)  \
- && !defined(CONFIG_BASE_USE_SCREEN)
-#undef  CONSOLE_UTILS_HID
+#   undef CONSOLE_UTIL_LSFS
+#   undef CONSOLE_UTIL_HISTORY
 #endif
 
 #ifndef CONFIG_BASE_USE_BT
-#undef  CONSOLE_NET_BT
+#   undef  CONSOLE_NET_BT
 #endif
 #ifndef CONFIG_BASE_USE_WIFI
-#undef  CONSOLE_NET_STA
-#undef  CONSOLE_NET_AP
-#undef  CONSOLE_NET_FTM
-#undef  CONSOLE_NET_MDNS
-#undef  CONSOLE_NET_SNTP
-#undef  CONSOLE_NET_PING
-#undef  CONSOLE_NET_IPERF
-#undef  CONSOLE_NET_TSYNC
+#   undef  CONSOLE_NET_STA
+#   undef  CONSOLE_NET_AP
+#   undef  CONSOLE_NET_FTM
+#   undef  CONSOLE_NET_MDNS
+#   undef  CONSOLE_NET_SNTP
+#   undef  CONSOLE_NET_PING
+#   undef  CONSOLE_NET_IPERF
+#   undef  CONSOLE_NET_TSYNC
+#endif
+
+#if !defined(CONFIG_BASE_USE_USB) \
+ && !defined(CONFIG_BASE_USE_BT)  \
+ && !defined(CONFIG_BASE_USE_SCREEN)
+#   undef CONSOLE_APP_HID
+#endif
+#ifndef CONFIG_BASE_USE_SCREEN
+#   undef CONSOLE_APP_SCN
+#endif
+#ifndef CONFIG_BASE_ALS_TRACK
+#   undef CONSOLE_APP_ALS
 #endif
 
 static const char * TAG = "Command";
@@ -131,53 +133,54 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
  * System commands
  */
 
-#ifdef CONSOLE_SYSTEM_RESTART
+#ifdef CONSOLE_SYS_RESTART
 static struct {
     arg_lit_t *halt;
     arg_lit_t *cxel;
     arg_int_t *tout;
     arg_end_t *end;
-} system_restart_args = {
+} sys_restart_args = {
     .halt = arg_lit0("h", "halt", "shutdown instead of reboot"),
     .cxel = arg_lit0("c", "cancel", "cancel pending reboot (if available)"),
     .tout = arg_int0("t", NULL, "0-65535", "reboot timeout in ms"),
     .end  = arg_end(3)
 };
 
-static void system_restart_task(void *arg) {
-    int tout_ms = arg ? *(int *)arg : 0;
-    if (tout_ms) {
-        ESP_LOGW(TAG, "Will restart in %ums ...", ABS(tout_ms));
-        msleep(ABS(tout_ms));
+static void sys_restart_task(void *arg) {
+    uint32_t tout_ms = arg ? *(uint32_t *)arg : 0;
+    if (tout_ms && tout_ms != 0xDEADBEEF) {
+        ESP_LOGW(TAG, "Will restart in %ums ...", tout_ms);
+        msleep(tout_ms);
+        tout_ms = 0;
     }
-    if (tout_ms < 0) {
+    if (tout_ms) {
         esp_system_abort("Manually shutdown");
     } else {
         esp_restart();
     }
 }
 
-static int system_restart(int argc, char **argv) {
+static int sys_restart(int argc, char **argv) {
     static TaskHandle_t task = NULL;
-    static int end_ms, tout_ms;
-    ARG_PARSE(argc, argv, &system_restart_args);
-    if (system_restart_args.cxel->count) {
+    static uint32_t end_ms, tout_ms;
+    ARG_PARSE(argc, argv, &sys_restart_args);
+    if (sys_restart_args.cxel->count) {
         if (task) puts("Restart cancelled");
         TRYNULL(task, vTaskDelete);
     } else if (task) {
         printf("Restart pending: %.0fms", end_ms - get_timestamp(0) * 1e3);
     } else {
-        tout_ms = ARG_INT(system_restart_args.tout, 0);
-        end_ms = (int)(get_timestamp(0) * 1e3) + tout_ms;
-        if (system_restart_args.halt->count) tout_ms = -tout_ms;
-        xTaskCreate(system_restart_task, "restart", 4096, &tout_ms, 99, &task);
-        if (!task) system_restart_task(NULL);
+        tout_ms = ABS(ARG_INT(sys_restart_args.tout, 0));
+        end_ms = (uint32_t)(get_timestamp(0) * 1e3) + tout_ms;
+        if (sys_restart_args.halt->count) tout_ms = 0xDEADBEEF;
+        xTaskCreate(sys_restart_task, "restart", 4096, &tout_ms, 99, &task);
+        if (!task) sys_restart_task(NULL);
     }
     return ESP_OK;
 }
 #endif
 
-#ifdef CONSOLE_SYSTEM_SLEEP
+#ifdef CONSOLE_SYS_SLEEP
 static const char * const wakeup_reason_list[] = {
     "Undefined", "Undefined", "EXT0", "EXT1",
     "Timer", "Touchpad", "ULP", "GPIO", "UART",
@@ -189,7 +192,7 @@ static struct {
     arg_int_t *pin;
     arg_int_t *lvl;
     arg_end_t *end;
-} system_sleep_args = {
+} sys_sleep_args = {
     .mode = arg_str0(NULL, NULL, "light|deep", "sleep mode"),
     .tout = arg_int0("t", NULL, "0-2^31", "wakeup timeout in ms"),
     .pin  = arg_intn("p", NULL, NULL, 0, 8, "wakeup from GPIO[s]"),
@@ -198,8 +201,8 @@ static struct {
 };
 
 static esp_err_t enable_gpio_light_wakeup() {
-    int pin_cnt = system_sleep_args.pin->count;
-    int lvl_cnt = system_sleep_args.lvl->count;
+    int pin_cnt = sys_sleep_args.pin->count;
+    int lvl_cnt = sys_sleep_args.lvl->count;
     if (!pin_cnt) return ESP_OK;
     if (lvl_cnt && (pin_cnt != lvl_cnt)) {
         ESP_LOGE(TAG, "GPIO and level mismatch!");
@@ -210,8 +213,8 @@ static esp_err_t enable_gpio_light_wakeup() {
     gpio_num_t pin;
     gpio_int_type_t intr;
     LOOPN(i, pin_cnt) {
-        pin = (gpio_num_t)system_sleep_args.pin->ival[i];
-        lvl = lvl_cnt ? system_sleep_args.lvl->ival[i] : 0;
+        pin = (gpio_num_t)sys_sleep_args.pin->ival[i];
+        lvl = lvl_cnt ? sys_sleep_args.lvl->ival[i] : 0;
         lvls = lvl ? "HIGH" : "LOW";
         intr = lvl ? GPIO_INTR_HIGH_LEVEL : GPIO_INTR_LOW_LEVEL;
         if (esp_sleep_is_valid_wakeup_gpio(pin)) {
@@ -226,16 +229,16 @@ static esp_err_t enable_gpio_light_wakeup() {
 }
 
 static esp_err_t enable_gpio_deep_wakeup() {
-    int pin_cnt = system_sleep_args.pin->count;
+    int pin_cnt = sys_sleep_args.pin->count;
     if (!pin_cnt) return ESP_OK;
-    int lvl = ARG_INT(system_sleep_args.lvl, 0);
+    int lvl = ARG_INT(sys_sleep_args.lvl, 0);
     const char *lvls = lvl ? "ANY_HIGH" : "ALL_LOW";
     esp_sleep_ext1_wakeup_mode_t mode = \
         lvl ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ALL_LOW;
     gpio_num_t pin;
     uint64_t mask = 0;
     LOOPN(i, pin_cnt) {
-        pin = (gpio_num_t)system_sleep_args.pin->ival[i];
+        pin = (gpio_num_t)sys_sleep_args.pin->ival[i];
         if (esp_sleep_is_valid_wakeup_gpio(pin)) {
             fprintf(stderr, "Use GPIO wakeup, num %d level %s\n", pin, lvls);
             mask |= 1ULL << pin;
@@ -247,10 +250,10 @@ static esp_err_t enable_gpio_deep_wakeup() {
     return esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
 }
 
-static int system_sleep(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &system_sleep_args);
-    const char *mode = ARG_STR(system_sleep_args.mode, "light");
-    uint32_t tout_ms = ARG_INT(system_sleep_args.tout, 0);
+static int sys_sleep(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &sys_sleep_args);
+    const char *mode = ARG_STR(sys_sleep_args.mode, "light");
+    uint32_t tout_ms = ARG_INT(sys_sleep_args.tout, 0);
     if (tout_ms) {
         fprintf(stderr, "Use timer wakeup, timeout: %ums\n", tout_ms);
         uint64_t tout_us = (uint64_t)tout_ms * 1000;
@@ -289,66 +292,65 @@ static int system_sleep(int argc, char **argv) {
             wakeup_reason_list[(int)esp_sleep_get_wakeup_cause()]);
     return esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 }
-#endif // CONSOLE_SYSTEM_SLEEP
+#endif // CONSOLE_SYS_SLEEP
 
-#ifdef CONSOLE_SYSTEM_UPDATE
+#ifdef CONSOLE_SYS_UPDATE
 static struct {
     arg_str_t *cmd;
     arg_str_t *part;
     arg_str_t *url;
-    arg_lit_t *fetch;
-    arg_lit_t *reset;
+    arg_lit_t *fce;
     arg_end_t *end;
-} system_update_args = {
-    .cmd   = arg_str0(NULL, NULL, "boot|fetch|reset", ""),
-    .part  = arg_str0("p", NULL, "LABEL", "partition to boot from"),
-    .url   = arg_str0("u", NULL, "URL", "specify URL to fetch"),
-    .fetch = arg_lit0("f", "fetch", "fetch app firmware from URL"),
-    .reset = arg_lit0("r", "reset", "clear OTA internal states"),
-    .end   = arg_end(5)
+} sys_update_args = {
+    .cmd  = arg_str0(NULL, NULL, "boot|fetch|reset", ""),
+    .part = arg_str0("p", NULL, "LABEL", "partition to boot from"),
+    .url  = arg_str0("u", NULL, "URL", "specify URL to fetch"),
+    .fce  = arg_lit0("f", NULL, "skip version verification"),
+    .end  = arg_end(4)
 };
 
-static int system_update(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &system_update_args);
-    const char *subcmd = ARG_STR(system_update_args.cmd, "");
+static int sys_update(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &sys_update_args);
+    const char *subcmd = ARG_STR(sys_update_args.cmd, "");
     if (strstr(subcmd, "boot")) {
-        if (system_update_args.part->count) {
-            const char *label = system_update_args.part->sval[0];
+        if (sys_update_args.part->count) {
+            const char *label = sys_update_args.part->sval[0];
             printf("Boot from %s: ", label);
-            if (!ota_updation_partition(label)) {
+            if (!ota_updation_boot(label)) {
                 puts(ota_updation_error());
                 return ESP_FAIL;
             }
             puts("done");
+        } else {
+            ota_updation_info();
         }
     } else if (strstr(subcmd, "reset")) {
         ota_updation_reset();
         printf("OTA states reset done\n");
     } else if (strstr(subcmd, "fetch")) {
-        const char *url = ARG_STR(system_update_args.url, NULL);
-        if (!ota_updation_url(url)) {
+        const char *url = ARG_STR(sys_update_args.url, NULL);
+        if (!ota_updation_url(url, sys_update_args.fce->count)) {
             printf("Failed to udpate: %s\n", ota_updation_error());
             return ESP_FAIL;
-        } else {
-            printf("Updation success. Call `restart` to reboot ESP32");
         }
+        printf("Updation success. Call `restart` to reboot ESP32");
     } else {
-        ota_partition_info();
+        ota_updation_info();
     }
     return ESP_OK;
 }
-#endif // CONSOLE_SYSTEM_UPDATE
+#endif // CONSOLE_SYS_UPDATE
 
-static void register_system() {
+static void register_sys() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_SYSTEM_RESTART
-        ESP_CMD_ARG(system, restart, "Software reset of ESP32"),
+#ifdef CONSOLE_SYS_RESTART
+        ESP_CMD_ARG(sys, restart, "Software reset of ESP32"),
 #endif
-#ifdef CONSOLE_SYSTEM_SLEEP
-        ESP_CMD_ARG(system, sleep, "Turn ESP32 into light/deep sleep mode"),
+#ifdef CONSOLE_SYS_SLEEP
+        ESP_CMD_ARG(sys, sleep, "Turn ESP32 into light/deep sleep mode"),
 #endif
-#ifdef CONSOLE_SYSTEM_UPDATE
-        ESP_CMD_ARG(system, update, "OTA Updation helper command"),
+#ifdef CONSOLE_SYS_UPDATE
+        ESP_CMD_ARG(sys, update, "OTA Updation helper command"),
 #endif
     };
     register_commands(cmds, LEN(cmds));
@@ -405,7 +407,7 @@ static struct {
     arg_end_t *end;
 } driver_usb_args = {
     .mode = arg_str0(NULL, NULL, "0-6|CMH|S", "specify USB mode"),
-    .now  = arg_lit0(NULL, "now", "reboot now"),
+    .now  = arg_lit0(NULL, "now", "reboot right now if needed"),
     .end  = arg_end(2)
 };
 
@@ -468,30 +470,28 @@ static int driver_led(int argc, char **argv) {
         snprintf(buf, sizeof(buf), " %d", idx);
     }
     if (light) {
-        char *ptr;
-        uint8_t brightness = strtol(light, &ptr, 0);
+        int bval = 0;
         if (strstr(light, "off")) {
-            brightness = 0;
+            bval = 0;
         } else if (strstr(light, "on")) {
-            brightness = 255;
-        } else if (ptr == light) {
+            bval = 255;
+        } else if (!parse_int(light, &bval) || bval < 0 || bval > 255) {
             printf("Invalid brightness: `%s`\n", light);
             return ESP_ERR_INVALID_ARG;
         }
-        if (( err = led_set_light(idx, brightness) ))
+        if (( err = led_set_light(idx, bval) ))
             return err;
-        printf("LED%s: set brightness to %d\n", buf, brightness);
+        printf("LED%s: set brightness to %d\n", buf, bval);
     }
     if (color) {
-        char *ptr;
-        uint32_t rgb = strtol(color, &ptr, 0);
-        if (ptr == color || rgb > 0xFFFFFF) {
+        int rgb = 0;
+        if (!parse_int(color, &rgb) || rgb < 0 || rgb > 0xFFFFFF) {
             printf("Unsupported color: `%s`\n", color);
             return ESP_ERR_INVALID_ARG;
         }
         if (( err = led_set_color(idx, rgb) ))
             return err;
-        printf("LED%s: set color to %06X\n", buf, rgb);
+        printf("LED%s: set color to 0x%06X\n", buf, rgb);
     }
     if (idx >= CONFIG_BASE_LED_NUM) {
         printf("Invalid LED index: `%d`\n", idx);
@@ -558,11 +558,11 @@ static int driver_i2c(int argc, char **argv) {
     if (driver_i2c_args.hex->count) {
         uint16_t val;
         if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
-        printf("I2C %d-%02X REG 0x%02X = %04X\n", bus, addr, reg, val);
+        printf("I2C %d-%02X REG 0x%02X = 0x%04X\n", bus, addr, reg, val);
     } else if (!len) {
         uint8_t val;
         if (( err = smbus_read_byte(bus, addr, reg, &val) )) return err;
-        printf("I2C %d-%02X REG 0x%02X = %02X\n", bus, addr, reg, val);
+        printf("I2C %d-%02X REG 0x%02X = 0x%02X\n", bus, addr, reg, val);
     } else {
         err = smbus_dump(bus, addr, reg, len);
     }
@@ -570,95 +570,11 @@ static int driver_i2c(int argc, char **argv) {
 }
 #endif // CONSOLE_DRIVER_I2C
 
-#ifdef CONSOLE_DRIVER_SCN
-static struct {
-    arg_int_t *btn;
-    arg_int_t *bar;
-    arg_int_t *rot;
-    arg_int_t *fps;
-    arg_str_t *font;
-    arg_end_t *end;
-} driver_scn_args = {
-    .btn  = arg_int0(NULL, NULL, "0-6", "trigger virtual button press"),
-    .bar  = arg_int0("p", NULL, "0-100", "draw progress bar on screen"),
-    .rot  = arg_int0("r", NULL, "0-3", "software rotation of screen"),
-    .fps  = arg_int0("f", NULL, "0-100", "set LVGL refresh period in FPS"),
-    .font = arg_str0(NULL, "font", "PATH", "load font from file"),
-    .end  = arg_end(5)
-};
-
-static int driver_scn(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_scn_args);
-    int btn = ARG_INT(driver_scn_args.btn, -1);
-    int bar = ARG_INT(driver_scn_args.bar, -1);
-    int rot = ARG_INT(driver_scn_args.rot, -1);
-    int fps = ARG_INT(driver_scn_args.fps, -1);
-    const char *font = ARG_STR(driver_scn_args.font, NULL);
-    if (bar >= 0) {
-        return screen_command(SCN_PBAR, &bar);
-    } else if (btn >= 0) {
-        return screen_command(SCN_BTN, &btn);
-    } else if (rot >= 0) {
-        return screen_command(SCN_ROT, &rot);
-    } else if (fps >= 0) {
-        return screen_command(SCN_FPS, &fps);
-    } else if (font) {
-        return screen_command(SCN_FONT, font);
-    }
-    screen_status();
-    return ESP_OK;
-}
-#endif // CONSOLE_DRIVER_SCN
-
-#ifdef CONSOLE_DRIVER_ALS
-static struct {
-    arg_int_t *idx;
-    arg_str_t *rlt;
-    arg_end_t *end;
-} driver_als_args = {
-    .idx = arg_int0(NULL, NULL, "0-3", "index of ALS chip"),
-    .rlt = arg_str0("t", NULL, "0-3|HVA", "run light tracking"),
-    .end = arg_end(2)
-};
-
-static int driver_als(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_als_args);
-    static const char *choices = "0123HVA", *c;
-    const char *method = ARG_STR(driver_als_args.rlt, NULL);
-    int idx = ARG_INT(driver_als_args.idx, -1);
-    esp_err_t err = ESP_OK;
-    if (method) {
-        if (!( c = strchr(choices, method[0]) )) {
-            printf("Invalid tracking method: %s\n", method);
-            return ESP_ERR_INVALID_ARG;
-        }
-        int hdeg = -1, vdeg = -1;
-        if (!( err = als_tracking((als_track_t)(c - choices), &hdeg, &vdeg) ))
-            printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
-    } else if (idx < 4) {
-        LOOPN(i, 4) {
-            if (idx < 0 || i == idx) {
-                printf("Brightness of ALS %d is %.2f lux\n",
-                        i, als_brightness(i));
-            }
-        }
-    } else {
-        gy39_data_t dat;
-        if (!( err = gy39_measure(&dat) ))
-            printf("GY39 %.2f lux, %.2f degC, %.3f kPa, %.2f %%, %.2f m\n",
-                    dat.brightness, dat.temperature,
-                    dat.atmosphere, dat.humidity, dat.altitude);
-    }
-    return err;
-}
-#endif // CONSOLE_DRIVER_ALS
-
 #ifdef CONSOLE_DRIVER_ADC
 static struct {
     arg_int_t *idx;
     arg_lit_t *joy;
     arg_lit_t *hall;
-    arg_lit_t *tpad;
     arg_int_t *intv;
     arg_int_t *tout;
     arg_end_t *end;
@@ -670,7 +586,6 @@ static struct {
 #   endif
     .joy  = arg_lit0(NULL, "joy", "read joystick value"),
     .hall = arg_lit0(NULL, "hall", "read hall sensor value"),
-    .tpad = arg_lit0(NULL, "tpad", "read touch pad value"),
     .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
     .tout = arg_int0("t", NULL, "0-2^31", "loop until timeout in ms"),
     .end  = arg_end(6)
@@ -686,9 +601,7 @@ static int driver_adc(int argc, char **argv) {
     uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.intv, 500), 10, 1000);
     uint32_t tout_ms = ARG_INT(driver_adc_args.tout, 0);
     do {
-        if (driver_adc_args.tpad->count) {
-            fprintf(stderr, "\rTouch pad: %4d", tpad_read());
-        } else if (driver_adc_args.joy->count) {
+        if (driver_adc_args.joy->count) {
             int xy, dx, dy;
             if (( xy = adc_joystick(&dx, &dy) ) == -1) {
                 fprintf(stderr, "\rCould not read joystick value");
@@ -802,7 +715,7 @@ static int driver_pwm(int argc, char **argv) {
 }
 #endif // CONSOLE_DRIVER_PWM
 
-static void register_driver() {
+static void register_drv() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_DRIVER_GPIO
         ESP_CMD_ARG(driver, gpio, "Set / get GPIO pin level"),
@@ -815,12 +728,6 @@ static void register_driver() {
 #endif
 #ifdef CONSOLE_DRIVER_I2C
         ESP_CMD_ARG(driver, i2c, "Detect alive I2C slaves on the bus line"),
-#endif
-#ifdef CONSOLE_DRIVER_SCN
-        ESP_CMD_ARG(driver, scn, "Control screen drawing"),
-#endif
-#ifdef CONSOLE_DRIVER_ALS
-        ESP_CMD_ARG(driver, als, "Get ALS sensor values and light tracking"),
 #endif
 #ifdef CONSOLE_DRIVER_ADC
         ESP_CMD_ARG(driver, adc, "Read ADC and calculate value in mV"),
@@ -839,46 +746,46 @@ static void register_driver() {
  * Utilities commands
  */
 
-#ifdef CONSOLE_UTILS_VERSION
-static int utils_version(int c, char **v) { version_info(); return ESP_OK; }
+#ifdef CONSOLE_UTIL_VERSION
+static int util_version(int c, char **v) { version_info(); return ESP_OK; }
 #endif
 
-#ifdef CONSOLE_UTILS_LSHW
-static int utils_lshw(int c, char **v) { hardware_info(); return ESP_OK; }
+#ifdef CONSOLE_UTIL_LSHW
+static int util_lshw(int c, char **v) { hardware_info(); return ESP_OK; }
 #endif
 
-#ifdef CONSOLE_UTILS_LSPART
-static int utils_lspart(int c, char **v) { partition_info(); return ESP_OK; }
+#ifdef CONSOLE_UTIL_LSPART
+static int util_lspart(int c, char **v) { partition_info(); return ESP_OK; }
 #endif
 
-#ifdef CONSOLE_UTILS_LSTASK
+#ifdef CONSOLE_UTIL_LSTASK
 static struct {
     arg_int_t *sort;
     arg_end_t *end;
-} utils_lstask_args = {
+} util_lstask_args = {
     .sort = arg_int0(NULL, NULL, "0-6", "sort by column index"),
     .end  = arg_end(1)
 };
 
-static int utils_lstask(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_lstask_args);
-    task_info(ARG_INT(utils_lstask_args.sort, 2));
+static int util_lstask(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_lstask_args);
+    task_info(ARG_INT(util_lstask_args.sort, 2));
     return ESP_OK;
 }
 #endif
 
-#ifdef CONSOLE_UTILS_LSMEM
+#ifdef CONSOLE_UTIL_LSMEM
 static struct {
     arg_lit_t *verbose;
     arg_end_t *end;
-} utils_lsmem_args = {
+} util_lsmem_args = {
     .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
     .end     = arg_end(1)
 };
 
-static int utils_lsmem(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_lsmem_args);
-    switch (utils_lsmem_args.verbose->count) {
+static int util_lsmem(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_lsmem_args);
+    switch (util_lsmem_args.verbose->count) {
     case 0: memory_info(); break;
     case 2: heap_caps_print_heap_info(MALLOC_CAP_DMA);
             heap_caps_print_heap_info(MALLOC_CAP_EXEC); FALLTH;
@@ -887,98 +794,35 @@ static int utils_lsmem(int argc, char **argv) {
     }
     return ESP_OK;
 }
-#endif // CONSOLE_UTILS_LSMEM
+#endif // CONSOLE_UTIL_LSMEM
 
-#ifdef CONSOLE_UTILS_LSFS
+#ifdef CONSOLE_UTIL_LSFS
 static struct {
     arg_str_t *dir;
     arg_lit_t *ext;
     arg_end_t *end;
-} utils_lsfs_args = {
+} util_lsfs_args = {
     .dir = arg_str0(NULL, NULL, "abspath", NULL),
     .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(2)
 };
 
-static int utils_lsfs(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_lsfs_args);
+static int util_lsfs(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_lsfs_args);
     filesys_listdir(
-        utils_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH,
-        ARG_STR(utils_lsfs_args.dir, "/"), stdout);
+#   if defined(CONFIG_BASE_USE_FFS) && defined(CONFIG_BASE_USE_SDFS)
+        util_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH
+#   elif defined(CONFIG_BASE_USE_FFS)
+        FILESYS_FLASH
+#   else
+        FILESYS_SDCARD
+#   endif
+        , ARG_STR(util_lsfs_args.dir, "/"), stdout);
     return ESP_OK;
 }
-#endif // CONSOLE_UTILS_LSFS
+#endif // CONSOLE_UTIL_LSFS
 
-#ifdef CONSOLE_UTILS_HID
-static struct {
-    arg_str_t *key;
-    arg_str_t *mse;
-    arg_str_t *dial;
-    arg_int_t *tout;
-    arg_str_t *tgt;
-    arg_end_t *end;
-} utils_hid_args = {
-    .key  = arg_str0("k", NULL, "CODE", "HID report keypress"),
-    .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
-    .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
-    .tout = arg_int0("t", NULL, "0-65535", "key/mouse timeout in ms"),
-    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BLE/SCN"),
-    .end  = arg_end(5)
-};
-
-static int utils_hid(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_hid_args);
-    esp_err_t err = ESP_OK;
-    static const char *choices = "UBS", *c;
-    const char *mouse = ARG_STR(utils_hid_args.mse, NULL);
-    const char *press = ARG_STR(utils_hid_args.key, NULL);
-    const char *dial = ARG_STR(utils_hid_args.dial, NULL);
-    const char *tstr = ARG_STR(utils_hid_args.tgt, NULL);
-    uint16_t tout_ms = ARG_INT(utils_hid_args.tout, 50);
-
-    hid_target_t to = HID_TARGET_ALL;
-    if (tstr) {
-        if ('0' <= tstr[0] && tstr[0] <= '2') {
-            to = (hid_target_t)(tstr[0] - '0');
-        } else if (( c = strchr(choices, tstr[0]) )) {
-            to = (hid_target_t)(c - choices);
-        } else {
-            printf("Invalid target to send: `%s`\n", tstr);
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
-    if (dial) {
-        switch (dial[0]) {
-        case 'l': FALLTH; case 'L': hid_report_dial(to, DIAL_L); break;
-        case 'r': FALLTH; case 'R': hid_report_dial(to, DIAL_R); break;
-        case 'u': FALLTH; case 'U': hid_report_dial(to, DIAL_UP); break;
-        case 'd': FALLTH; case 'D': hid_report_dial(to, DIAL_DN); break;
-        default: if (strbool(dial)) hid_report_dial_button(to, tout_ms);
-        }
-    }
-    if (mouse) {
-        int num, vals[4] = { 0 };
-        if (!strcasecmp(mouse, "square")) {
-            hid_report_mouse_move(to, 50, 0); msleep(250);
-            hid_report_mouse_move(to, 0, 50); msleep(250);
-            hid_report_mouse_move(to, -50, 0); msleep(250);
-            hid_report_mouse_move(to, 0, -50); msleep(250);
-        } else if (!( num = parse_all(mouse, vals, LEN(vals)) )) {
-            hid_report_mouse_click(to, mouse, tout_ms);
-        } else if (num == 1) {
-            hid_report_mouse_button(to, vals[0]);
-        } else {
-            hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
-        }
-    }
-    if (press) {
-        hid_report_keyboard_press(to, press, tout_ms);
-    }
-    return err;
-}
-#endif // CONSOLE_UTILS_HID
-
-#ifdef CONSOLE_UTILS_CONFIG
+#ifdef CONSOLE_UTIL_CONFIG
 static struct {
     arg_str_t *key;
     arg_str_t *val;
@@ -988,7 +832,7 @@ static struct {
     arg_lit_t *list;
     arg_lit_t *lall;
     arg_end_t *end;
-} utils_config_args = {
+} util_config_args = {
     .key  = arg_str0(NULL, NULL, "KEY", "specify config by key"),
     .val  = arg_str0(NULL, NULL, "VAL", "set config value"),
     .load = arg_lit0(NULL, "load", "load from NVS flash"),
@@ -999,11 +843,11 @@ static struct {
     .end  = arg_end(7)
 };
 
-static int utils_config(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_config_args);
+static int util_config(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_config_args);
     bool ret = true;
-    const char *key = ARG_STR(utils_config_args.key, NULL);
-    const char *val = ARG_STR(utils_config_args.val, NULL);
+    const char *key = ARG_STR(util_config_args.key, NULL);
+    const char *val = ARG_STR(util_config_args.val, NULL);
     if (key) {
         if (val) {
             printf("Set `%s` to `%s` %s\n", key, val,
@@ -1011,41 +855,41 @@ static int utils_config(int argc, char **argv) {
         } else {
             printf("Get `%s` value `%s`\n", key, config_get(key));
         }
-    } else if (utils_config_args.load->count) {
+    } else if (util_config_args.load->count) {
         ret = config_nvs_load();
-    } else if (utils_config_args.save->count) {
+    } else if (util_config_args.save->count) {
         ret = config_nvs_dump();
-    } else if (utils_config_args.stat->count) {
+    } else if (util_config_args.stat->count) {
         config_nvs_stats();
-    } else if (utils_config_args.list->count) {
+    } else if (util_config_args.list->count) {
         config_nvs_list(false);
-    } else if (utils_config_args.lall->count) {
+    } else if (util_config_args.lall->count) {
         config_nvs_list(true);
     } else {
         config_list();
     }
     return ret ? ESP_OK : ESP_FAIL;
 }
-#endif // CONSOLE_UTILS_CONFIG
+#endif // CONSOLE_UTIL_CONFIG
 
-#ifdef CONSOLE_UTILS_LOGGING
+#ifdef CONSOLE_UTIL_LOGGING
 static struct {
     arg_str_t *tag;
     arg_str_t *lvl;
     arg_lit_t *log;
     arg_end_t *end;
-} utils_logging_args = {
+} util_logging_args = {
     .tag = arg_str0(NULL, NULL, "TAG", "specify tag of the log entries"),
     .lvl = arg_str0(NULL, NULL, "0-5|NEWIDV", "set logging level"),
     .log = arg_lit0(NULL, "test", "test logging with specified tag"),
     .end = arg_end(3)
 };
 
-static int utils_logging(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_logging_args);
+static int util_logging(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_logging_args);
     static const char *choices = "NEWIDV", *c;
-    const char *tag = ARG_STR(utils_logging_args.tag, "*");
-    const char *lvl = ARG_STR(utils_logging_args.lvl, NULL);
+    const char *tag = ARG_STR(util_logging_args.tag, "*");
+    const char *lvl = ARG_STR(util_logging_args.lvl, NULL);
     if (lvl) {
         if (!strcmp(tag, "*")) {
             printf("Invalid tag to set: `%s`\n", tag);
@@ -1061,33 +905,33 @@ static int utils_logging(int argc, char **argv) {
         }
     }
     printf("Logging level of %s is %c\n", tag, choices[esp_log_level_get(tag)]);
-    if (utils_logging_args.log->count && strcmp(tag, "*")) {
+    if (util_logging_args.log->count && strcmp(tag, "*")) {
         for (int i = 1; i < strlen(choices); i++) {
             ESP_LOG_LEVEL(i, tag, "Logging at %c", choices[i]);
         }
     }
     return ESP_OK;
 }
-#endif // CONSOLE_UTILS_LOGGING
+#endif // CONSOLE_UTIL_LOGGING
 
-#ifdef CONSOLE_UTILS_HISTORY
+#ifdef CONSOLE_UTIL_HISTORY
 static struct {
     arg_str_t *cmd;
     arg_str_t *dst;
     arg_lit_t *ext;
     arg_end_t *end;
-} utils_hist_args = {
+} util_hist_args = {
     .cmd = arg_str1(NULL, NULL, "load|save", ""),
     .dst = arg_str0("f", NULL, "history.txt", "relative path to file"),
     .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(3)
 };
 
-static int utils_hist(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &utils_hist_args);
+static int util_hist(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_hist_args);
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    const char *cmd = utils_hist_args.cmd->sval[0];
-    const char *dst = ARG_STR(utils_hist_args.dst, "history.txt");
+    const char *cmd = util_hist_args.cmd->sval[0];
+    const char *dst = ARG_STR(util_hist_args.dst, "history.txt");
     bool save = false;
     if (strstr(cmd, "save")) {
         save = true;
@@ -1095,11 +939,18 @@ static int utils_hist(int argc, char **argv) {
         printf("Invalid command: `%s`\n", cmd);
         return err;
     }
-    char path[strlen(Config.sys.DIR_DATA) + strlen(dst) + 1];
-    sprintf(path, "%s%s", Config.sys.DIR_DATA, dst);
-    bool exists = filesys_exists(
-        utils_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH, path);
-    if (!exists && !save) {
+#   ifndef CONFIG_BASE_USE_FFS
+    const char *mp = CONFIG_BASE_SDFS_MP;
+#   else
+    const char *mp = CONFIG_BASE_FFS_MP;
+#       ifdef CONFIG_BASE_USE_SDFS
+    if (util_hist_args.ext->count) mp = CONFIG_BASE_SDFS_MP;
+#       endif
+#   endif
+    char path[strlen(mp) + strlen(Config.sys.DIR_DATA) + strlen(dst) + 1];
+    sprintf(path, "%s%s%s", mp, Config.sys.DIR_DATA, dst);
+    struct stat st;
+    if (stat(path, &st) && !save) {
         printf("History file `%s` does not exist\n", path);
         err = ESP_ERR_NOT_FOUND;
     } else {
@@ -1108,39 +959,36 @@ static int utils_hist(int argc, char **argv) {
     }
     return err;
 }
-#endif // CONSOLE_UTILS_HISTORY
+#endif // CONSOLE_UTIL_HISTORY
 
-static void register_utils() {
+static void register_util() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_UTILS_VERSION
-        ESP_CMD(utils, version, "Get version of firmware and SDK"),
+#ifdef CONSOLE_UTIL_VERSION
+        ESP_CMD(util, version, "Get version of firmware and SDK"),
 #endif
-#ifdef CONSOLE_UTILS_LSHW
-        ESP_CMD(utils, lshw, "Print hardware information"),
+#ifdef CONSOLE_UTIL_LSHW
+        ESP_CMD(util, lshw, "Print hardware information"),
 #endif
-#ifdef CONSOLE_UTILS_LSPART
-        ESP_CMD(utils, lspart, "Enumerate partitions in flash"),
+#ifdef CONSOLE_UTIL_LSPART
+        ESP_CMD(util, lspart, "Enumerate partitions in flash"),
 #endif
-#ifdef CONSOLE_UTILS_LSTASK
-        ESP_CMD_ARG(utils, lstask, "Enumerate running RTOS tasks"),
+#ifdef CONSOLE_UTIL_LSTASK
+        ESP_CMD_ARG(util, lstask, "Enumerate running RTOS tasks"),
 #endif
-#ifdef CONSOLE_UTILS_LSMEM
-        ESP_CMD_ARG(utils, lsmem, "List memory info"),
+#ifdef CONSOLE_UTIL_LSMEM
+        ESP_CMD_ARG(util, lsmem, "List memory info"),
 #endif
-#ifdef CONSOLE_UTILS_LSFS
-        ESP_CMD_ARG(utils, lsfs, "List file system directories and files"),
+#ifdef CONSOLE_UTIL_LSFS
+        ESP_CMD_ARG(util, lsfs, "List file system directories and files"),
 #endif
-#ifdef CONSOLE_UTILS_HID
-        ESP_CMD_ARG(utils, hid, "Send HID report through USB / BT"),
+#ifdef CONSOLE_UTIL_CONFIG
+        ESP_CMD_ARG(util, config, "Set / get / load / save / list configs"),
 #endif
-#ifdef CONSOLE_UTILS_CONFIG
-        ESP_CMD_ARG(utils, config, "Set / get / load / save / list configs"),
+#ifdef CONSOLE_UTIL_LOGGING
+        ESP_CMD_ARG(util, logging, "Set / get ESP logging level"),
 #endif
-#ifdef CONSOLE_UTILS_LOGGING
-        ESP_CMD_ARG(utils, logging, "Set / get ESP logging level"),
-#endif
-#ifdef CONSOLE_UTILS_HISTORY
-        ESP_CMD_ARG(utils, hist, "Dump / load console history from flash"),
+#ifdef CONSOLE_UTIL_HISTORY
+        ESP_CMD_ARG(util, hist, "Dump / load console history from flash"),
 #endif
     };
     register_commands(cmds, LEN(cmds));
@@ -1224,7 +1072,7 @@ static struct {
     arg_end_t *end;
 } net_bt_args = {
     .mode = arg_str0(NULL, NULL, "0-2|dDH", "specify BT mode"),
-    .now  = arg_lit0(NULL, "now", "reboot now"),
+    .now  = arg_lit0(NULL, "now", "reboot right now if needed"),
     .scan = arg_lit0(NULL, "scan", "run BT/BLE scan"),
     .tout = arg_int0("t", NULL, "0-65535", "scan timeout in ms"),
     .bat  = arg_int0("b", NULL, "0-100", "BLE report battery level"),
@@ -1453,7 +1301,7 @@ static int net_tsync(int argc, char **argv) {
 }
 #endif
 
-static void register_network() {
+static void register_net() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_NET_STA
         ESP_CMD_ARG(net, sta, "Query / Scan / Connect / Disconnect APs"),
@@ -1487,17 +1335,279 @@ static void register_network() {
 }
 
 /******************************************************************************
+ * Application commands
+ */
+
+#ifdef CONSOLE_APP_HID
+static struct {
+    arg_str_t *key;
+    arg_str_t *str;
+    arg_str_t *mse;
+    arg_str_t *dial;
+    arg_int_t *tout;
+    arg_str_t *tgt;
+    arg_end_t *end;
+} app_hid_args = {
+    .key  = arg_str0("k", NULL, "CODE", "HID report keypress"),
+    .str  = arg_str0("s", NULL, "STR", "HID report type in"),
+    .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
+    .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
+    .tout = arg_int0("t", NULL, "0-65535", "key/mouse timeout in ms"),
+    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BLE/SCN"),
+    .end  = arg_end(6)
+};
+
+static int app_hid(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_hid_args);
+    esp_err_t err = ESP_OK;
+    static const char *choices = "UBS", *c;
+    const char *typein = ARG_STR(app_hid_args.str, NULL);
+    const char *press = ARG_STR(app_hid_args.key, NULL);
+    const char *mouse = ARG_STR(app_hid_args.mse, NULL);
+    const char *dial = ARG_STR(app_hid_args.dial, NULL);
+    const char *tstr = ARG_STR(app_hid_args.tgt, NULL);
+    uint16_t tout_ms = ARG_INT(app_hid_args.tout, 50);
+
+    hid_target_t to = HID_TARGET_ALL;
+    if (tstr) {
+        if ('0' <= tstr[0] && tstr[0] <= '2') {
+            to = (hid_target_t)(tstr[0] - '0');
+        } else if (( c = strchr(choices, tstr[0]) )) {
+            to = (hid_target_t)(c - choices);
+        } else {
+            printf("Invalid target to send: `%s`\n", tstr);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+
+    if (dial) {
+        switch (dial[0]) {
+        case 'l': FALLTH; case 'L': hid_report_dial(to, DIAL_L); break;
+        case 'r': FALLTH; case 'R': hid_report_dial(to, DIAL_R); break;
+        case 'u': FALLTH; case 'U': hid_report_dial(to, DIAL_UP); break;
+        case 'd': FALLTH; case 'D': hid_report_dial(to, DIAL_DN); break;
+        default: if (strbool(dial)) hid_report_dial_button(to, tout_ms);
+        }
+    } else if (mouse) {
+        int num, vals[4] = { 0 };
+        if (!strcasecmp(mouse, "square")) {
+            hid_report_mouse_move(to, 50, 0); msleep(250);
+            hid_report_mouse_move(to, 0, 50); msleep(250);
+            hid_report_mouse_move(to, -50, 0); msleep(250);
+            hid_report_mouse_move(to, 0, -50); msleep(250);
+        } else if (!( num = parse_all(mouse, vals, LEN(vals)) )) {
+            hid_report_mouse_click(to, mouse, tout_ms);
+        } else if (num == 1) {
+            hid_report_mouse_button(to, vals[0]);
+        } else {
+            hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
+        }
+    } else if (press) {
+        hid_report_keyboard_press(to, press, tout_ms);
+    } else if (typein) {
+        char buf[2] = { 0 };
+        tout_ms = MAX(50, tout_ms) / 2;
+        LOOPN(i, strlen(typein)) {
+            buf[0] = typein[i];
+            hid_report_keyboard_press(to, buf, tout_ms); msleep(tout_ms);
+        }
+    }
+    return err;
+}
+#endif // CONSOLE_APP_HID
+
+#ifdef CONSOLE_APP_SCN
+static struct {
+    arg_int_t *btn;
+    arg_int_t *bar;
+    arg_int_t *rot;
+    arg_int_t *fps;
+    arg_str_t *font;
+    arg_end_t *end;
+} app_scn_args = {
+    .btn  = arg_int0(NULL, NULL, "0-6", "trigger virtual button press"),
+    .bar  = arg_int0("p", NULL, "0-100", "draw progress bar on screen"),
+    .rot  = arg_int0("r", NULL, "0-3", "software rotation of screen"),
+    .fps  = arg_int0("f", NULL, "0-100", "set LVGL refresh period in FPS"),
+    .font = arg_str0(NULL, "font", "PATH", "load font from file"),
+    .end  = arg_end(5)
+};
+
+static int app_scn(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_scn_args);
+    int btn = ARG_INT(app_scn_args.btn, -1);
+    int bar = ARG_INT(app_scn_args.bar, -1);
+    int rot = ARG_INT(app_scn_args.rot, -1);
+    int fps = ARG_INT(app_scn_args.fps, -1);
+    const char *font = ARG_STR(app_scn_args.font, NULL);
+    if (bar >= 0) {
+        return screen_command(SCN_PBAR, &bar);
+    } else if (btn >= 0) {
+        return screen_command(SCN_BTN, &btn);
+    } else if (rot >= 0) {
+        return screen_command(SCN_ROT, &rot);
+    } else if (fps >= 0) {
+        return screen_command(SCN_FPS, &fps);
+    } else if (font) {
+        return screen_command(SCN_FONT, font);
+    }
+    screen_status();
+    return ESP_OK;
+}
+#endif // CONSOLE_APP_SCN
+
+#ifdef CONSOLE_APP_ALS
+static struct {
+    arg_int_t *idx;
+    arg_str_t *rlt;
+    arg_end_t *end;
+} app_als_args = {
+    .idx = arg_int0(NULL, NULL, "0-3", "index of ALS chip"),
+    .rlt = arg_str0("t", NULL, "0-3|HVA", "run light tracking"),
+    .end = arg_end(2)
+};
+
+static int app_als(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_als_args);
+    static const char *choices = "0123HVA", *c;
+    const char *method = ARG_STR(app_als_args.rlt, NULL);
+    int idx = ARG_INT(app_als_args.idx, -1);
+    esp_err_t err = ESP_OK;
+    if (method) {
+        if (!( c = strchr(choices, method[0]) )) {
+            printf("Invalid tracking method: %s\n", method);
+            return ESP_ERR_INVALID_ARG;
+        }
+        int hdeg = -1, vdeg = -1;
+        if (!( err = als_tracking((als_track_t)(c - choices), &hdeg, &vdeg) ))
+            printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
+    } else if (idx < 4) {
+        LOOPN(i, 4) {
+            if (idx < 0 || i == idx) {
+                printf("Brightness of ALS %d is %.2f lux\n",
+                        i, als_brightness(i));
+            }
+        }
+    } else {
+        printf("Invalid index %d\n", idx);
+        err = ESP_ERR_INVALID_ARG;
+    }
+    return err;
+}
+#endif // CONSOLE_APP_ALS
+
+#ifdef CONSOLE_APP_SEN
+static struct {
+    arg_str_t *sen;
+    arg_int_t *intv;
+    arg_int_t *tout;
+    arg_end_t *end;
+} app_sen_args = {
+    .sen = arg_str1(NULL, NULL, "0-4", "select from temp|tpad|tscn|dist|gy39"),
+    .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
+    .tout = arg_int0("t", NULL, "0-2^31", "loop until timeout in ms"),
+    .end = arg_end(3)
+};
+
+static int app_sen(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_sen_args);
+    const char *sensor = ARG_STR(app_sen_args.sen, "0");
+    uint16_t intv_ms = CONS(ARG_INT(app_sen_args.intv, 500), 10, 1000);
+    uint32_t tout_ms = ARG_INT(app_sen_args.tout, 0);
+    uint8_t index = sensor[0] - '0';
+         if (!strcasecmp(sensor, "temp")) { index = 0; }
+    else if (!strcasecmp(sensor, "tpad")) { index = 1; }
+    else if (!strcasecmp(sensor, "tscn")) { index = 2; }
+    else if (!strcasecmp(sensor, "dist")) { index = 3; }
+    else if (!strcasecmp(sensor, "gy39")) { index = 4; }
+    do {
+        if (index == 0) {
+            float val = temp_celsius();
+            fprintf(stderr, "\rTemp: %.2f degC", val);
+            if (!val) break;
+        } else if (index == 1) {
+            uint16_t val = tpad_read();
+            fprintf(stderr, "\rTouch pad: %4d", val);
+            if (!val) break;
+        } else if (index == 2) {
+            tscn_data_t dat;
+            if (tscn_probe(&dat)) goto error;
+            fprintf(stderr, "\rTSCN:");
+            LOOPN(i, dat.num) {
+                fprintf(stderr, " ID %d, EVT %c, X %3d, Y %3d",
+                    dat.pts[i].id, "PRC-"[dat.pts[i].evt],
+                    dat.pts[i].x, dat.pts[i].y);
+            }
+            const char *gstr = NULL;
+            switch (dat.ges) {
+                case GES_MOVE_UP: gstr = "Move Up";     break;
+                case GES_MOVE_RT: gstr = "Move Right";  break;
+                case GES_MOVE_DN: gstr = "Move Down";   break;
+                case GES_MOVE_LT: gstr = "Move Left";   break;
+                case GES_ZOOM_IN: gstr = "Zoom In";     break;
+                case GES_ZOOM_OT: gstr = "Zoom Out";    break;
+            }
+            if (gstr) fprintf(stderr, " Gesture %s", gstr);
+            if (!dat.num && !dat.ges) fprintf(stderr, " not touched");
+        } else if (index == 3) {
+            uint16_t val = vlx_probe();
+            if (val == (uint16_t)-1) goto error;
+            fprintf(stderr, "\rDIST: range %6.3fm", val / 1e3);
+        } else if (index == 4) {
+            gy39_data_t dat;
+            if (gy39_measure(&dat)) goto error;
+            fprintf(stderr, "\rGY39: %.2flux %.2fdegC %.3fkPa %.2f%% %.2fm",
+                dat.brightness, dat.temperature,
+                dat.atmosphere, dat.humidity, dat.altitude);
+        } else if (index == 5) {
+            mscn_status();
+        } else if (index == 6) {
+            pwr_status();
+        } else {
+            fprintf(stderr, "Nothing to do"); break;
+        }
+        if (tout_ms >= intv_ms) {
+            fprintf(stderr, " (remain %3ds)", tout_ms / 1000);
+            fflush(stderr);
+            tout_ms -= intv_ms;
+            msleep(intv_ms);
+        }
+    } while (tout_ms >= intv_ms);
+    fputc('\n', stderr);
+    return ESP_OK;
+error:
+    fputs("Measurement failed\n", stderr);
+    return ESP_FAIL;
+}
+#endif // CONSOLE_APP_SEN
+
+static void register_app() {
+    const esp_console_cmd_t cmds[] = {
+#ifdef CONSOLE_APP_HID
+        ESP_CMD_ARG(app, hid, "Send HID report through USB / BT"),
+#endif
+#ifdef CONSOLE_APP_SCN
+        ESP_CMD_ARG(app, scn, "Control screen drawing"),
+#endif
+#ifdef CONSOLE_APP_ALS
+        ESP_CMD_ARG(app, als, "Get ALS brightness and run light tracking"),
+#endif
+#ifdef CONSOLE_APP_SEN
+        ESP_CMD_ARG(app, sen, "Get sensor values (TEMP, TPAD etc.)"),
+#endif
+    };
+    register_commands(cmds, LEN(cmds));
+}
+
+/******************************************************************************
  * Export register commands
  */
 
-// Put this variable into RTC memory to maintain the value during deep sleep
-RTC_DATA_ATTR static uint32_t boot_count = 0;
-
 static void optimize_datatype() {
-#ifdef CONSOLE_SYSTEM_SLEEP
+#ifdef CONSOLE_SYS_SLEEP
     static char sb[6];
     snprintf(sb, sizeof(sb), "0-%d", GPIO_PIN_COUNT - 1);
-    system_sleep_args.pin->hdr.datatype = sb;
+    sys_sleep_args.pin->hdr.datatype = sb;
 #endif
 #ifdef CONSOLE_DRIVER_LED
     static char lb[8], bb[8];
@@ -1519,8 +1629,11 @@ static void optimize_datatype() {
 #endif
 }
 
+// Put this variable into RTC memory to maintain the value during deep sleep
+RTC_DATA_ATTR static uint32_t boot_count = 0;
+
 extern "C" void console_register_commands() {
-    if (boot_count++) fputs("Woken up from deep sleep mode", stderr);
+    if (boot_count++) fputs("Woken up from deep sleep mode\n", stderr);
     esp_log_level_set(TAG, ESP_LOG_INFO);
     const esp_console_cmd_t clear = {
         .command = "clear",
@@ -1535,8 +1648,9 @@ extern "C" void console_register_commands() {
     ESP_ERROR_CHECK( esp_console_register_help_command() );
     ESP_ERROR_CHECK( esp_console_cmd_register(&clear) );
     optimize_datatype();
-    register_network();
-    register_driver();
-    register_system();
-    register_utils();
+    register_sys();
+    register_util();
+    register_drv();
+    register_net();
+    register_app();
 }

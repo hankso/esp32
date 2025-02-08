@@ -11,37 +11,10 @@
 
 #if __has_include("tusb.h")
 #   define WITH_TUSB
+#   ifndef DUAL_TUSB
+#       include "tusb.h"
+#   endif
 #else
-
-/* @brief HID Keyboard & Mouse Input Report for Boot Interfaces
- *
- * @see B.1, p.60 of Device Class Definition for Human Interface Devices (HID)
- * Version 1.11
- */
-typedef struct {
-    uint8_t buttons;
-#   define MOUSE_BUTTON_LEFT                BIT0
-#   define MOUSE_BUTTON_RIGHT               BIT1
-#   define MOUSE_BUTTON_MIDDLE              BIT2
-#   define MOUSE_BUTTON_BACKWARD            BIT3
-#   define MOUSE_BUTTON_FORWARD             BIT4
-    int8_t x, y, wheel, pan;
-} __attribute__((packed)) hid_mouse_report_t;
-
-typedef struct {
-    uint8_t modifier;
-#   define KEYBOARD_MODIFIER_LEFTCTRL       BIT0
-#   define KEYBOARD_MODIFIER_LEFTSHIFT      BIT1
-#   define KEYBOARD_MODIFIER_LEFTALT        BIT2
-#   define KEYBOARD_MODIFIER_LEFTGUI        BIT3
-#   define KEYBOARD_MODIFIER_RIGHTCTRL      BIT4
-#   define KEYBOARD_MODIFIER_RIGHTSHIFT     BIT5
-#   define KEYBOARD_MODIFIER_RIGHTALT       BIT6
-#   define KEYBOARD_MODIFIER_RIGHTGUI       BIT7
-    uint8_t reserved;
-    uint8_t keycode[6]; // array of HID_KEY_XXX
-} __attribute__((packed)) hid_keyboard_report_t;
-
 #   define HID_KEY_NONE                     0x00
 #   define HID_KEY_A                        0x04
 #   define HID_KEY_B                        0x05
@@ -218,6 +191,39 @@ typedef struct {
 #   define HID_KEY_ERROR_UNDEFINED          0x03
 #endif
 
+#if !defined(WITH_TUSB) || defined(DUAL_TUSB)
+
+/* @brief HID Keyboard & Mouse Input Report for Boot Interfaces
+ *
+ * @see B.1, p.60 of Device Class Definition for Human Interface Devices (HID)
+ * Version 1.11
+ */
+typedef struct {
+    uint8_t buttons;
+#   define MOUSE_BUTTON_LEFT                BIT0
+#   define MOUSE_BUTTON_RIGHT               BIT1
+#   define MOUSE_BUTTON_MIDDLE              BIT2
+#   define MOUSE_BUTTON_BACKWARD            BIT3
+#   define MOUSE_BUTTON_FORWARD             BIT4
+    int8_t x, y, wheel, pan;
+} PACKED hid_mouse_report_t;
+
+typedef struct {
+    uint8_t modifier;
+#   define KEYBOARD_MODIFIER_LEFTCTRL       BIT0
+#   define KEYBOARD_MODIFIER_LEFTSHIFT      BIT1
+#   define KEYBOARD_MODIFIER_LEFTALT        BIT2
+#   define KEYBOARD_MODIFIER_LEFTGUI        BIT3
+#   define KEYBOARD_MODIFIER_RIGHTCTRL      BIT4
+#   define KEYBOARD_MODIFIER_RIGHTSHIFT     BIT5
+#   define KEYBOARD_MODIFIER_RIGHTALT       BIT6
+#   define KEYBOARD_MODIFIER_RIGHTGUI       BIT7
+    uint8_t reserved;
+    uint8_t keycode[6]; // array of HID_KEY_XXX
+} PACKED hid_keyboard_report_t;
+
+#endif // !defined(WITH_TUSB) || defined(DUAL_TUSB)
+
 #define MOD_SHIFT ( KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT )
 #define HAS_SHIFT(mod) ( (mod) & MOD_SHIFT )
 #define ADD_SHIFT(mod) ( (mod) |= MOD_SHIFT )
@@ -251,14 +257,15 @@ const char * hid_desc_serial(const char **);
 
 // Mouse button
 uint8_t str2btncode(const char *str);
-const char *btncode2str(uint8_t bit);
+const char * btncode2str(uint8_t bit);
 const char * hid_btncode_str(uint8_t bits);
 
 // Keyboard keycode & modifier
-uint8_t str2keycode(const char *str, uint8_t *modifier);
-const char *keycode2str(uint8_t keycode, uint8_t modifier);
-const char * hid_keycode_str(uint8_t modifier, uint8_t keycodes[6]);
+uint8_t str2modifier(const char *str);
+const uint8_t * str2keycodes(const char *str, uint8_t *modifier);
+const char * keycode2str(uint8_t keycode, uint8_t modifier);
 const char * hid_modifier_str(uint8_t modifier);
+const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycodes[6]);
 
 typedef void (*hid_key_cb)(uint8_t keycode, bool pressed);
 typedef void (*hid_pos_cb)(int x, int y, int8_t dx, int8_t dy);
@@ -270,7 +277,7 @@ typedef enum {
     HID_TARGET_BLE,
     HID_TARGET_SCN,
     HID_TARGET_ALL,
-} hid_target_t;     // to which interface this report should be sent to
+} hid_target_t;     // to which interface HID reports should be sent to
 
 typedef enum {
     DIAL_UP = 0x00, // button release

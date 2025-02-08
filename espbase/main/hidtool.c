@@ -16,7 +16,7 @@
 #   include "class/hid/hid_device.h"
 #else
 
-// Copied from tinyusb/class/hid/hid.h
+// Copied from tinyusb-v0.9.0/src/class/hid/hid.h
 
 //------------- ITEM & TAG -------------//
 #   define HID_REPORT_DATA_0(data)
@@ -548,6 +548,7 @@ static const struct {
     { HID_KEY_ARROW_LEFT,   "Left" },       // 20
     { HID_KEY_CANCEL,       "Cancel" },     // 24
     { HID_KEY_ESCAPE,       "Escape" },     // 27
+    { HID_KEY_SPACE,        "Space" },      // 32 (should not be "special")
     { HID_KEY_DELETE,       "Delete" },     // 127
     { HID_KEY_CAPS_LOCK,    "CapsLock" },
     { HID_KEY_PRINT_SCREEN, "PrtScn" },
@@ -587,31 +588,67 @@ static const uint8_t keycodes_normal[][3] = {
     { HID_KEY_SLASH,            '/', '?' },
 };
 
-uint8_t str2keycode(const char *str, uint8_t *mod) {
-    size_t len = str ? strlen(str) : 0;
-    if (!len) return 0;
-    if (mod) DEL_SHIFT(*mod);
-    LOOPN(i, LEN(keycodes_special)) {
-        if (!strcasecmp(keycodes_special[i].name, str))
-            return keycodes_special[i].code;
-    }
-    LOOPN(i, LEN(keycodes_normal)) {
-        if (str[0] == keycodes_normal[i][1])
-            return keycodes_normal[i][0];
-        if (str[0] == keycodes_normal[i][2]) {
-            if (mod) ADD_SHIFT(*mod);
-            return keycodes_normal[i][0];
+static const char * modifier_names[] = {
+    "L-Ctrl", "L-Shift", "L-Alt", "L-Win",
+    "R-Ctrl", "R-Shift", "R-Alt", "R-Win",
+      "Ctrl",   "Shift",   "Alt",   "Win",
+};
+
+uint8_t str2modifier(const char *str) {
+    uint8_t mod = 0;
+    LOOPN(i, LEN(modifier_names)) {
+        if (strcasestr(str, modifier_names[i])) {
+            mod |= 1 << (i % 8);
         }
     }
-    if (str[0] == 'F' && len > 1 && '0' <= str[1] && str[1] <= '9')
-        return str[1] - '0' + HID_KEY_F1;
-    if ('a' <= str[0] && str[0] <= 'z')
-        return str[0] - 'a' + HID_KEY_A;
-    if ('A' <= str[0] && str[0] <= 'Z') {
+    return mod;
+}
+
+const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
+    static uint8_t buf[6];
+    size_t len = str ? strlen(str) : 0, klen = 0, blen = sizeof(buf);
+    if (!len) goto exit;
+    if (str[0] == '|') {
+        buf[klen++] = HID_KEY_BACKSLASH;
         if (mod) ADD_SHIFT(*mod);
-        return str[0] - 'A' + HID_KEY_A;
     }
-    return 0;
+    char *dup = strdup(str);
+    for (str = strtok(dup, "|"); str && klen < blen; str = strtok(NULL, "|")) {
+        if (str2modifier(str)) continue;
+        int fkey;
+        bool has_fkey = parse_int(str + 1, &fkey) && fkey > 0 && fkey < 13;
+        if (has_fkey && (str[0] == 'F' || str[0] == 'f')) {
+            buf[klen++] = fkey - 1 + HID_KEY_F1;
+            continue;
+        }
+        bool has_spec = false;
+        LOOPN(i, LEN(keycodes_special)) {
+            if (klen < blen && !strcasecmp(keycodes_special[i].name, str)) {
+                buf[klen++] = keycodes_special[i].code;
+                has_spec = true;
+                break;
+            }
+        }
+        if (has_spec) continue;
+        LOOPN(i, LEN(keycodes_normal)) {
+            if (klen < blen && str[0] == keycodes_normal[i][1])
+                buf[klen++] = keycodes_normal[i][0];
+            if (klen < blen && str[0] == keycodes_normal[i][2]) {
+                buf[klen++] = keycodes_normal[i][0];
+                if (mod) ADD_SHIFT(*mod);
+            }
+        }
+        if ('a' <= str[0] && str[0] <= 'z')
+            buf[klen++] = str[0] - 'a' + HID_KEY_A;
+        if ('A' <= str[0] && str[0] <= 'Z') {
+            buf[klen++] = str[0] - 'A' + HID_KEY_A;
+            if (mod) ADD_SHIFT(*mod);
+        }
+    }
+    free(dup);
+exit:
+    if (klen < 6) buf[klen] = HID_KEY_NONE;
+    return buf;
 }
 
 const char * keycode2str(uint8_t code, uint8_t modifier) {
@@ -621,9 +658,7 @@ const char * keycode2str(uint8_t code, uint8_t modifier) {
         buf[0] = code - HID_KEY_A + (shift ? 'A' : 'a');
         buf[1] = '\0';
     } else if (HID_KEY_F1 <= code && code <= HID_KEY_F12) {
-        buf[0] = 'F';
-        buf[1] = code - HID_KEY_F1 + '1';
-        buf[2] = '\0';
+        snprintf(buf, sizeof(buf), "F%d", code - HID_KEY_F1 + 1);
     } else {
         LOOPN(i, LEN(keycodes_normal)) {
             if (keycodes_normal[i][0] != code) continue;
@@ -641,13 +676,13 @@ const char * keycode2str(uint8_t code, uint8_t modifier) {
     return buf;
 }
 
-const char * hid_keycode_str(uint8_t modifier, uint8_t keycode[6]) {
+const char * hid_modifier_str(uint8_t modifier) {
     static char buf[64];
     size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, 6) {
-        if (keycode[i]) {
+    LOOPN(i, 8) {
+        if (modifier & (1 << i)) {
             size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", keycode2str(keycode[i], modifier));
+                i ? " | " : "", modifier_names[i]);
         } else {
             buf[size] = '\0';
         }
@@ -655,20 +690,16 @@ const char * hid_keycode_str(uint8_t modifier, uint8_t keycode[6]) {
     return buf;
 }
 
-const char * hid_modifier_str(uint8_t modifier) {
-    static const char * MODIFIER_STR[] = {
-        "L-Ctrl", "L-Shift", "L-Alt", "L-WIN",
-        "R-Ctrl", "R-Shift", "R-Alt", "R-WIN",
-    };
+const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycode[6]) {
     static char buf[64];
     size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, LEN(MODIFIER_STR)) {
-        if (modifier & (1 << i)) {
-            size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", MODIFIER_STR[i]);
-        } else {
+    LOOPN(i, 6) {
+        if (keycode[i] == HID_KEY_NONE) {
             buf[size] = '\0';
+            break;
         }
+        size += snprintf(buf + size, blen - size, "%s%s",
+            i ? " | " : "", keycode2str(keycode[i], modifier));
     }
     return buf;
 }
@@ -685,9 +716,11 @@ bool hid_report_keyboard(
 }
 
 bool hid_report_keyboard_press(hid_target_t to, const char *str, uint32_t ms) {
-    uint8_t modifier = 0, keycode = str2keycode(str, &modifier);
-    bool sent = hid_report_keyboard(to, modifier, &keycode, !!keycode);
-    if (sent && keycode && ms) {
+    uint8_t modifier = str2modifier(str), klen = 0;
+    const uint8_t *keycode = str2keycodes(str, &modifier);
+    while (klen < 6) { if (keycode[klen] == HID_KEY_NONE) break; klen++; }
+    bool sent = hid_report_keyboard(to, modifier, keycode, klen);
+    if (sent && (modifier || klen) && ms) {
         msleep(ms);
         sent = hid_report_keyboard(to, 0, NULL, 0);
     }

@@ -7,6 +7,7 @@
 #include "network.h"
 #include "server.h"
 #include "config.h"
+#include "update.h"
 #include "timesync.h"
 
 #ifdef CONFIG_BASE_USE_WIFI
@@ -305,9 +306,14 @@ static esp_err_t wifi_mode_check(wifi_interface_t interface) {
 }
 
 static void cb_ip(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    static int update = 0;
     if (id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = data;
         if (evt->ip_changed) wifi_print_ipaddr(evt->esp_netif, NULL);
+        if (strbool(Config.app.OTA_AUTO) && !update) {
+            ota_updation_url(NULL, false);
+            update = 0;
+        }
     } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
         ip_event_ap_staipassigned_t *evt = data;
         ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));

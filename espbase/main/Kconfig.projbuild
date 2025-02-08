@@ -272,6 +272,12 @@ menu "ESP Base Configuration"
         help
             Enable touch_xxx functions.
 
+    config BASE_USE_TSCN
+        bool "Enable touch screen"
+        default n
+        help
+            Enable tscn_probe function.
+
     config BASE_USE_KNOB
         bool "Enable Knob input"
         select BASE_GPIO_NUMBER
@@ -384,7 +390,7 @@ menu "ESP Base Configuration"
             Enable vlx_probe function. Add about 5.0KB to firmware.
 
     config BASE_USE_CONSOLE
-        bool "Enable console based on linenoise"
+        bool "Enable REPL console service"
         default y
         help
             Enable console_xxx and commands. Add about 110KB to firmware.
@@ -431,13 +437,13 @@ menu "ESP Base Configuration"
                 int "I2C1 SDA1 pin number"
                 range 0 48
                 default 41 if IDF_TARGET_ESP32S3
-                default 23
+                default 26
 
             config BASE_GPIO_SCL1
                 int "I2C1 SCL1 pin number"
                 range 0 48
                 default 42 if IDF_TARGET_ESP32S3
-                default 25
+                default 27
         endif
 
         if BASE_USE_SPI
@@ -490,7 +496,7 @@ menu "ESP Base Configuration"
                 int "SPI Screen Data/Cmd pin number"
                 range 0 48
                 default 7 if IDF_TARGET_ESP32S3
-                default 27
+                default 23
         endif
 
         config BASE_GPIO_INT
@@ -526,7 +532,7 @@ menu "ESP Base Configuration"
         config BASE_GPIO_DAC
             int "DAC pin number" if BASE_USE_DAC && IDF_TARGET_ESP32
             range 25 26
-            default 26
+            default 25
 
         config BASE_GPIO_TPAD
             int "Touch pin number" if BASE_USE_TPAD

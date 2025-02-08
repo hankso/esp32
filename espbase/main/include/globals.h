@@ -48,18 +48,21 @@
         for (typeof(*(arr)) *p = (arr), (v) = *p; p < &((arr)[n]); (v) = *++p)
 #define ITER(v, arr) ITERN((v), (arr), LEN(arr))
 
+#ifndef BIT
+#   define BIT(n)               ( 1UL << (n) )
+#endif
 #ifndef ABS
-#define ABS(x)                  ( (x) > 0 ? (x) : -(x) )
+#   define ABS(x)               ( (x) > 0 ? (x) : -(x) )
 #endif
 #ifndef ABSDIFF
-#define ABSDIFF(a, b)           ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
+#   define ABSDIFF(a, b)        ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
 #endif
 #ifndef MAX
-#define MAX(a, b)               ( (a) > (b) ? (a) : (b) )
-#define MIN(a, b)               ( (a) > (b) ? (b) : (a) )
+#   define MAX(a, b)            ( (a) > (b) ? (a) : (b) )
+#   define MIN(a, b)            ( (a) > (b) ? (b) : (a) )
 #endif
 #ifndef CONS
-#define CONS(x, low, high)      MAX((low), MIN((x), (high)))
+#   define CONS(x, low, high)   MAX((low), MIN((x), (high)))
 #endif
 
 // Aliases
@@ -69,7 +72,7 @@
 #elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
 #   define TARGET_IDF_4
 #else
-#   warning "This project has only been tested on ESP-IDF v4.4.x & v5.x"
+#   warning "This project has only been tested on ESP-IDF v4.4 & v5.x"
 #endif
 
 #if defined(CONFIG_IDF_TARGET_ESP32)
@@ -87,8 +90,8 @@
 // Board specified configs
 
 #ifdef TARGET_ESP32S3
-#   define  BOARD_ESP32S3_LUATOS
-// #   define  BOARD_ESP32S3_NOLOGO
+// #   define  BOARD_ESP32S3_LUATOS
+#   define  BOARD_ESP32S3_NOLOGO
 #else
 // #   define  BOARD_ESP32_DEVKIT
 #   define  BOARD_ESP32_PICOKIT
@@ -125,7 +128,7 @@ extern "C" {
 
 // defined in utils.c
 void msleep(uint32_t ms);
-void asleep(uint32_t ms);
+uint64_t asleep(uint32_t ms, uint64_t state);
 bool strbool(const char *);
 void hexdump(const void *src, size_t bytes, size_t maxlen);
 char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen);

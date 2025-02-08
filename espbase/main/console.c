@@ -46,7 +46,7 @@ void console_register_prompt(const char * str) {
     size_t len = strlen(color) + strlen(str) + strlen(LOG_RESET_COLOR);
     if (!linenoiseIsDumbMode() && len < sizeof(prompt)) {
         snprintf(prompt, len + 1, "%s%s%s", color, str, LOG_RESET_COLOR);
-        ESP_LOGI(TAG, "Using colorful prompt `%s`", prompt);
+        ESP_LOGI(TAG, "Using colorful prompt %s", prompt);
     } else
 #endif
     {
@@ -170,14 +170,15 @@ void console_initialize() {
  * Currently method 2 is in use. Try method 4 if necessary in the future.
  */
 
-char * console_handle_command(const char *cmd, int history) {
+char * console_handle_command(const char *cmd, bool pipe, bool history) {
     // Semaphore is better than task notification
     if (running && !xSemaphoreTake(running, TIMEOUT(100)))
         return strdup("Console task is executing command");
-    if (history) linenoiseHistoryAdd(cmd);
 
-    FILE *bak = stdout; char *buf; size_t size = 0;
-    stdout = open_memstream(&buf, &size);
+    size_t size = 0;
+    char *buf = NULL;
+    FILE *bak = stdout;
+    if (pipe) stdout = open_memstream(&buf, &size);
 
     int code;
     esp_err_t err = esp_console_run(cmd, &code);
@@ -188,8 +189,10 @@ char * console_handle_command(const char *cmd, int history) {
     } else if (err != ESP_OK) {
         ESP_LOGE(TAG, "Command error: %d (%s)", err, esp_err_to_name(err));
     }
-
-    fclose(stdout); stdout = bak;
+    if (pipe) {
+        fclose(stdout);
+        stdout = bak;
+    }
     if (buf != NULL) {
         if (!size) {                        // empty string means no log output
             TRYFREE(buf);
@@ -201,18 +204,16 @@ char * console_handle_command(const char *cmd, int history) {
             buf[size + 1] = '\0';
         }
     }
+    if (history) linenoiseHistoryAdd(cmd);
     if (running) xSemaphoreGive(running);
     return buf;
 }
 
 void console_handle_one() {
-    char *ret, *cmd = linenoise(prompt);
+    char *cmd = linenoise(prompt);
     putchar('\n'); fflush(stdout);
     if (!cmd) return;
-    if (( ret = console_handle_command(cmd, true) )) {
-        printf("%s\n", ret);
-        TRYFREE(ret);
-    }
+    console_handle_command(cmd, false, true);
     linenoiseFree(cmd);
     putchar('\n'); fflush(stdout);      // one more blank line
 }
@@ -302,7 +303,7 @@ char * console_handle_rpc(const char *json) {
         goto exit;
     }
     ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
-    tmp = console_handle_command(cmd, false);
+    tmp = console_handle_command(cmd, true, false);
     if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
         ret = rpc_response(cJSON_GetObjectItem(obj, "id"), tmp ?: "");
 exit:
@@ -317,7 +318,7 @@ void console_initialize() {}
 
 void console_register_prompt(const char *s) { NOTUSED(s); }
 
-char * console_handle_command(const char *c, int h) {
+char * console_handle_command(const char *c, bool p, bool h) {
     return NULL; NOTUSED(c); NOTUSED(h);
 }
 

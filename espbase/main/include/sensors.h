@@ -19,13 +19,31 @@ extern "C" {
 
 void sensors_initialize();
 
-float temp_celsius();
-uint16_t tpad_read();
-uint16_t vlx_probe();
+float temp_celsius();   // degC
+uint16_t tpad_read();   // a.u.
+uint16_t vlx_probe();   // mm
+
+typedef struct {
+    uint8_t ges;
+#define GES_NONE        0
+#define GES_MOVE_UP     1
+#define GES_MOVE_RT     2
+#define GES_MOVE_DN     3
+#define GES_MOVE_LT     4
+#define GES_ZOOM_IN     5
+#define GES_ZOOM_OT     6
+    uint8_t num;        // 0-5
+    struct {
+        uint8_t id, evt, wt, area;
+        uint16_t x, y;
+    } pts[5];
+} tscn_data_t;
+
+esp_err_t tscn_probe(tscn_data_t *dat);
 
 typedef struct {
     float brightness;   // lux
-    float temperature;  // Celsius degree
+    float temperature;  // degC
     float atmosphere;   // Pa
     float humidity;     // 0-1 percentage
     float altitude;     // meter
@@ -33,7 +51,7 @@ typedef struct {
 
 esp_err_t gy39_measure(gy39_data_t *dat);
 
-float als_brightness(int idx);
+float als_brightness(int idx); // lux
 
 typedef enum {
     ALS_TRACK_0,    // single input
@@ -46,6 +64,9 @@ typedef enum {
 } als_track_t;
 
 esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg);
+
+void mscn_status(); // IST3931
+void pwr_status();  // BQ25895
 
 #ifdef __cplusplus
 }

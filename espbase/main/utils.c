@@ -19,15 +19,15 @@
 
 void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
 
-void asleep(uint32_t ms) {
-    static TickType_t tick_curr = 0, tick_next = 0;
-    tick_curr = xTaskGetTickCount(); // Accurate time control
-    if (!tick_next) {
-        tick_next = tick_curr;
-    } else if (tick_curr < tick_next) {
-        vTaskDelay(tick_next - tick_curr);
+uint64_t asleep(uint32_t ms, uint64_t next) {
+    uint64_t curr = xTaskGetTickCount();
+    if (!next) {
+        next = curr;
+    } else if (curr < next) {
+        vTaskDelay(next - curr);
     }
-    tick_next += ms * portTICK_PERIOD_MS;
+    next += ms * portTICK_PERIOD_MS;
+    return next;
 }
 
 bool strbool(const char *str) {
@@ -336,10 +336,10 @@ void task_info(uint8_t sort_attr) {
 }
 
 void version_info() {
-    printf("ESP-IDF  %s\n"
-           "FreeRTOS %s\n"
-           "Firmware %s\n"
-           "Compiled %s %s\n",
+    printf("ESP  IDF: %s\n"
+           "FreeRTOS: %s\n"
+           "Firmware: %s\n"
+           "Compiled: %s %s\n",
            esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
            Config.info.VER, __DATE__, __TIME__);
 }

@@ -66,7 +66,7 @@ void usbmode_initialize();
 void usbmode_status();
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-bool hidu_send_report(hid_report_t *);
+bool hidu_send_report(const hid_report_t *);
 #endif
 
 #ifdef __cplusplus

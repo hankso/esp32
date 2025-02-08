@@ -92,7 +92,7 @@ void onCommand(AsyncWebServerRequest *req) {
         const char *cmd = req->getParam("exec", true)->value().c_str();
         if (!strlen(cmd)) {
             req->send(400, TYPE_TEXT, "Invalid command to execute");
-        } else if (( ret = console_handle_command(cmd, false) )) {
+        } else if (( ret = console_handle_command(cmd, true, false) )) {
             req->send(200, TYPE_TEXT, ret);
         } else {
             req->send(200);
@@ -338,7 +338,7 @@ void handle_websocket_message(wsdata_ctx_t *ctx) {
     if (ctx->buf[0] == '{') {
         ret = console_handle_rpc(ctx->buf); // handle JSON-RPC
     } else {
-        ret = console_handle_command(ctx->buf, false); // handle ASCII commands
+        ret = console_handle_command(ctx->buf, true, false); // handle cmds
     }
     if (ret) {
         ctx->client->text(ret);

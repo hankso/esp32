@@ -111,7 +111,7 @@ extern void bthost_status(btmode_t mode) {
 #endif // CONFIG_BASE_USE_BT
 
 esp_err_t btmode_connect(scan_rst_t *dev) {
-#ifdef CONFIG_BASE_BLE_HID_HOST
+#if defined(CONFIG_BASE_USE_BT) && defined(CONFIG_BASE_BLE_HID_HOST)
     if (!dev) return ESP_ERR_INVALID_ARG;
     if (hiddev || !hid_enabled) return ESP_ERR_INVALID_STATE;
     esp_hid_transport_t transport = dev->dev_type == ESP_BT_DEVICE_TYPE_BLE
@@ -122,6 +122,6 @@ esp_err_t btmode_connect(scan_rst_t *dev) {
     }
     return esp_hidh_dev_open(dev->addr, transport, dev->ble.addr_type) == NULL;
 #else
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(bda);
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(dev);
 #endif
 }

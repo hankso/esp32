@@ -155,6 +155,7 @@ esp_err_t smbus_probe(int bus, uint8_t addr);
 esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
 esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
 esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num);
+esp_err_t smbus_toggle(int bus, uint8_t addr, uint8_t reg, uint8_t bit);
 esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val);
 esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
 esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val);

@@ -47,7 +47,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 ### ESP32 GPIO assignment
 
 +-----+--------+-----------+---------+----------+---------+------------------------+
-| PIN | ALT0   | ALT1      | ALT2    | ALT3     | ALT4    | Comments               |
+| IO  | ALT0   | ALT1      | ALT2    | ALT3     | ALT4    | Comments               |
 +-----+--------+-----------+---------+----------+---------+------------------------+
 | VDD_SDIO                                                                         |
 +-----+--------+-----------+---------+----------+---------+------------------------+
@@ -118,27 +118,27 @@ PIN Value Usage
 3    HIGH UART0 RXD
 4     LOW Buzzer
 5     LOW LED
-6     LOW Flash SPICLK
-7    HIGH Flash SPIQ
-8     LOW Flash SPID
-9    HIGH Flash SPIHD
-10   HIGH Flash SPIWP
-11   HIGH Flash SPICS0
+6     LOW Flash CLK
+7    HIGH Flash SD3 (PICO-D4)
+8     LOW Flash SD1 (PICO-D4)
+9    HIGH Flash SD2 (PICO-V3-02)
+10   HIGH Flash SD3 (PICO-V3-02)
+11   HIGH Flash SD2
 12    LOW SPI MISO
 13    LOW SPI MOSI
 14    LOW SPI SCLK
 15   HIGH SPI CS0 (SDCard)
-16   HIGH Flash D2WD
-17   HIGH Flash D2WD
+16   HIGH Flash CS
+17   HIGH Flash SD0
 18   HIGH SPI CS1 (Screen)
 19   HIGH SPI CS2 (GPIOExp)
 20    LOW ESP32-PICO-V3
 21   HIGH I2C0 SDA
 22   HIGH I2C0 SCL
-23   HIGH I2C1 SDA
-25   HIGH I2C1 SCL
-26    LOW DAC
-27    LOW SPI Screen D/C
+23    LOW SPI Screen D/C
+25    LOW DAC
+26   HIGH I2C1 SDA
+27   HIGH I2C1 SCL
 32    LOW Servo Pitch
 33    LOW Servo Yaw
 34    LOW Interrupt
@@ -149,10 +149,27 @@ PIN Value Usage
 39    LOW ADC2
 ```
 
+### ESP32 Pico D4 vs V3 vs V3-02
+
++------+----------------+---------------+---------------+
+| PIN  | PICO-V3-02     | PICO-V3       | PICO-D4       |
++------+----------------+---------------+---------------+
+| 25   | NC             | NC            | GPIO16  Flash |
+| 27   | GPIO20   Free  | GPIO20   Free | GPIO17  Flash |
+| 28   | SD2/IO9  PSRAM | SD2/IO9  Free | GPIO9   Free  |
+| 29   | SD3/IO10 PSRAM | SD3/IO10 Free | GPIO10  Free  |
+| 32   | SD0/IO7  Free  | SD0/IO7  Free | SD0/IO7 Flash |
+| 33   | SD1/IO8  Free  | SD1/IO8  Free | SD1/IO8 Flash |
+| 35   | NC             | NC            | GPIO18  Free  |
+| 36   | NC             | NC            | GPIO23  Free  |
++------+----------------+---------------+---------------+
+| Size | 7 x 7 x 1.11mm |        7 x 7 x 0.94mm         |
++------+----------------+-------------------------------+
+
 ### ESP32-S3 GPIO assignment
 
 +-----+---------+-----------+---------+----------+----------+------+----------+
-| PIN | ALT0    | ALT1      | ALT2    | ALT3     | Analog   | RTC  | Comments |
+| IO  | ALT0    | ALT1      | ALT2    | ALT3     | Analog   | RTC  | Comments |
 +-----+---------+-----------+---------+----------+----------+------+----------+
 | VDD3P3_RTC                                                                  |
 +-----+---------+-----------+---------+----------+----------+------+----------+

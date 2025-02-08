@@ -13,8 +13,8 @@ if(CONFIG_USE_FAT STREQUAL "y")
     message(STATUS "Creating FAT FileSystem image on ESP-IDF v5.x")
     fatfs_create_spiflash_image(
         storage
-       ${CMAKE_CURRENT_LIST_DIR}/files
-       FLASH_IN_PROJECT
+        ${CMAKE_CURRENT_LIST_DIR}/files
+        FLASH_IN_PROJECT
     )
 else(CONFIG_USE_SPIFFS STREQUAL "y")
     message(STATUS "Creating SPI Flash FileSystem image")

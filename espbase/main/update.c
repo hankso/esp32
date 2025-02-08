@@ -6,6 +6,7 @@
 
 #include "update.h"
 #include "config.h"
+#include "filesys.h"
 
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -16,31 +17,23 @@ static const char *TAG = "ota";
 
 static struct {
     const esp_partition_t *target, *running;
-    esp_app_desc_t info;
     esp_ota_handle_t handle;
     esp_err_t error;
     size_t saved, total;
-} ota_updation_st;
-
-static const char * const ota_img_states[] = {
-    "New", "Pending", "Valid", "Invalid", "Aborted", "Unknown",
-    "Running", "OTANext"
-};
+} ctx;
 
 void update_initialize() {
-    esp_log_level_set(TAG, ESP_LOG_WARN);
     const esp_partition_t
         *running = esp_ota_get_running_partition(),
         *target = esp_ota_get_last_invalid_partition();
     if (!target) target = esp_ota_get_next_update_partition(running);
     if (target) {
-        ota_updation_st.target = target;
-        esp_ota_get_partition_description(target, &ota_updation_st.info);
+        ctx.target = target;
         ota_updation_reset();
     } else {
-        ota_updation_st.error = ESP_ERR_NOT_FOUND;
+        ctx.error = ESP_ERR_NOT_FOUND;
     }
-    ota_updation_st.running = running;
+    ctx.running = running;
 #if defined(CONFIG_APP_ROLLBACK_ENABLE) && !defined(CONFIG_AUTOSTART_ARDUINO)
     esp_image_metadata_t data;
     esp_ota_img_states_t state;
@@ -68,46 +61,41 @@ void update_initialize() {
 }
 
 void ota_updation_reset() {
-    ota_updation_st.handle = 0;
-    ota_updation_st.error = ESP_OK;
-    ota_updation_st.saved = 0;
-    ota_updation_st.total = ota_updation_st.target ? \
-                            ota_updation_st.target->size : OTA_SIZE_UNKNOWN;
+    ctx.handle = 0;
+    ctx.error = ESP_OK;
+    ctx.saved = 0;
+    ctx.total = ctx.target ? ctx.target->size : OTA_SIZE_UNKNOWN;
 }
 
-bool ota_updation_partition(const char *label) {
+bool ota_updation_boot(const char *label) {
     const esp_partition_t *part = esp_partition_find_first(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, label);
     if (!part) {
-        ota_updation_st.error = ESP_ERR_NOT_FOUND;
+        ctx.error = ESP_ERR_NOT_FOUND;
     } else {
-        ota_updation_st.error = esp_ota_set_boot_partition(part);
+        ctx.error = esp_ota_set_boot_partition(part);
     }
-    return ota_updation_st.error == ESP_OK;
+    return ctx.error == ESP_OK;
 }
 
 bool ota_updation_begin(size_t size) {
-    if (!ota_updation_st.target) return false;
-    if (ota_updation_st.handle) return true;
+    if (!ctx.target || ctx.handle) return false;
     ota_updation_reset();
-    size_t part_size = ota_updation_st.target->size;
-    if (size && size != OTA_SIZE_UNKNOWN) {
-        if (size > part_size) {
-            ota_updation_st.error = ESP_ERR_INVALID_SIZE;
+    if (size && size != OTA_SIZE_UNKNOWN && size != OTA_WITH_SEQUENTIAL_WRITES) {
+        if (size > ctx.target->size) {
+            ctx.error = ESP_ERR_INVALID_SIZE;
             return false;
-        } else if (size == part_size) {
+        } else if (size == ctx.target->size) {
             // esp_ota_begin will erase (size/sector + 1) * sector
             // So we either make size one byte smaller than partition size
             // or set size to OTA_SIZE_UNKNOWN which means whole partition
             size--;
         } else {
-            ota_updation_st.total = size;
+            ctx.total = size;
         }
     }
-    ota_updation_st.error = esp_ota_begin(
-        ota_updation_st.target, size, &ota_updation_st.handle);
-    if (ota_updation_st.error) {
-        ota_updation_st.handle = 0;
+    if (( ctx.error = esp_ota_begin(ctx.target, size, &ctx.handle) )) {
+        ctx.handle = 0;
         ESP_LOGE(TAG, "OTA init error: %s", ota_updation_error());
         return false;
     }
@@ -115,164 +103,202 @@ bool ota_updation_begin(size_t size) {
 }
 
 bool ota_updation_write(void *data, size_t size) {
-    if (!ota_updation_st.handle || ota_updation_st.error) return false;
-    ota_updation_st.error = esp_ota_write(ota_updation_st.handle, data, size);
-    if (ota_updation_st.error) {
+    if (!ctx.handle || ctx.error) return false;
+    ctx.error = esp_ota_write(ctx.handle, data, size);
+    if (ctx.error) {
         ESP_LOGE(TAG, "OTA write error: %s", ota_updation_error());
         return false;
     }
-    ota_updation_st.saved += size;
+    ctx.saved += size;
     printf("\rProgress: %4d / %4d KB %3d%%",
-           ota_updation_st.saved / 1024, ota_updation_st.total / 1024,
-           100 * ota_updation_st.saved / (ota_updation_st.total ?: 1));
+           ctx.saved / 1024, ctx.total / 1024,
+           100 * ctx.saved / (ctx.total ?: 1));
     return true;
 }
 
 bool ota_updation_end() {
-    if (!ota_updation_st.handle) return false;
-    printf("\n"); // enter newline after ota_updation_write progress
-    ota_updation_st.error = esp_ota_end(ota_updation_st.handle);
-    if (ota_updation_st.error) {
+    if (!ctx.handle) return false;
+    putchar('\n'); // enter newline after ota_updation_write progress
+    if (( ctx.error = esp_ota_end(ctx.handle) )) {
         ESP_LOGE(TAG, "OTA end error: %s", ota_updation_error());
-        return false;
+    } else if (( ctx.error = esp_ota_set_boot_partition(ctx.target) )) {
+        ESP_LOGI(TAG, "Set boot partition to %s error: %s",
+                 ctx.target->label, ota_updation_error());
+    } else {
+        return true;
     }
-    esp_err_t err = esp_ota_set_boot_partition(ota_updation_st.target);
-    ESP_LOGI(TAG, "Set boot partition to %s %s",
-             ota_updation_st.target->label, esp_err_to_name(err));
-    ota_updation_st.handle = 0;
-    return true;
+    ctx.handle = 0;
+    return false;
 }
 
 const char * ota_updation_error() {
-    return ota_updation_st.error != ESP_OK ? \
-            esp_err_to_name(ota_updation_st.error) : NULL;
+    return ctx.error != ESP_OK ? esp_err_to_name(ctx.error) : NULL;
 }
 
 #ifdef CONFIG_BASE_OTA_FETCH
-extern const uint8_t server_cert_pem_start[] asm("_binary_ca_cert_pem_start");
-extern const uint8_t server_cert_pem_end[]   asm("_binary_ca_cert_pem_end");
-
-static esp_err_t ota_updation_fetch_url(const char *url) {
-    printf("OTA Updation from URL `%s`\n", url);
-    esp_http_client_config_t config;
-    config.url = url;
-    // {
-    //     .url = url
-    //     .cert_pem = (char *)server_cert_pem_start,
-    // };
-    esp_http_client_handle_t client = esp_http_client_init(&config);
-    if (!client) return ESP_FAIL;
-    int rsize;
-    char *buf;
-    size_t
-        hsize = sizeof(esp_image_header_t) + sizeof(esp_image_segment_header_t),
-        asize = sizeof(esp_app_desc_t);
-    esp_err_t err = ECALLOC(buf, 1, 1024 + 1);
-    if (err) return err;
-    if (( err = esp_http_client_open(client, 0) )) goto http_clean;
-    esp_http_client_fetch_headers(client);
-    while (( rsize = esp_http_client_read(client, buf, sizeof(buf) - 1) )) {
-        if (rsize < 0) {
-            err = ESP_FAIL;
-            goto http_clean;
-        } else if (!ota_updation_st.handle) {
-            if (rsize < (hsize + asize)) {
-                err = ESP_FAIL;
-                goto http_clean;
-            }
-            esp_app_desc_t new_info, run_info, ota_info = ota_updation_st.info;
-            const esp_partition_t *running = ota_updation_st.running;
-            memcpy(&new_info, buf + hsize, asize);
-            printf("New app firmware version: %s\n", new_info.version);
-            esp_ota_get_partition_description(running, &run_info);
-            printf("Running firmware version: %s\n", run_info.version);
-            size_t len = sizeof(new_info.version);
-            if (!memcmp(new_info.version, ota_info.version, len) ||
-                !memcmp(new_info.version, run_info.version, len)) {
-                printf("Running version is the same as new app. Skip\n");
-                err = ESP_ERR_INVALID_STATE;
-                goto http_clean;
-            }
-            if (!ota_updation_begin(0)) goto ota_err;
-        }
-        if (!ota_updation_write(buf, rsize)) goto ota_err;
+const char * load_cert(const char *path, size_t *plen) {
+    char *buf = NULL;
+    struct stat st;
+    if (stat(path, &st) || !st.st_size || EMALLOC(buf, st.st_size)) return buf;
+    FILE *fp = fopen(path, "r");
+    size_t len = fp ? fread(buf, sizeof(char), st.st_size, fp) : 0;
+    if (len != st.st_size) {
+        TRYFREE(buf);
+    } else if (plen) {
+        *plen = len;
     }
-    if (!ota_updation_end()) goto ota_err;
+    fclose(fp);
+    return buf;
+}
+
+bool ota_updation_url(const char *url, bool force) {
+    if (!ctx.target || ctx.handle) return false;
+    if (!url) url = Config.app.OTA_URL;
+    if (!strlen(url)) {
+        ctx.error = ESP_ERR_INVALID_ARG;
+        return false;
+    }
+    ESP_LOGI(TAG, "OTA Updation from URL `%s`", url);
+    esp_app_desc_t new_info, ota_info, run_info;
+    size_t
+        hsize = sizeof(esp_image_header_t),
+        ssize = sizeof(esp_image_segment_header_t),
+        asize = sizeof(esp_app_desc_t),
+        vsize = sizeof(new_info.version),
+        tsize = sizeof(new_info.time);
+    char buf[hsize + ssize + asize + 128];
+    esp_http_client_config_t config = {
+        .url = url,
+        .timeout_ms = 2000,
+        .keep_alive_enable = true,
+    };
+#   ifdef CONFIG_BASE_USE_FFS
+    const char *fsmp = CONFIG_BASE_FFS_MP, *fn = "server.pem";
+    char path[strlen(fsmp) + strlen(Config.sys.DIR_DATA) + strlen(fn) + 1];
+    sprintf(path, "%s%s%s", fsmp, Config.sys.DIR_DATA, fn);
+    config.cert_pem = load_cert(path, &config.cert_len);
+    config.skip_cert_common_name_check = config.cert_pem != NULL;
+#   endif
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ctx.error = ESP_FAIL;
+        goto config_clean;
+    }
+    if (( ctx.error = esp_http_client_open(client, 0) )) goto http_clean;
+    esp_http_client_fetch_headers(client);
+    while (1) {
+        int rsize = esp_http_client_read(client, buf, sizeof(buf));
+        if (rsize < 0) {
+            ESP_LOGE(TAG, "SSL data read error");
+            goto ota_error;
+        }
+        if (rsize == 0) {
+            if (esp_http_client_is_complete_data_received(client)) {
+                if (ctx.handle) ESP_LOGD(TAG, "Firmware downloaded");
+            } else if (errno) {
+                ESP_LOGE(TAG, "Firmware downloading error: %d", errno);
+                goto ota_error;
+            }
+            break;
+        }
+        if (!ctx.handle) {
+            if (rsize < (hsize + ssize + asize)) {
+                ESP_LOGE(TAG, "Received header does not fit length: %d", rsize);
+                ctx.error = ESP_ERR_INVALID_SIZE;
+                goto http_clean;
+            }
+            memcpy(&new_info, buf + hsize + ssize, asize);
+            ESP_LOGI(TAG, "New app version: %s %s %s",
+                     new_info.version, new_info.date, new_info.time);
+            if (!esp_ota_get_partition_description(ctx.running, &run_info))
+                ESP_LOGI(TAG, "Running version: %s %s %s",
+                         run_info.version, run_info.date, run_info.time);
+            if (!esp_ota_get_partition_description(ctx.target, &ota_info))
+                ESP_LOGI(TAG, "Another version: %s %s %s",
+                         ota_info.version, ota_info.date, ota_info.time);
+            if (!force && !endswith(url, "?force") && (
+                (
+                    !memcmp(new_info.version, ota_info.version, vsize) &&
+                    !memcmp(new_info.time, ota_info.time, tsize)
+                ) || (
+                    !memcmp(new_info.version, run_info.version, vsize) &&
+                    !memcmp(new_info.time, run_info.time, tsize)
+                )
+            )) {
+                ESP_LOGW(TAG, "New version app is already downloaded. Skip");
+                ctx.error = ESP_ERR_INVALID_STATE;
+                goto http_clean;
+            }
+            if (!ota_updation_begin(0)) goto http_clean;
+        }
+        if (!ota_updation_write(buf, rsize)) goto ota_error;
+    }
+    ota_updation_end();
     goto http_clean;
 
-ota_err:
-    err = ota_updation_st.error;
+ota_error:
+    if (!ctx.error) ctx.error = ESP_FAIL;
+    if (ctx.handle) esp_ota_abort(ctx.handle);
 http_clean:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-    TRYFREE(buf);
-    return err;
+config_clean:
+    TRYFREE(config.cert_pem);
+    return ctx.error == ESP_OK;
+}
+#else
+bool ota_updation_url(const char *u, bool f) {
+    ctx.error = ESP_ERR_NOT_SUPPORTED;
+    return false; NOTUSED(u); NOTUSED(f);
 }
 #endif // CONFIG_BASE_OTA_FETCH
 
-bool ota_updation_url(const char *url) {
-    // TODO: detect remote firmware version if Config.app.OTA_AUTO
-    if (!ota_updation_st.target) return false;
-    if (!url) url = Config.app.OTA_URL;
-    if (!strlen(url)) {
-        ota_updation_st.error = ESP_ERR_INVALID_ARG;
-        return false;
-    }
-#ifndef CONFIG_BASE_OTA_FETCH
-    ota_updation_st.error = ESP_ERR_NOT_SUPPORTED;
-    return false;
-#else
-    return (ota_updation_st.error = ota_updation_fetch_url(url)) == ESP_OK;
-#endif
-}
+static const char * const ota_img_states[] = {
+    "New", "Pending", "Valid", "Invalid", "Aborted",
+    [5] = "Unknown",
+    [6] = "Running",
+    [7] = "OTANext",
+};
 
-static const char * ota_get_img_state(const esp_partition_t *part) {
-    static const esp_partition_t *boot, *next, *error, *running;
-    if (!boot) boot = esp_ota_get_boot_partition();
-    if (!next) next = ota_updation_st.target;
-    if (!error) error = esp_ota_get_last_invalid_partition();
-    if (!running) running = ota_updation_st.running;
-    if (!boot) boot = running;
-    if (part->address == boot->address)
-        return boot->address == running->address ? "Boot *" : "Boot";
-    if (part->address == running->address) return ota_img_states[6];
-    if (next && part->address == next->address) return ota_img_states[7];
-    if (error && part->address == error->address) return ota_img_states[3];
-    esp_ota_img_states_t state;
-    if (esp_ota_get_state_partition(part, &state) || state > 5) {
-        return ota_img_states[5];
-    } else {
-        return ota_img_states[state];
-    }
-}
-
-void ota_partition_info() {
+void ota_updation_info() {
     esp_partition_iterator_t iter = esp_partition_find(
         ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_ANY, NULL);
     if (!iter) {
-        printf("No OTA partition found. Skip");
+        ESP_LOGW(TAG, "No OTA partition found. Skip");
         return;
     }
-    printf("State\tLabel\t" "Offset\t Size\t  " "IDF    Version "
-           "SHA256[:8] Time\n");
-    const esp_partition_t *part;
-    esp_app_desc_t desc;
+    printf("State   Label   Offset   Size     IDF    "
+           "SHA256[:8] Version Build time\n");
     esp_err_t err;
+    esp_app_desc_t desc;
+    esp_ota_img_states_t state;
+    const char *dstr;
+    const esp_partition_t *part, *boot = esp_ota_get_boot_partition();
+    if (!boot) boot = ctx.running;
     while (iter) {
         part = esp_partition_get(iter);
         iter = esp_partition_next(iter);
-        if ( (err = esp_ota_get_partition_description(part, &desc)) ) {
+        if (( err = esp_ota_get_partition_description(part, &desc) )) {
             printf("%-8.7s" "%-8.7s" "%s\n",
                    ota_img_states[3], part->label, esp_err_to_name(err));
             continue;
         }
-        printf("%-8.7s" "%-8.7s" "0x%06X 0x%06X " "%-6.6s %7.7s "
-               "%-8.8s.. %s %s\n",
-               ota_get_img_state(part),
-               part->label, part->address, part->size,
-               desc.idf_ver, desc.version,
-               format_sha256(desc.app_elf_sha256, 8),
-               desc.date, desc.time);
+        if (part->address == boot->address) {
+            dstr = boot->address == ctx.running->address ? "Boot *" : "Boot";
+        } else if (part->address == ctx.running->address) {
+            dstr = ota_img_states[6];
+        } else if (part->address == (ctx.target ? ctx.target->address : 0)) {
+            dstr = ota_img_states[7];
+        } else if (esp_ota_get_state_partition(part, &state) || state > 5) {
+            dstr = ota_img_states[5];
+        } else {
+            dstr = ota_img_states[state];
+        }
+        printf("%-8.7s" "%-8.7s" "0x%06X 0x%06X " "%-6.6s "
+               "%-8.8s.. %7.7s %s %s\n",
+               dstr, part->label, part->address, part->size,
+               desc.idf_ver, format_sha256(desc.app_elf_sha256, 8),
+               desc.version, desc.date, desc.time);
     }
     esp_partition_iterator_release(iter);
 }

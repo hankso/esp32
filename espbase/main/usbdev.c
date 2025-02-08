@@ -135,12 +135,6 @@ static bool usbdev_reconnect() {
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t i) { // overwrite weak
     return hid_descriptor_report; NOTUSED(i); // defined in hidtool.c
 }
-
-static const size_t
-    rlen = hid_descriptor_report_len,
-    blen = CFG_TUD_HID_EP_BUFSIZE;
-#else
-static const size_t rlen = 0, blen = 0;
 #endif
 
 static uint8_t const * config_desc() {
@@ -164,6 +158,11 @@ static uint8_t const * config_desc() {
         itf += 1; // for ITF_NUM_MSC
         total += sizeof(m);
     }
+#ifdef CONFIG_BASE_USB_HID_DEVICE
+    size_t blen = CFG_TUD_HID_EP_BUFSIZE, rlen = hid_descriptor_report_len;
+#else
+    size_t blen = 0, rlen = 0;
+#endif
     if (hid_enabled) {                  // stridx, proto,   EPI, size, poll
         uint8_t h[] = { TUD_HID_DESCRIPTOR(itf, 6, 0, rlen, 0x84, blen, 10 ) };
         memcpy(buf + total, h, sizeof(h));
@@ -539,7 +538,7 @@ static bool send_report(const hid_report_t *rpt, bool intask, uint16_t ms) {
         sent = tud_hid_report(rpt->id, &rpt->keybd, sizeof(rpt->keybd));
         uint8_t mod = rpt->keybd.modifier;
         ESP_LOGI(HID, "keyboard Mod 0x%02X Key %s SENT %d",
-                mod, hid_keycode_str(mod, rpt->keybd.keycode), sent);
+                mod, hid_keycodes_str(mod, rpt->keybd.keycode), sent);
     }
 #ifdef TARGET_IDF_4
 #   ifdef CONFIG_BASE_USB_HID_DEVICE_TASK

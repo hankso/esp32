@@ -720,7 +720,7 @@ extern esp_err_t bt_common_exit(bool clean) {
 
 static const char * BT = "BT HIDD";
 
-static esp_err_t bt_send_report(uint8_t report_type, hid_report_t *rpt) {
+static esp_err_t bt_send_report(uint8_t report_type, const hid_report_t *rpt) {
     if (!ctx.enabled || !ctx.connected) return ESP_ERR_INVALID_STATE;
     if (rpt->id == REPORT_ID_KEYBOARD) {
         return esp_bt_hid_device_send_report(
@@ -730,7 +730,7 @@ static esp_err_t bt_send_report(uint8_t report_type, hid_report_t *rpt) {
             report_type, rpt->id, sizeof(rpt->mouse), (void *)&rpt->mouse);
     } else if (rpt->id == REPORT_ID_DIAL) {
         return esp_bt_hid_device_send_report(
-            report_type, rpt->id, sizeof(rpt->dial), rpt->dial);
+            report_type, rpt->id, sizeof(rpt->dial), (void *)rpt->dial);
     }
     return ESP_ERR_INVALID_ARG;
 }
@@ -897,7 +897,7 @@ static const esp_ble_adv_data_t ble_adv_data = {
     .include_txpower        = true,
     .min_interval           = 0x0006, // 7.5ms
     .max_interval           = 0x0010, // 20ms
-    .appearance             = ESP_HID_APPEARANCE_GENERIC,
+    .appearance             = ESP_HID_APPEARANCE_GENERIC, // 0x03C0
     .manufacturer_len       = 0,
     .p_manufacturer_data    = NULL,
     .service_data_len       = 0,
@@ -917,7 +917,7 @@ static const esp_ble_adv_params_t hidd_adv_params = {
     .adv_filter_policy  = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
 
-static esp_err_t ble_send_report(hid_report_t *rpt) {
+static esp_err_t ble_send_report(const hid_report_t *rpt) {
     if (!ctx.enabled || !ctx.connected) return ESP_ERR_INVALID_STATE;
     if (rpt->id == REPORT_ID_KEYBOARD) {
         return esp_hidd_dev_input_set(
@@ -927,7 +927,7 @@ static esp_err_t ble_send_report(hid_report_t *rpt) {
             ctx.hiddev, 0, rpt->id, (void *)&rpt->mouse, sizeof(rpt->mouse));
     } else if (rpt->id == REPORT_ID_DIAL) {
         return esp_hidd_dev_input_set(
-            ctx.hiddev, 0, rpt->id, rpt->dial, sizeof(rpt->dial));
+            ctx.hiddev, 0, rpt->id, (void *)rpt->dial, sizeof(rpt->dial));
     }
     return ESP_ERR_INVALID_ARG;
 }
@@ -1010,7 +1010,7 @@ extern esp_err_t ble_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_BLE_HID_DEVICE
 
-bool hidb_send_report(hid_report_t *rpt) {
+bool hidb_send_report(const hid_report_t *rpt) {
     bool sent = false;
 #   ifdef CONFIG_BASE_BT_HID_DEVICE
     if (HAS_BT(ctx.mode))

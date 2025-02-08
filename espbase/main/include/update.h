@@ -14,16 +14,17 @@ extern "C" {
 
 void update_initialize();
 
-void ota_updation_reset();
-bool ota_updation_begin(size_t);
+bool ota_updation_url(const char *, bool);  // fetch firmware from URL
+bool ota_updation_boot(const char *);       // set boot partition
+void ota_updation_info();                   // print OTA status
+
+void ota_updation_reset();                  // reset updation context
+
+bool ota_updation_begin(size_t);            // accept OTA_SIZE_UNKNOWN
 bool ota_updation_write(void *, size_t);
 bool ota_updation_end();
-bool ota_updation_url(const char *);
-bool ota_updation_partition(const char *);
 
-const char * ota_updation_error();
-
-void ota_partition_info();
+const char * ota_updation_error();          // get current error string
 
 #ifdef __cplusplus
 }

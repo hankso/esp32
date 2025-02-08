@@ -10,6 +10,7 @@
 import os
 import re
 import csv
+import ssl
 import sys
 import glob
 import gzip
@@ -21,6 +22,7 @@ import tempfile
 import posixpath
 import os.path as op
 from io import StringIO
+from wsgiref.simple_server import WSGIServer
 
 # requirements.txt: bottle, requests
 try:
@@ -39,6 +41,7 @@ __cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
 __partcsv__ = op.join(__basedir__, 'partitions.csv')
 __nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
 __nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
+__certpem__ = op.join(__basedir__, 'files', 'data', 'server.pem')
 __lvgldir__ = op.join(__basedir__, 'managed_components', 'lvgl__lvgl')
 __distdir__ = tuple(filter(
     lambda p: op.isdir(p) and os.listdir(p),
@@ -48,6 +51,9 @@ __distdir__ = tuple(filter(
         op.join(__basedir__, 'files'),
     ]
 ))[0]
+
+
+PORT = 9999  # default
 
 
 def _random_id(len=8):
@@ -67,9 +73,9 @@ def _project_name():
         return 'testing'
 
 
-def _firmware_url(filename='app.bin', port=8080):
+def _firmware_url(filename='app.bin', port=None):
     host = socket.gethostbyname(socket.gethostname())
-    return posixpath.join('http://%s:%d' % (host, port), filename)
+    return posixpath.join('https://%s:%d' % (host, port or PORT), filename)
 
 
 def _process_nvs(args):
@@ -119,11 +125,12 @@ def genid(args):
     if op.exists(args.tpl):
         with open(args.tpl, 'r') as f:
             prefix = _project_name()
-            data = f.read().replace('{NAME}', prefix)
-            data = data.replace('{UID}', _random_id(args.len))
-            data = data.replace('{URL}', _firmware_url(prefix + '.bin'))
-            data = data.replace('\n\n', '\n')   # strip null lines
-            data = data.replace(' ', '')        # strip white spaces
+            data = f.read() \
+                .replace('{NAME}', prefix) \
+                .replace('{UID}', _random_id(args.len)) \
+                .replace('{URL}', _firmware_url(prefix + '.bin', args.port)) \
+                .replace('\n\n', '\n') \
+                .replace(' ', '')
     else:
         data = _random_id(args.len)
     if args.pack and 'IDF_PATH' in os.environ:
@@ -191,9 +198,9 @@ def font_icon(args):
 
 def font_postproc(fn):
     with open(fn, 'r', encoding='utf8') as f:
-        content = f.read()
-    content = content.replace('lvgl/lvgl.h', 'lvgl.h')
-    content = content.replace('const lv_font_t', 'lv_font_t')
+        content = f.read() \
+            .replace('lvgl/lvgl.h', 'lvgl.h') \
+            .replace('const lv_font_t', 'lv_font_t')
     if '.fallback' not in content:
         content = content.replace(
             '.line_height', '.fallback = LV_FONT_DEFAULT,\n    .line_height')
@@ -214,7 +221,7 @@ def genfont(args):
     if not symbols:
         return print('No chinese characters found. Skip')
     if not op.exists(args.font):
-        return print('Font %s not found' % args.font)
+        return print('Font file `%s` not found' % args.font)
     args.out = font_output(args)
     cmd = (
         'lv_font_conv --bpp %d --size %d --no-kerning --format %s -o "%s"'
@@ -230,7 +237,10 @@ def genfont(args):
 
 
 def _relpath(p, ref='.', strip=False):
-    p = op.relpath(p, ref)
+    try:
+        p = op.relpath(p, ref)
+    except Exception:
+        pass
     if not strip:
         return p
     if (len(p.split(op.sep)) > 3 and len(p) > 30) or len(p) > 80:
@@ -368,26 +378,42 @@ def static_factory(filename, root, auto=True, fileman=False, redirect=False):
         else:
             static_factory.tpl = None
     if not fileman or not static_factory.tpl:
-        return bottle.HTTPError(404, 'Cannot serve directory')
+        return bottle.HTTPError(404, 'Could not serve directory')
     return static_factory.tpl.replace('%ROOT%', bottle.request.path)
+
+
+class SSLServer(WSGIServer):
+    def get_request(self):
+        client, addr = self.socket.accept()
+        if client.recv(1, socket.MSG_PEEK) == b'\x16':  # TLS client hello
+            app = self.get_app()
+            if hasattr(app, 'ssl_opt'):
+                client = ssl.wrap_socket(client, **app.ssl_opt)
+            self.base_environ['HTTPS'] = 'yes'
+        else:
+            self.base_environ['HTTPS'] = 'no'
+        return client, addr
 
 
 def webserver(args):
     '''
     bottle BaseRequest arguments outline:
 
-        [CGI FieldStorage] -> bottle.request.POST
-                             /          |
-                           |/           V
+                    [CGI FieldStorage]
+                             |
+                             V
+                    bottle.request.POST
+                    |                 |
+                    V                 V
         bottle.request.files  bottle.request.forms
-                                        |
-                                        +---------> bottle.request.params
-                                        |
+                                      |
+                                      +---> bottle.request.params
+                                      V
         [URL Query String] -> bottle.request.query
     '''
     args.root = op.abspath(args.root)
-    if not (op.exists(args.root)):
-        return print('Cannot serve at `%s`: dirctory not found' % args.root)
+    if not op.exists(args.root):
+        return print('Could not serve at `%s`: no such directory' % args.root)
     if not args.quiet:
         print('WebServer running at `%s`' % _relpath(args.root, strip=True))
 
@@ -402,6 +428,8 @@ def webserver(args):
             filename, args.root, bottle.request.query.get('auto', True))
 
     app = bottle.Bottle()
+    if op.exists(args.certfile):
+        app.ssl_opt = {'server_side': True, 'certfile': args.certfile}
     if not args.static:
         api = bottle.Bottle()
         try:
@@ -414,7 +442,7 @@ def webserver(args):
             api.route('/cmd', 'POST', lambda: 'Unknown command')
             api.route('/update', 'POST', edit_upload)
             if not args.quiet:
-                print('Will simulate ESP32 APIs: cmd/edit/config/update etc.')
+                print('Simulate ESP32 APIs: cmd/edit/config/update etc.')
         api.route('/edit', 'GET', lambda: edit_get(args.root))
         api.route('/editu', 'POST', edit_upload)
         api.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
@@ -424,7 +452,8 @@ def webserver(args):
         app.mount('/api', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/<filename:path>', 'GET', static_assets)
-    bottle.run(app, quiet=args.quiet, host=args.host, port=args.port)
+    bottle.run(app, host=args.host, port=args.port, quiet=args.quiet,
+               debug=True, server='wsgiref', server_class=SSLServer)
 
 
 def make_parser():
@@ -440,7 +469,9 @@ def make_parser():
     sparser.add_argument(
         '-H', '--host', default='0.0.0.0', help='Host address to listen on')
     sparser.add_argument(
-        '-P', '--port', type=int, default=8080, help='default port 8080')
+        '-P', '--port', type=int, default=PORT, help='default port %d' % PORT)
+    sparser.add_argument(
+        '--certfile', default=__certpem__, help='cert file for HTTPS server')
     sparser.add_argument(
         '--esphost', default='10.0.0.112', help='IP address of ESP chip')
     sparser.add_argument(
@@ -465,7 +496,7 @@ def make_parser():
 
     sparser = subparsers.add_parser(
         'genfont', help='Scan .c files and generate font for LVGL')
-    sparser.add_argument('font', help='input font file (TTL/WOFF)')
+    sparser.add_argument('font', help='input font file (TTF/WOFF)')
     sparser.add_argument('--bin', action='store_true', help='output binary')
     sparser.add_argument('--bpp', type=int, default=1, help='bits per pixel')
     sparser.add_argument(
