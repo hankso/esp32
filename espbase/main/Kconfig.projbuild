@@ -13,7 +13,7 @@ menu "ESP Base Configuration"
         default y if IDF_TARGET_ESP32S3
         select TINYUSB
         help
-            Enable usbmode_xxx functions. Add about 62.7Kb to firmware.
+            Enable usbmode_xxx functions (~60KB)
     if BASE_USE_USB
         config BASE_USB_CDC_HOST
             bool "Enable USB CDC host mode"
@@ -83,8 +83,6 @@ menu "ESP Base Configuration"
         config BASE_LED_INDICATOR
             bool "Enable IOT component led indicator"
             default y
-            help
-                Add about 27.4KB to firmware.
     endif
 
     menuconfig BASE_USE_UART
@@ -139,7 +137,7 @@ menu "ESP Base Configuration"
         bool "Enable Screen" if BASE_USE_I2C || BASE_USE_SPI
         default y
         help
-            Enable scn_xxx functions. Add about 100KB to firmware.
+            Enable scn_xxx functions (+100KB)
     if BASE_USE_SCREEN
         choice
             prompt "Select Screen interface"
@@ -184,7 +182,7 @@ menu "ESP Base Configuration"
     menuconfig BASE_USE_GPIOEXP
         bool "Enable GPIO Expander" if BASE_USE_I2C || BASE_USE_SPI
         help
-            Enable gexp_xxx functions. Add about 19KB to firmware.
+            Enable gexp_xxx functions (~19KB)
     if BASE_USE_GPIOEXP
         config BASE_GPIOEXP_I2C
             bool "Enable GPIO Expander on I2C"
@@ -225,18 +223,13 @@ menu "ESP Base Configuration"
         bool "Enable Button input"
         select BASE_GPIO_NUMBER
         default y
-    if BASE_USE_BTN
-        config BASE_BTN_ACTIVE_HIGH
-            bool "Button active high"
-            default n
-    endif
 
     menuconfig BASE_USE_ADC
         bool "Enable ADC input"
         select BASE_GPIO_NUMBER
         default y
         help
-            Enable adc_xxx function. Add about 4.6KB to firmware.
+            Enable adc_xxx functions (~5KB)
     if BASE_USE_ADC
         config BASE_ADC_MULTISAMPLING
             int "ADC raw value multi-sampling to filter noise"
@@ -263,46 +256,46 @@ menu "ESP Base Configuration"
         select BASE_GPIO_NUMBER
         default n
         help
-            Enable dac_xxx functions. Add about 2.5KB to firmware.
+            Enable dac_xxx functions (~3KB)
 
     config BASE_USE_TPAD
         bool "Enable touch pad"
         select BASE_GPIO_NUMBER
         default n
         help
-            Enable touch_xxx functions.
+            Enable touch_xxx functions
 
     config BASE_USE_TSCN
         bool "Enable touch screen"
         default n
         help
-            Enable tscn_probe function.
+            Enable tscn_probe function
 
     config BASE_USE_KNOB
         bool "Enable Knob input"
         select BASE_GPIO_NUMBER
         default y
-        help
-            Add about 2.3KB to firmware.
 
     config BASE_USE_SERVO
         bool "Enable Servo control"
         select BASE_GPIO_NUMBER
         default y
         help
-            Enable pwm_xxx_degree functions. Add about 1.5KB to firmware.
+            Enable pwm_xxx_degree functions (~2KB)
 
     config BASE_USE_BUZZER
         bool "Enable Buzzer output"
         select BASE_GPIO_NUMBER
         default y
         help
-            Enable pwm_xxx_tone functions. Add about 1.1KB to firmware.
+            Enable pwm_xxx_tone functions (~1KB)
 
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE & Bluedroid host"
         select BT_ENABLED
         default y
+        help
+            Enable btmode_xxx functions (465-600KB)
     if BASE_USE_BT
         config BASE_BT_HID_DEVICE
             bool "Enable BT HID device mode"
@@ -323,6 +316,8 @@ menu "ESP Base Configuration"
     menuconfig BASE_USE_WIFI
         bool "Enable WiFi STA & AP"
         default y
+        help
+            Enable wifi_xxx functions (~400KB)
     if BASE_USE_WIFI
         config BASE_AP_CHANNEL
             int "Channel of AP mode"
@@ -338,13 +333,13 @@ menu "ESP Base Configuration"
             bool "Enable OTA updation from URL"
             default n
             help
-                Enable ota_updation_url function. Add about 140KB to firmware.
+                Enable ota_updation_url function (~140KB)
 
         config BASE_USE_WEBSERVER
             bool "Enable web server on port 80"
             default y
             help
-                Enable server_loop_xxx functions. Add about 80KB to firmware.
+                Enable server_loop_xxx functions (~40KB)
     endif
 
     menuconfig BASE_USE_FFS
@@ -357,10 +352,10 @@ menu "ESP Base Configuration"
 
         choice
             prompt "Select Flash FileSystem Format"
-            default BASE_FFS_SPIFFS
+            default BASE_FFS_SPI
             config BASE_FFS_FAT
                 bool "Storage partition is Fat FileSystem"
-            config BASE_FFS_SPIFFS
+            config BASE_FFS_SPI
                 bool "Storage partition is SPI Flash FileSystem"
         endchoice
     endif
@@ -380,20 +375,20 @@ menu "ESP Base Configuration"
         depends on BASE_USE_I2C
         default y
         help
-            Enable als_xxx functions. Add about 1.0KB to firmware.
+            Enable als_xxx functions (~1KB)
 
     config BASE_VLX_SENSOR
         bool "Enable VLX distance measurement input"
         depends on BASE_USE_I2C
         default n
         help
-            Enable vlx_probe function. Add about 5.0KB to firmware.
+            Enable vlx_probe function (~5KB)
 
     config BASE_USE_CONSOLE
         bool "Enable REPL console service"
         default y
         help
-            Enable console_xxx and commands. Add about 110KB to firmware.
+            Enable console_xxx and commands (+110KB)
 
     config BASE_GPIO_NUMBER
         bool "Config GPIO number"

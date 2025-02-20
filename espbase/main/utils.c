@@ -32,18 +32,29 @@ uint64_t asleep(uint32_t ms, uint64_t next) {
 
 bool strbool(const char *str) {
     if (!str) return false;
-    return !strcmp(str, "1") || !strcmp(str, "y") || !strcmp(str, "on");
+    return !strcmp(str, "1") || !strcasecmp(str, "y") || !strcasecmp(str, "on");
+}
+
+char * strtrim(char *str, const char *chars) {
+    size_t slen = strlen(str ?: "");
+    if (!slen || !chars) return str;
+    size_t head = strspn(str, chars);
+    size_t tail = slen - 1;
+    while (tail > head && strchr(chars, str[tail])) { tail--; }
+    str[++tail] = '\0';
+    return str + head;
 }
 
 bool endswith(const char *str, const char *tail) {
     if (!str || !tail) return false;
-    size_t len = MAX(strlen(str) - strlen(tail), 0);
-    return !strcmp(str + len, tail);
+    int offset = strlen(str) - strlen(tail);
+    return !strcmp(str + MAX(offset, 0), tail);
 }
 
 bool startswith(const char *str, const char *head) {
-    if (!str || !head || strlen(str) < strlen(head)) return false;
-    return !strncmp(str, head, strlen(head));
+    if (!str || !head) return false;
+    size_t headlen = strlen(head);
+    return strlen(str) < headlen ? false : !strncmp(str, head, headlen);
 }
 
 bool parse_int(const char *str, int *var) {
@@ -85,10 +96,6 @@ size_t parse_all(const char *str, int *var, size_t size) {
     return idx;
 }
 
-char * cast_away_const(const char *str) {
-    return (char *)(void *)(const void *)str;
-}
-
 static uint8_t numdigits(int n) {
     uint8_t i = !n;
     while (n) { n /= 10; i++; }
@@ -97,7 +104,7 @@ static uint8_t numdigits(int n) {
 
 static char hexdigits(uint8_t v) {
     if (v < 10) return v + '0';
-    if (v > 15) return 'Z';
+    if (v > 15) return hexdigits(v % 16);
     return v - 10 + 'A';
 }
 
@@ -229,10 +236,6 @@ const char * format_binary(uint64_t num, size_t bytes) {
     return buf;
 }
 
-// Note: format_size format string into static buffer. Therefore you don't
-// need to free the buffer after logging/strcpy etc. But you must save the
-// result before calling format_size once again, because the buffer will be
-// reused and overwriten.
 const char * format_size(uint64_t bytes, bool inbit) {
     static char buffer[16]; // xxxx.xx u\0
     static const char * units[] = { " ", "K", "M", "G", "T", "P" };
@@ -346,20 +349,25 @@ void version_info() {
 
 void memory_info() {
     static const uint32_t caps[] = {
-        MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL,
-        MALLOC_CAP_DMA, MALLOC_CAP_EXEC, MALLOC_CAP_SPIRAM
+        MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM,
+        MALLOC_CAP_DMA, MALLOC_CAP_EXEC
     };
     static const char * const names[] = {
-        "DEFAULT", "INTERN", "DMA", "EXEC", "SPI RAM",
+        "DEFAULT", "INTERN", "SPI RAM", "DMA", "EXEC"
     };
     multi_heap_info_t info;
-    printf("%-7s %8s %8s %4s\n", "Type", "Total", "Avail", "Used");
+    printf("%-7s %8s %8s %4s %4s %s\n",
+           "Type", "Total", "Avail", "Used", "Frag", "Caps");
     LOOPN(i, LEN(caps)) {
         heap_caps_get_info(&info, caps[i]);
-        size_t total = info.total_free_bytes + info.total_allocated_bytes;
+        size_t tfree = info.total_free_bytes;
+        size_t tfrag = tfree - info.largest_free_block;
+        size_t total = tfree + info.total_allocated_bytes;
         printf("%-7s %8s ", names[i], format_size(total, false));
-        printf("%8s ", format_size(info.total_free_bytes, false));
-        printf("%3d%%\n", total ? 100 * info.total_allocated_bytes / total : 0);
+        printf("%8s ", format_size(tfree, false));
+        printf("%3d%% ", total ? 100 * info.total_allocated_bytes / total : 0);
+        printf("%3d%% ", tfree ? 100 * tfrag / tfree : 0);
+        printf("0x%08x\n", caps[i]);
     }
 }
 

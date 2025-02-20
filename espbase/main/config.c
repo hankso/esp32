@@ -23,6 +23,7 @@ config_t Config = {
         .DIR_DATA  = "/data/",
         .DIR_DOCS  = "/docs/",
         .DIR_HTML  = "/www/",
+        .BTN_HIGH  = "0",
         .USB_MODE  = "HID_DEVICE",
         .BT_MODE   = "BLE_HIDD",
         .BT_SCAN   = "1",
@@ -42,6 +43,7 @@ config_t Config = {
         .WS_PASS   = "",
         .HTTP_NAME = "",
         .HTTP_PASS = "",
+        .AUTH_BASE = "0",
     },
     .app = {
         .MDNS_RUN  = "1",
@@ -77,6 +79,7 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"sys.path.data",   &Config.sys.DIR_DATA,   NULL},
     {"sys.path.docs",   &Config.sys.DIR_DOCS,   NULL},
     {"sys.path.html",   &Config.sys.DIR_HTML,   NULL},
+    {"sys.btn.high",    &Config.sys.BTN_HIGH,   NULL},
     {"sys.usb.mode",    &Config.sys.USB_MODE,   NULL},
     {"sys.bt.mode",     &Config.sys.BT_MODE,    NULL},
     {"sys.bt.scan",     &Config.sys.BT_SCAN,    NULL},
@@ -94,6 +97,7 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.ws.pass",     &Config.web.WS_PASS,    NULL},
     {"web.http.name",   &Config.web.HTTP_NAME,  NULL},
     {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
+    {"web.auth.base",   &Config.web.AUTH_BASE,  NULL},
 
     {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
@@ -179,7 +183,9 @@ void config_list() {
 static void set_config_callback(const char *key, cJSON *item) {
     if (!cJSON_IsString(item)) {
         if (!cJSON_IsObject(item)) {
-            ESP_LOGE(TAG, "Invalid type of `%s`", cJSON_Print(item));
+            char *json = cJSON_Print(item);
+            if (json) ESP_LOGE(TAG, "Invalid type of `%s`", json);
+            TRYFREE(json);
         }
         return;
     }
@@ -231,9 +237,9 @@ char * config_dumps() {
     LOOPN(i, rwlen) {
         cJSON_AddStringToObject(obj, rwlst[i].key, *rwlst[i].value);
     }
-    char *string = cJSON_PrintUnformatted(obj);
+    char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
-    return string;
+    return json;
 }
 
 /******************************************************************************

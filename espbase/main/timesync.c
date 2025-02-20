@@ -12,41 +12,38 @@
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/semphr.h"
-
 /* Time Sync timestamp helper functions */
 
-struct timespec * get_systime() {
+const struct timespec * get_systime() {
     static struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return &ts;
 }
 
-struct timeval * get_systime_us() {
+const struct timeval * get_systime_us() {
     static struct timeval ts;
     gettimeofday(&ts, NULL);
     return &ts;
 }
 
-double get_timestamp(struct timespec *ts) {
+double get_timestamp(const struct timespec *ts) {
     ts = (ts != NULL) ? ts : get_systime();
     return ts->tv_sec + (double)ts->tv_nsec / TIMESTAMP_NS; // nanosecond
 }
 
-double get_timestamp_us(struct timeval *ts) {
+double get_timestamp_us(const struct timeval *ts) {
     ts = (ts != NULL) ? ts : get_systime_us();
     return ts->tv_sec + (double)ts->tv_usec / TIMESTAMP_US; // microsecond
 }
 
-const char * format_datetime(struct timespec *ts) {
+const char * format_datetime(const struct timespec *ts) {
     static char buf[18]; // xxxx-xx-xx-xxxxxx\0
     ts = (ts != NULL) ? ts : get_systime();
     strftime(buf, sizeof(buf), "%F-%H%M%S", localtime(&ts->tv_sec));
     return buf;
 }
 
-const char * format_datetime_us(struct timeval *ts) {
+const char * format_datetime_us(const struct timeval *ts) {
     struct timespec tmp;
     ts = (ts != NULL) ? ts : get_systime_us();
     tmp.tv_sec = ts->tv_sec;
@@ -54,7 +51,7 @@ const char * format_datetime_us(struct timeval *ts) {
     return format_datetime(&tmp);
 }
 
-const char * format_timestamp(struct timespec *ts) {
+const char * format_timestamp(const struct timespec *ts) {
     static char buf[13]; // xx:xx:xx.xxx\0
     ts = (ts != NULL) ? ts : get_systime();
     strftime(buf, 9, "%T", localtime(&ts->tv_sec));
@@ -63,7 +60,7 @@ const char * format_timestamp(struct timespec *ts) {
     return buf;
 }
 
-const char * format_timestamp_us(struct timeval *ts) {
+const char * format_timestamp_us(const struct timeval *ts) {
     struct timespec tmp;
     ts = (ts != NULL) ? ts : get_systime_us();
     tmp.tv_sec = ts->tv_sec;
@@ -92,7 +89,7 @@ double set_timestamp_us(struct timeval *ts, double timestamp) {
 }
 
 struct timespec * get_timeout(uint32_t ms, struct timespec *tout) {
-    struct timeval *now = get_systime_us();
+    const struct timeval *now = get_systime_us();
     uint64_t nsec = (ms % TIMESTAMP_MS) * TIMESTAMP_M2N + now->tv_usec * TIMESTAMP_U2N;
     if (tout) {
         tout->tv_sec = now->tv_sec + ms / TIMESTAMP_MS + nsec / TIMESTAMP_NS;
@@ -102,7 +99,7 @@ struct timespec * get_timeout(uint32_t ms, struct timespec *tout) {
 }
 
 struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout) {
-    struct timeval *now = get_systime_us();
+    const struct timeval *now = get_systime_us();
     uint64_t nsec = now->tv_sec * TIMESTAMP_NS + now->tv_usec * TIMESTAMP_U2N;
     nsec += ns - (nsec & ns);
     if (tout) {
@@ -133,6 +130,31 @@ static void log_error(const char *tag, const int sock, const char *msg) {
     }
 }
 
+#ifdef CONFIG_LWIP_IPV6
+#   define ADDRSTRLEN (INET6_ADDRSTRLEN + 6) // 1 for ':' and 5 for 0-65535
+#else
+#   define ADDRSTRLEN (INET_ADDRSTRLEN + 6)
+#endif
+
+const char * getaddrname(int fd, bool local) {
+    static char ret[ADDRSTRLEN];
+#ifdef CONFIG_LWIP_IPV6
+    struct sockaddr_in6 addr;
+#else
+    struct sockaddr_in addr;
+#endif
+    socklen_t len = sizeof(addr);
+    struct sockaddr *ptr = (struct sockaddr *)&addr;
+    int rc = local ? getsockname(fd, ptr, &len) : getpeername(fd, ptr, &len);
+    if (rc < 0) return "unknown";
+#ifdef CONFIG_LWIP_IPV6
+    sprintf(ret, "%s:%d", inet6_ntoa(addr.sin6_addr), ntohs(addr.sin6_port));
+#else
+    sprintf(ret, "%s:%d", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
+#endif
+    return ret;
+}
+
 // Convert timesync packtype to bytearray and vice versa
 static union d2b_t {
     TIMESYNC_PACKTYPE d;
@@ -150,23 +172,14 @@ typedef struct {
     double offset;  // average value: sum(offsets) / count
     double rtript;  // round-trip transfer time
     uint32_t count; // synchronization times counter
+    char addr[ADDRSTRLEN];          // socket remote address
     timesync_result_t results[3];   // latest three results
-    char addr[INET_ADDRSTRLEN + 6]; // socket remote address
 } timesync_client_t;
 
 typedef struct {
     const char *host;
     uint16_t port;
 } timesync_addr_t;
-
-const char * getsockaddr(int fd) {
-    static char ret[INET_ADDRSTRLEN + 6];
-    struct sockaddr_in raddr;
-    socklen_t len = sizeof(raddr);
-    if (getpeername(fd, (struct sockaddr *)&raddr, &len) < 0) return "unknown";
-    sprintf(ret, "%s:%d", inet_ntoa(raddr.sin_addr), ntohs(raddr.sin_port));
-    return ret;
-}
 
 static const char * TSS = "TSS";
 static struct pollfd pollfds[TIMESYNC_CLIENTS_NUM + 1];
@@ -214,7 +227,7 @@ static void timesync_server_add(int fd) {
             setsockopt(fd, SOL_SOCKET,  SO_SNDTIMEO, (void *)&timeout, tlen) ||
             setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&nodelay, nlen)
         ) break;
-        strcpy(clients[i].addr, getsockaddr(fd));
+        strcpy(clients[i].addr, getaddrname(fd, false));
         ESP_LOGI(TSS, "client %s connected", clients[i].addr);
         clients[i].fd = pollfds[i].fd = fd;
         pollfds[i].events = POLLIN;
@@ -224,7 +237,7 @@ static void timesync_server_add(int fd) {
     lock_release();
     if (fd) { // not added
         close(fd);
-        ESP_LOGW(TSS, "client %s rejected", getsockaddr(fd));
+        ESP_LOGW(TSS, "client %s rejected", getaddrname(fd, false));
     }
 }
 
@@ -443,7 +456,7 @@ int timesync_client_init(const char *host, uint16_t port) {
     } else if (connect(client.fd, (struct sockaddr *)&raddr, sizeof(raddr))) {
         log_error(TSC, client.fd, "connect");
     } else {
-        strcpy(client.addr, getsockaddr(client.fd));
+        strcpy(client.addr, getaddrname(client.fd, false));
         ESP_LOGI(TSC, "using server %s", client.addr);
         return 0;
     }

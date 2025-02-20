@@ -72,7 +72,7 @@ export function setConfig(cfg, opt = {}) {
 export function listDir(path = '', opt = {}) {
     return merge(opt, {
         url: 'edit',
-        params: { list: path },
+        params: { path, list: '' },
     }).then(resp => {
         resp.data.forEach(node => {
             node.name = node.name.replace(new RegExp(`^${path}`), '')
@@ -85,29 +85,29 @@ export function readFile(path, download = false, opt = {}) {
     return merge(opt, {
         url: 'edit',
         responseType: 'text', // raw file: do NOT parse to json
-        params: download ? { path, download } : { path },
+        params: download ? { path, download: '' } : { path },
     })
 }
 
 export function createPath(path, isdir = true, opt = {}) {
     return merge(opt, {
-        url: 'editc',
+        url: 'edit',
         method: 'PUT',
         params: { path, type: isdir ? 'dir' : 'file' },
     })
 }
-export function deletePath(path, opt = {}) {
+export function deletePath(path, isdir = false, opt = {}) {
     return merge(opt, {
-        url: 'editd',
+        url: 'edit',
         method: 'DELETE',
-        params: { path },
+        params: { path, type: isdir ? 'dir' : 'file' },
     })
 }
 
 export function uploadFile(filename, file, opt = {}) {
     return toFormData(file, filename).then(data =>
         merge(opt, {
-            url: 'editu',
+            url: 'edit',
             method: 'POST',
             params: { overwrite: '' },
             timeout: 0,
@@ -145,9 +145,9 @@ export function execCommand(cmd, opt = {}) {
             return Promise.reject({ message: `Invalid type ${ctype}` })
     }
     return merge(opt, {
-        url: 'cmd',
+        url: 'exec',
         method: 'POST',
-        data: `exec=${cmd.trim().replace('helpe', 'help')}`,
+        data: `cmd=${cmd.trim().replace('helpe', 'help')}`,
     })
 }
 

@@ -16,21 +16,21 @@
 #define ESP_ERR_BTMODE_NOT_INITED       ( ESP_ERR_BTMODE_BASE + 2 )
 #define ESP_ERR_BTMODE_PENDING_REBOOT   ( ESP_ERR_BTMODE_BASE + 3 )
 
-static const char * TAG = "BT";
+static const char * TAG = "BTMode";
 static int state = -ESP_ERR_BTMODE_NOT_INITED;
 
 /******************************************************************************
  * BTMode APIs
  */
 
-// defined in btdev.c
+// Implemented in btdev.c
 void btdev_status(btmode_t);
 esp_err_t bt_hidd_init(btmode_t);
 esp_err_t bt_hidd_exit(btmode_t);
 esp_err_t ble_hidd_init(btmode_t);
 esp_err_t ble_hidd_exit(btmode_t);
 
-// defined in bthost.c
+// Implemented in bthost.c
 void bthost_status(btmode_t);
 esp_err_t ble_hidh_init(btmode_t);
 esp_err_t ble_hidh_exit(btmode_t);

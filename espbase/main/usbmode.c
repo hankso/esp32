@@ -50,7 +50,7 @@ static esp_err_t serial_jtag_exit() {
  * USBMode APIs
  */
 
-// private functions defined in usbhost.c
+// Implemented in usbhost.c
 void usbhost_status(usbmode_t mode);
 esp_err_t cdc_host_init();
 esp_err_t cdc_host_exit();
@@ -59,7 +59,7 @@ esp_err_t msc_host_exit();
 esp_err_t hid_host_init();
 esp_err_t hid_host_exit();
 
-// private functions defined in usbdev.c
+// Implemented in usbdev.c
 void usbdev_status(usbmode_t mode);
 esp_err_t cdc_device_init();
 esp_err_t cdc_device_exit();

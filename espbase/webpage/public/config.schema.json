@@ -17,6 +17,11 @@
       "description": "Directory to static webpage files",
       "type": "string"
     },
+    "sys.btn.high": {
+      "description": "Button active high",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
     "sys.usb.mode": {
       "description": "Select USB work mode",
       "enum": [
@@ -123,6 +128,11 @@
         { "pattern": "^[0-9a-zA-Z]{8,}$" },
         { "maxLength": 0 }
       ]
+    },
+    "web.auth.base": {
+      "description": "Use basic HTTP authorization method (base64)",
+      "type": "string",
+      "pattern": "^[01yn]?$"
     },
     "app.mdns.run": {
       "description": "Enable mDNS server",

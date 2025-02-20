@@ -7,6 +7,6 @@ uid,            data,       string,     {UID}
 config,         namespace,
 net.sta.ssid,   data,       string,     hank
 net.sta.pass,   data,       string,     tbcbstxp
-web.http.name,  data,       string,     hankso
+web.http.name,  data,       string,     hank
 web.http.pass,  data,       string,     16011106
 app.ota.url,    data,       string,     {URL}

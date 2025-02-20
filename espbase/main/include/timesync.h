@@ -29,15 +29,15 @@ extern "C" {
 // time since some unspecified starting point. This clock is not affected by
 // discontinuous jumps (manually changes the clock, by adjtime(3) and NTP).
 // It provides access to a raw hardware-based time.
-struct timespec * get_systime();
+const struct timespec * get_systime();
 
 // Get system time by `gettimeofday`.
-struct timeval * get_systime_us();
+const struct timeval * get_systime_us();
 
 // Parse timespec and convert it to timetamp in seconds.
 // Use system time if argument ts is NULL/0.
-double get_timestamp(struct timespec *ts);
-double get_timestamp_us(struct timeval *ts);
+double get_timestamp(const struct timespec *ts);
+double get_timestamp_us(const struct timeval *ts);
 
 // Fill timestamp in variable ts (can be timespec or timeval)
 // Use system time if argument time is 0.
@@ -46,18 +46,19 @@ double set_timestamp(struct timespec *ts, double time);
 double set_timestamp_us(struct timeval *ts, double time);
 
 // strftime with default format: %H:%M:%S.%msec
-const char * format_timestamp(struct timespec *ts);
-const char * format_timestamp_us(struct timeval *ts);
+const char * format_timestamp(const struct timespec *ts);
+const char * format_timestamp_us(const struct timeval *ts);
 // strftime with default format: %Y-%d-%m-%H%M%S
-const char * format_datetime(struct timespec *ts);
-const char * format_datetime_us(struct timeval *ts);
+const char * format_datetime(const struct timespec *ts);
+const char * format_datetime_us(const struct timeval *ts);
 
 // Get absolute timestamp with specified timeout offset
 struct timespec * get_timeout(uint32_t ms, struct timespec *tout);
 struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout);
 
-// Format ipaddress like xxx.xxx.xxx.xxx:xxxx
-const char * getsockaddr(int fd);
+// Format ipaddress like xxx.xxx.xxx.xxx:xxxxx
+// local=true for getsockname and local=false for getpeername
+const char * getaddrname(int fd, bool local);
 
 // TimeSync Server
 int timesync_server_init(uint16_t port);

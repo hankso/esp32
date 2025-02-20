@@ -3,8 +3,6 @@
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  *
- * This feature (AsyncWebServer + APIs) occupies about 113KB in firmware.
- *
  * Static files:
  *  Name    Method  Description
  *  /data   GET     Serve static files from /flashfs/data/ folder
@@ -14,18 +12,18 @@
  * API list:
  *  Name    Method  Description (for STA & AP mode)
  *  /ws     POST    Websocket connection point: messages are parsed as JSON
- *  /cmd    POST    Manually send in command string just like using console
- *                  - param `?exec=str&gcode=str`
+ *  /alive  GET     Just respond `200 OK`
+ *  /exec   POST    Manually send in command string just like using console
+ *                  - param `?cmd=str&gcode=str`
  *
  *  Name    Method  Description (for AP mode only and auth needed)
- *  /apmode ANY     Test whether TCP client is connected from AP
  *  /edit   GET     Online Editor page
- *                  - param `?list[=str]&path=str&download`
- *  /editc  ANY     Create file|dir (accept HTTP_PUT)
+ *                  - param `?path=str&list&download`
+ *  /edit   PUT     Create file|dir
  *                  - param `?path=str&type=<file|dir>`
- *  /editd  ANY     Delete file (accept HTTP_DELETE)
- *                  - param `?path=str&from=url`
- *  /editu  POST    Upload file
+ *  /edit   DELETE  Delete file
+ *                  - param `?path=str&type=<file|dir>&from=url`
+ *  /edit   POST    Upload file
  *                  - param `?overwrite`
  *  /config GET     Get JSON string of configuration entries
  *  /config POST    Overwrite configuration options
@@ -34,15 +32,12 @@
  *                  - param `?raw`
  *  /update POST    Upload compiled binary firmware to OTA flash partition
  *                  - param `?reset&size=int`
+ *  /apmode ANY     Test whether TCP client is connected from AP
  */
 
 #pragma once
 
 #include "globals.h"
-
-#ifndef CONFIG_BASE_USE_WIFI
-#   undef CONFIG_BASE_USE_WEBSERVER
-#endif
 
 #if defined(CONFIG_BASE_USE_WEBSERVER) && !__has_include("ESPAsyncWebServer.h")
 #   warning "Run `git clone git@github.com:me-no-dev/ESPAsyncWebServer`"

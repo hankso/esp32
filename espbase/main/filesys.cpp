@@ -16,6 +16,8 @@
 
 #include <Arduino.h>
 
+#define PATH_MAX_LEN    255
+
 static const char * TAG = "Filesys";
 
 static SemaphoreHandle_t lock[2]; // for FFS & SDFS
@@ -44,44 +46,315 @@ bool filesys_release(filesys_type_t type) {
 }
 
 bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
-    if (type == FILESYS_SDCARD) {
 #ifdef CONFIG_BASE_USE_SDFS
+    if (type == FILESYS_SDCARD) {
         SDFS.getInfo(info);
         return info->card != NULL;
+    }
 #endif
-    } else {
 #ifdef CONFIG_BASE_USE_FFS
+    if (type == FILESYS_FLASH) {
         FFS.getInfo(info);
 #   ifdef CONFIG_BASE_FFS_FAT
         return info->total != 0 && info->wlhdl != WL_INVALID_HANDLE;
 #   else
         return info->total != 0;
 #   endif
-#endif
     }
+#endif
     memset(info, 0, sizeof(filesys_info_t));
     info->pdrv = FF_DRV_NOT_USED;
     return false;
 }
 
-bool filesys_exists(filesys_type_t type, const char *path) {
+const char * filesys_norm(filesys_type_t type, const char *path) {
+    static char buf[PATH_MAX_LEN], *out, *inp;
+    const char *prepend = NULL;
 #ifdef CONFIG_BASE_USE_FFS
-    if (type == FILESYS_FLASH) return FFS.exists(path);
+    if (type == FILESYS_FLASH) prepend = CONFIG_BASE_FFS_MP;
 #endif
 #ifdef CONFIG_BASE_USE_SDFS
-    if (type == FILESYS_SDCARD) return SDFS.exists(path);
+    if (type == FILESYS_SDCARD) prepend = CONFIG_BASE_SDFS_MP;
 #endif
-    return false; NOTUSED(type); NOTUSED(path);
+    if (!prepend || !strlen(path ?: "")) {
+        buf[0] = '\0';
+        return buf;
+    } else if (path != buf) {
+        if (!startswith(path, prepend)) {
+            snprintf(buf, sizeof(buf), "%s/%s", prepend, path);
+        } else {
+            strncpy(buf, path, sizeof(buf) - 1);
+        }
+    } else if (!startswith(path, prepend)) { // change mountpoint
+        char *slash = strdup(strchr(path + 1, '/') ?: "");
+        if (slash) {
+            snprintf(buf, sizeof(buf), "%s/%s", prepend, slash);
+            free(slash);
+        }
+    } else {
+        return buf;
+    }
+    for (out = inp = buf; inp[0]; inp++) {
+        if (strchr("\\/", inp[0])) {
+            inp += (strspn(inp, "\\/") ?: 1) - 1;   // skip joining slashes
+            if (inp[1] == '\0') break;              // trim the tail slash
+            if (inp[1] == '.') {                    // handle './' and '../'
+                if (strchr("\\/", inp[2])) {
+                    inp++; continue;
+                } else if (inp[2] == '.' && strchr("\\/", inp[3])) {
+                    out = (char *)memrchr(buf, '/', out - buf) ?: out;
+                    inp += 2; continue;
+                }
+            }
+        }
+        *out++ = inp[0] == '\\' ? '/' : inp[0];     // escape backslash
+    }
+    *out = '\0';
+    return buf;
 }
 
-void filesys_listdir(filesys_type_t type, const char *dir, FILE *stream) {
-#ifdef CONFIG_BASE_USE_FFS
-    if (type == FILESYS_FLASH) FFS.list(dir, stream);
+const char * filesys_join(filesys_type_t type, size_t argc, ...) {
+    char buf[PATH_MAX_LEN];
+    va_list ap;
+    va_start(ap, argc);
+    size_t len = 0;
+    while (argc--) {
+        const char *chunk = va_arg(ap, const char *) ?: "";
+        if (strchr("\\/", chunk[0])) chunk++;
+        len += snprintf(buf + len, sizeof(buf) - len, "/%s", chunk);
+    }
+    va_end(ap);
+    return filesys_norm(type, buf);
+}
+
+bool filesys_touch(filesys_type_t type, const char *path) {
+    FILE *fd = fopen(filesys_norm(type, path), "a");
+    return fd && fclose(fd) == 0;
+}
+
+static const char * statperm(mode_t mode) {
+    static char buf[11]; // trwxrwxrwx
+    mode_t match[] = {
+        S_IFBLK, S_IFCHR, S_IFIFO, S_IFREG, S_IFDIR, S_IFLNK, S_IFSOCK
+    };
+    const char * tchr = "bcp-dls";
+    buf[0] = ' ';
+    LOOPN(i, strlen(tchr)) {
+        if ((mode & S_IFMT) != match[i]) continue;
+        buf[0] = tchr[i]; break;
+    }
+    for (int i = 0; i < 3; i++, mode >>= 3) {
+        for (int j = 0, idx = (3 - i) * 3; j < 3; j++, idx--) {
+            buf[idx] = mode & (1 << j) ? "xwr"[j] : '-';
+        }
+    }
+    buf[10] = '\0';
+    return buf;
+}
+
+void filesys_pstat(filesys_type_t type, const char *path) {
+    path = filesys_norm(type, path);
+    struct stat st;
+    if (stat(path, &st)) return;
+    const char *desc;
+    switch (st.st_mode & S_IFMT) {
+    case S_IFBLK:   desc = "block special"; break;
+    case S_IFCHR:   desc = "character special"; break;
+    case S_IFIFO:   desc = "FIFO special"; break;
+    case S_IFREG:   desc = "regular file"; break;
+    case S_IFDIR:   desc = "directory"; break;
+    case S_IFLNK:   desc = "symbolic link"; break;
+    case S_IFSOCK:  desc = "socket file"; break;
+    default:        desc = "unknown";
+    }
+    char tbuf[3][36]; // YYYY-mm-dd HH:MM:SS.MILLISECS TZONE
+    LOOPN(i, 3) {
+        struct timespec *ts = &st.st_atim + i * sizeof(ts);
+        struct tm *ptm = localtime(&ts->tv_sec);
+        if (strftime(tbuf[i], 36, "%F %T.123456789 %z", ptm)) {
+            sprintf(tbuf[i] + 20, "%09ld", ts->tv_nsec);
+            tbuf[i][29] = ' '; // fix null-terminator
+        } else {
+            tbuf[i][0] = '\0';
+        }
+    }
+    printf("  File: %s\n"
+           "  Size: %d\t\tBlocks: %d\tIO Block: %d\t%s\n"
+           "Device: %xh/%dd\t\tInode: %d\tLinks: %d\n"
+           "Access: (%04o/%s)  Uid: %d\tGid: %d\n"
+           "Access: %s\nModify: %s\nChange: %s\n",
+           path, (int)st.st_size, (int)st.st_blocks, (int)st.st_blksize, desc,
+           st.st_dev, st.st_dev, st.st_ino, st.st_nlink,
+           st.st_mode & ~S_IFMT, statperm(st.st_mode), st.st_uid, st.st_gid,
+           tbuf[0], tbuf[1], tbuf[2]);
+}
+
+#ifdef CONFIG_BASE_FFS_SPI
+#   define SPIFFS_SENTINEL "_SENTINEL"
+static int spiffs_childs(const char *path) {
+    /* SPIFFS does not support directory. `stat` always fails and stat.st_mode
+     * will always be 0. So we use `opendir` and iterate the folder to
+     * determine whether the folder exists.
+     * Note: folder path should trim out tailing slashes.
+     */
+    int num = 0;
+    DIR *dir = opendir(fnorm(path));
+    for (struct dirent *ent; ( ent = readdir(dir) ); num++) {}
+    closedir(dir);
+    return num;
+}
 #endif
-#ifdef CONFIG_BASE_USE_SDFS
-    if (type == FILESYS_SDCARD) SDFS.list(dir, stream);
+
+bool filesys_exists(filesys_type_t type, const char *path) {
+    struct stat rst;
+    bool ret = !stat(filesys_norm(type, path), &rst);
+#ifdef CONFIG_BASE_FFS_SPI
+    if (type == FILESYS_FLASH && !ret) return spiffs_childs(path);
 #endif
-    return; NOTUSED(type); NOTUSED(dir); NOTUSED(stream);
+    return ret;
+}
+
+bool filesys_isdir(filesys_type_t type, const char *path) {
+    struct stat rst;
+    bool ret = !stat(filesys_norm(type, path), &rst);
+#ifdef CONFIG_BASE_FFS_SPI
+    if (type == FILESYS_FLASH) return ret ? false : spiffs_childs(path);
+#endif
+    return ret && S_ISDIR(rst.st_mode);
+}
+
+bool filesys_isfile(filesys_type_t type, const char *path) {
+    struct stat rst;
+    bool ret = !stat(filesys_norm(type, path), &rst);
+#ifdef CONFIG_BASE_FFS_SPI
+    if (type == FILESYS_FLASH) return ret;
+#endif
+    return ret && S_ISREG(rst.st_mode);
+}
+
+bool filesys_mkdir(filesys_type_t type, const char *path) {
+    if (filesys_isdir(type, path)) return true;
+#ifdef CONFIG_BASE_FFS_SPI
+    if (type == FILESYS_FLASH) return ftouch(fjoin(2, path, SPIFFS_SENTINEL));
+#endif
+    return mkdir(filesys_norm(type, path), 0755) == 0;
+}
+
+bool filesys_rmdir(filesys_type_t type, const char *path) {
+    if (!filesys_isdir(type, path)) return true;
+#ifdef CONFIG_BASE_FFS_SPI
+    if (type == FILESYS_FLASH) {
+        // only empty directories created by filesys_mkdir can be removed
+        if (spiffs_childs(path) > 1) return false;
+        path = fjoin(2, path, SPIFFS_SENTINEL);
+        return fisfile(path) ? unlink(path) == 0 : false;
+    }
+#endif
+    return rmdir(filesys_norm(type, path)) == 0;
+}
+
+static int vsort(const void *a, const void *b) {
+    return strverscmp(*(const char **)a, *(const char **)b);
+}
+
+void filesys_walk(
+    filesys_type_t type, const char *path, walk_cb_t callback, void *arg
+) {
+    // `scandir` is not provided by xtensa-esp32-elf or component/newlib.
+    // So we have to write some dirty codes to iterate folder with `readdir`
+    // and sort the result by 1) dir-first and 2) strverscmp.
+    // This implementation uses less memory than glibc `scandir`!
+    struct stat st;
+    struct dirent *ent;
+    char dirname[PATH_MAX_LEN], *slash;
+    char **lst[2] = {NULL, NULL}, **ptr;
+    size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 }; // for dir and non-dir
+    DIR *dir = opendir(strcpy(dirname, filesys_norm(type, path)));
+    while (( ent = readdir(dir) )) {
+#ifdef CONFIG_BASE_FFS_SPI
+        if (!strcmp(ent->d_name, SPIFFS_SENTINEL)) continue;
+        if (type == FILESYS_FLASH && ( slash = strchr(ent->d_name, '/') )) {
+            int dlen = slash - ent->d_name + 1, samedir = false;
+            LOOPN(i, cnt[0]) {
+                if (!strncmp(lst[0][i], ent->d_name, dlen)) samedir = true;
+            }
+            if (samedir) continue;
+            ent->d_name[dlen] = '\0'; // keep tailing slash temporarily
+            ent->d_type = DT_DIR;
+        }
+#endif
+        int i = ent->d_type != DT_DIR;
+        if (cnt[i] == num[i]) {
+            num[i] = (num[i] ?: 5) * 2;
+            if (( ptr = (char **)realloc(lst[i], num[i] * sizeof(ptr)) )) {
+                lst[i] = ptr; // enlarge buffer to store duplicated filenames
+            } else goto exit;
+        }
+        if (!( lst[i][cnt[i]++] = strdup(ent->d_name) )) goto exit;
+    }
+    LOOPN(i, LEN(lst)) {
+        qsort(lst[i], cnt[i], sizeof(char *), vsort);
+        LOOPN(j, cnt[i]) {
+            char *basename = lst[i][j];
+            const char *fullpath = filesys_join(type, 2, dirname, basename);
+#ifdef CONFIG_BASE_FFS_SPI
+            size_t len = strlen(basename);
+            if (basename[len - 1] == '/') { // it's SPIFFS directory
+                basename[len - 1] = '\0';   // remove tailing slash
+                memset(&st, 0, sizeof(st)); // generate fake stat data
+                st.st_size = 4096;
+                st.st_mode = S_IFDIR | 0755;
+            } else
+#endif
+            if (stat(fullpath, &st)) {
+                ESP_LOGE(TAG, "Could not get stat of `%s`", fullpath);
+                continue;
+            }
+            callback(basename, &st, arg);
+        }
+    }
+exit:
+    LOOPN(i, LEN(lst)) {
+        while (cnt[i] > 0) { free(lst[i][--cnt[i]]); }  // strdup
+        if (num[i]) free(lst[i]);                       // realloc
+    }
+    closedir(dir);
+}
+
+static void print_files(const char *base, const struct stat *st, void *arg) {
+    char buf[13]; // MTH DD HH:MM\0
+    time_t ts = time(NULL);
+    int this_year = localtime(&ts)->tm_year;
+    struct tm *ptm = localtime(&st->st_mtime);
+    if (this_year == ptm->tm_year) {
+        strftime(buf, sizeof(buf), "%b %d %H:%M", ptm);
+    } else {
+        strftime(buf, sizeof(buf), "%b %d  %Y", ptm);
+    }
+    fprintf((FILE *)arg, "%s %8s %12s %s%s\n", // something like 'ls -alh'
+            statperm(st->st_mode), format_size(st->st_size, false),
+            buf, base, S_ISDIR(st->st_mode) ? "/" : "");
+}
+
+void filesys_listdir(filesys_type_t type, const char *path, FILE *stream) {
+    filesys_walk(type, path, print_files, stream);
+}
+
+static void jsonify_files(const char *base, const struct stat *st, void *arg) {
+    cJSON *n = cJSON_CreateObject();
+    cJSON_AddStringToObject(n, "name", base);
+    cJSON_AddNumberToObject(n, "size", st->st_size);
+    cJSON_AddNumberToObject(n, "date", st->st_mtime);
+    cJSON_AddStringToObject(n, "type", S_ISDIR(st->st_mode) ? "dir" : "file");
+    cJSON_AddItemToArray((cJSON *)arg, n);
+}
+
+char * filesys_listdir_json(filesys_type_t type, const char *path) {
+    cJSON *lst = cJSON_CreateArray();
+    filesys_walk(type, path, jsonify_files, lst);
+    char *json = cJSON_PrintUnformatted(lst);
+    cJSON_Delete(lst);
+    return json;
 }
 
 // File system APIs
@@ -174,7 +447,7 @@ void CFS::list(const char *path, FILE *stream) {
 char * CFS::list(const char *path) {
     cJSON *lst = cJSON_CreateArray();
     walk(path, &_jsonify_file, lst);
-    char *json = cJSON_Print(lst);
+    char *json = cJSON_PrintUnformatted(lst);
     cJSON_Delete(lst);
     return json;
 }
@@ -191,7 +464,7 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
 {
     if (!path || !strlen(path)) return;
     size_t plen = strlen(_fs->mountpoint()), len = strlen(path);
-    if (!( _fpath = (char *)malloc(plen + len + 1) )) return;
+    if (EMALLOC(_fpath, plen + len + 1)) return;
     strcpy(_fpath, _fs->mountpoint()); strcat(_fpath, path);
 
     if (!( _path = strdup(path) )) {
@@ -219,7 +492,7 @@ CFSFileImpl::CFSFileImpl(CFSImpl *fs, const char *path, const char *mode)
     }
     _isdir = _dir != NULL;
     _badfile = _isdir || !_file;
-    _baddir = !_isdir || !_dir;
+    _baddir = !_isdir;
 }
 
 size_t CFSFileImpl::write(const uint8_t *buf, size_t size) {
@@ -281,13 +554,16 @@ void CFSFileImpl::dir_next() {
     // true   + char  => next is dir
     if (_baddir) return;
     TRYFREE(_npath);
-    struct dirent *file = readdir(_dir);
-    if (file == NULL) {
+    struct dirent *ent = readdir(_dir);
+#ifdef CONFIG_BASE_FFS_SPI // skip placeholder
+    if (ent && !strcmp(ent->d_name, SPIFFS_SENTINEL)) ent = readdir(_dir);
+#endif
+    if (ent == NULL) {
         _nisdir = false;
         return;
     }
-    if (( _nisdir = file->d_type == DT_DIR ) || file->d_type == DT_REG) {
-        String fname = String(file->d_name), name = String(_path);
+    if (( _nisdir = ent->d_type == DT_DIR ) || ent->d_type == DT_REG) {
+        String fname = String(ent->d_name), name = String(_path);
         if (!fname.startsWith("/") && !name.endsWith("/")) name += "/";
         _npath = strdup((name + fname).c_str());
     } else {

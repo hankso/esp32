@@ -7,6 +7,7 @@
 #include "drivers.h"
 #include "ledmode.h"
 #include "hidtool.h"
+#include "config.h"
 
 #include "esp_attr.h"
 #include "esp_task_wdt.h"
@@ -75,7 +76,7 @@ static struct {
     },
     .chans = { ADC_CHANNEL_MAX, ADC_CHANNEL_MAX },
     .unit = ADC_UNIT_1, // only use ADC1
-    .atten = ADC_ATTEN_DB_11,
+    .atten = ADC_ATTEN_DB_12,
 #ifdef CONFIG_BASE_ADC_HALL
     .width = ADC_WIDTH_BIT_12,
 #else
@@ -786,31 +787,31 @@ static button_handle_t btn[2];
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
 static button_handle_t joystick[4];
 #   endif
+static const char *BTAG = "Button";
 
 static void cb_button(void *arg, void *data) {
-    static const char *BTN = "button";
     int pin = (int)data;
     button_event_t event = iot_button_get_event(arg);
     switch (event) {
     case BUTTON_PRESS_UP:
-        ESP_LOGI(BTN, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
+        ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
         if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_UP);
         break;
     case BUTTON_PRESS_DOWN:
-        ESP_LOGI(BTN, "%d press", pin);
+        ESP_LOGI(BTAG, "%d press", pin);
         if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_DN);
         break;
     case BUTTON_SINGLE_CLICK:
-        ESP_LOGI(BTN, "%d single click", pin);
+        ESP_LOGI(BTAG, "%d single click", pin);
         break;
     case BUTTON_DOUBLE_CLICK:
-        ESP_LOGI(BTN, "%d double click", pin);
+        ESP_LOGI(BTAG, "%d double click", pin);
         break;
     case BUTTON_MULTIPLE_CLICK:
-        ESP_LOGI(BTN, "%d click %d times", pin, iot_button_get_repeat(arg));
+        ESP_LOGI(BTAG, "%d click %d times", pin, iot_button_get_repeat(arg));
         break;
     case BUTTON_LONG_PRESS_HOLD:
-        ESP_LOGI(BTN, "%d long press %d",
+        ESP_LOGI(BTAG, "%d long press %d",
                  pin, iot_button_get_long_press_hold_cnt(arg));
         break;
     default: return;
@@ -832,19 +833,19 @@ static void cb_button(void *arg, void *data) {
 static button_handle_t button_init(button_config_t *conf, gpio_num_t pin) {
     button_handle_t hdl = iot_button_create(conf);
     if (!hdl) {
-        ESP_LOGE(TAG, "BTN bind to GPIO%d failed", pin);
+        ESP_LOGE(BTAG, "bind to GPIO%d failed", pin);
     } else LOOPN(event, BUTTON_EVENT_MAX) {
-        if (event != BUTTON_MULTIPLE_CLICK) {
-            iot_button_register_cb(hdl, event, cb_button, (void *)pin);
-        /*
-        } else {
+        if (event == BUTTON_MULTIPLE_CLICK) {
+            /*
             button_event_config_t evt = {
                 .event = event,
                 .event_data.multiple_clicks.clicks = 3,
             };
             iot_button_register_event_cb(hdl, evt, cb_button, (void *)pin);
-        */
+            */
+            continue;
         }
+        iot_button_register_cb(hdl, event, cb_button, (void *)pin);
     }
     return hdl;
 }
@@ -852,15 +853,16 @@ static button_handle_t button_init(button_config_t *conf, gpio_num_t pin) {
 
 #ifdef CONFIG_BASE_USE_KNOB
 static knob_handle_t knob;
+static const char *KTAG = "Knob";
 
 static void cb_knob(void *arg, void *data) {
     switch (iot_knob_get_event(arg)) {
     case KNOB_LEFT:
-        ESP_LOGD(TAG, "Knob: left rotate %d", iot_knob_get_count_value(arg));
+        ESP_LOGD(KTAG, "left rotate %d", iot_knob_get_count_value(arg));
         hid_report_dial(HID_TARGET_ALL, DIAL_L);
         break;
     case KNOB_RIGHT:
-        ESP_LOGD(TAG, "Knob: right rotate %d", iot_knob_get_count_value(arg));
+        ESP_LOGD(KTAG, "right rotate %d", iot_knob_get_count_value(arg));
         hid_report_dial(HID_TARGET_ALL, DIAL_R);
         break;
     default: break;
@@ -922,7 +924,7 @@ static void gpio_initialize() {
         .gpio_encoder_b = PIN_ENCB
     };
     if (!( knob = iot_knob_create(&knob_conf) )) {
-        ESP_LOGE(TAG, "Knob: bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
+        ESP_LOGE(KTAG, "bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
     } else LOOPN(i, LEN(events)) {
         iot_knob_register_cb(knob, events[i], cb_knob, NULL);
     }
@@ -932,11 +934,7 @@ static void gpio_initialize() {
         .type = BUTTON_TYPE_GPIO,
         .gpio_button_config = {
             .gpio_num = PIN_BTN,
-#   ifdef CONFIG_BASE_BTN_ACTIVE_HIGH
-            .active_level = 1,
-#   else
-            .active_level = 0,
-#   endif
+            .active_level = strbool(Config.sys.BTN_HIGH),
         }
     };
     btn[0] = button_init(&btn_conf, PIN_BTN);
@@ -948,6 +946,7 @@ static void gpio_initialize() {
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
     btn_conf.type = BUTTON_TYPE_ADC;
     btn_conf.long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20;
+    // FIXME: BUTTON_LONG_PRESS_HOLD stall if joystick ADC value > 2.0V
     LOOPN(i, LEN(adc.chans)) {
         if (adc.chans[i] == ADC_CHANNEL_MAX) continue;
         btn_conf.adc_button_config.adc_channel = adc.chans[i];
@@ -959,7 +958,6 @@ static void gpio_initialize() {
         btn_conf.adc_button_config.min = 2000;
         btn_conf.adc_button_config.max = 3300; // 2.0-3.3V
         joystick[2 * i + 1] = button_init(&btn_conf, adc.pins[i]);
-        // FIXME: BUTTON_LONG_PRESS_HOLD stall if joystick ADC value > 2.0V
     }
 #   endif
 #endif
@@ -1098,8 +1096,7 @@ esp_err_t twdt_feed() {
 
 void driver_initialize() {
     const char * tags[] = {
-        "gpio", "Knob", "button",
-        "adc button", "led_indicator"
+        "gpio", "adc button", "led_indicator", "Knob", "Button",
     };
     LOOPN(i, LEN(tags)) { esp_log_level_set(tags[i], ESP_LOG_WARN); }
 

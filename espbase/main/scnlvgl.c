@@ -33,7 +33,7 @@
 #   define PATH_LEN strlen(CONFIG_BASE_FFS_MP) + strlen(Config.sys.DIR_DATA) + 3
 #   define PATH_VAL CONFIG_LV_FS_POSIX_LETTER,  \
                     CONFIG_BASE_FFS_MP,         \
-                    Config.sys.DIR_DATA
+                    Config.sys.DIR_DATA // FIXME: change to filesys_xxx
 #   endif
 #else
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)

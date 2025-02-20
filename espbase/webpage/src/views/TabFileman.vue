@@ -54,7 +54,7 @@ const folders = computed(() => {
     let nodes = ['/']
     ;(function findFolder(arr) {
         for (let node of arr) {
-            if (node.type === 'folder') {
+            if (node.type === 'dir') {
                 nodes.push(node.link)
                 findFolder(node.children || [])
             }
@@ -68,7 +68,7 @@ function refresh(path, target, parent) {
     target ??= toValue(items)
     if (type(path) === 'object') {
         parent = path
-        if (parent.type !== 'folder') return
+        if (parent.type === 'file') return
         if ((parent.id || '').split('-').length > 5)
             return notify('Too deep into subfolders. Maybe recursive loop?')
         path = parent.link
@@ -95,6 +95,7 @@ function pop(arr, item) {
     if (idx >= 0) return arr.splice(idx, 1)
 }
 
+// TODO: createPath & deletePath need argument `isdir=<BOOL>`
 function remove(arr) {
     let len = arr.length
     loading.value = true

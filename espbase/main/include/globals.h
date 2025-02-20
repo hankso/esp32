@@ -41,12 +41,12 @@
 
 #define TIMEOUT(m)              ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
 #define EMALLOC(v, size)                                                    \
-        ( ((v) = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
+        ( (v = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
 #define ECALLOC(v, num, size)                                               \
-        ( ((v) = (typeof(v)) calloc((num), (size))) ? ESP_OK : ESP_ERR_NO_MEM )
+        ( (v = (typeof(v)) calloc((num), (size))) ? ESP_OK : ESP_ERR_NO_MEM )
 #define ITERN(v, arr, n)                                                    \
-        for (typeof(*(arr)) *p = (arr), (v) = *p; p < &((arr)[n]); (v) = *++p)
-#define ITER(v, arr) ITERN((v), (arr), LEN(arr))
+        for (typeof(*(arr)) *_p = (arr), v = *_p; _p < &((arr)[n]); v = *++_p)
+#define ITER(v, arr) ITERN(v, (arr), LEN(arr))
 
 #ifndef BIT
 #   define BIT(n)               ( 1UL << (n) )
@@ -55,7 +55,7 @@
 #   define ABS(x)               ( (x) > 0 ? (x) : -(x) )
 #endif
 #ifndef ABSDIFF
-#   define ABSDIFF(a, b)        ( (a) > (b) ? ((a) - (b)) : ((b) - (a)) )
+#   define ABSDIFF(a, b)        ( (a) > (b) ? (a) - (b) : (b) - (a) )
 #endif
 #ifndef MAX
 #   define MAX(a, b)            ( (a) > (b) ? (a) : (b) )
@@ -129,19 +129,20 @@ extern "C" {
 // defined in utils.c
 void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
+
 bool strbool(const char *);
-void hexdump(const void *src, size_t bytes, size_t maxlen);
-char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen);
+char * strtrim(char *str, const char *chars);
+
 bool endswith(const char *, const char *tail);
 bool startswith(const char *, const char *head);
+
 bool parse_int(const char *, int *ptr);
 bool parse_uint16(const char *, uint16_t *ptr);
 bool parse_float(const char *, float *ptr);
 size_t parse_all(const char *, int *arr, size_t arrlen);
-char * cast_away_const(const char *);
 
-const char * unicode2str(uint32_t);
-uint32_t str2unicode(const char *);
+void hexdump(const void *src, size_t bytes, size_t maxlen);
+char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen);
 
 typedef struct {
     uint8_t index;
@@ -155,6 +156,8 @@ typedef struct {
     FILE *stream;
 } unicode_trick_t;
 
+const char * unicode2str(uint32_t);
+uint32_t str2unicode(const char *);
 esp_err_t unicode_tricks(const unicode_trick_t *);
 
 const char * format_size(uint64_t, bool);

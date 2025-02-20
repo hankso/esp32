@@ -5,8 +5,11 @@ dependencies:
   idf: ">=4.4"
 
   knob: "*"
-  button: "*"
+  button: "^3.5.0"
   led_indicator: "*"
+
+  lvgl/lvgl: "^8"
+  esp_lvgl_port: "^2.4.4"
 
   tinyusb:
     version: ">=0.15.0~2"
@@ -22,6 +25,3 @@ dependencies:
   usb_host_hid:
     rules:
       - if: "target in [esp32s2, esp32s3]"
-
-  lvgl/lvgl: "~8.3.0"
-  esp_lvgl_port: "~2.0.0"

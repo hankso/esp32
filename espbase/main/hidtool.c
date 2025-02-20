@@ -345,6 +345,7 @@ enum {
                 HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_RELATIVE ) ,\
         HID_COLLECTION_END                                                 ,\
     HID_COLLECTION_END
+
 #endif // WITH_TUSB
 
 #define TUD_HID_REPORT_DESC_DIAL(...)                                       \
@@ -385,7 +386,7 @@ const uint8_t hid_descriptor_report[] = {
 
 const size_t hid_descriptor_report_len = sizeof(hid_descriptor_report); // 200
 
-static const char *TAG = "HID";
+static const char *TAG = "HIDTool";
 
 uint16_t hid_desc_version(uint16_t *arg) {
     uint16_t version = 0;
@@ -606,7 +607,7 @@ uint8_t str2modifier(const char *str) {
 
 const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
     static uint8_t buf[6];
-    size_t len = str ? strlen(str) : 0, klen = 0, blen = sizeof(buf);
+    size_t len = strlen(str ?: ""), klen = 0, blen = sizeof(buf);
     if (!len) goto exit;
     if (str[0] == '|') {
         buf[klen++] = HID_KEY_BACKSLASH;
@@ -645,7 +646,7 @@ const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
             if (mod) ADD_SHIFT(*mod);
         }
     }
-    free(dup);
+    TRYFREE(dup);
 exit:
     if (klen < 6) buf[klen] = HID_KEY_NONE;
     return buf;

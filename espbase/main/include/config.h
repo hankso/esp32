@@ -17,6 +17,7 @@ typedef struct config_system_t {
     const char * DIR_DATA;  // Directory to storage font, image files etc.
     const char * DIR_DOCS;  // Directory to generated documentation
     const char * DIR_HTML;  // Directory to static webpage files
+    const char * BTN_HIGH;  // Button active high
     const char * USB_MODE;  // Select USB work mode
     const char * BT_MODE;   // Select BT work mode
     const char * BT_SCAN;   // Bluetooth discoverable
@@ -38,6 +39,7 @@ typedef struct config_webserver_t {
     const char * WS_PASS;   // Password to auth websocket connection
     const char * HTTP_NAME; // Username to auth webserver (HTTP)
     const char * HTTP_PASS; // Password to auth webserver (HTTP)
+    const char * AUTH_BASE; // Use basic HTTP authorization method (base64)
 } config_web_t;
 
 typedef struct config_application_t {

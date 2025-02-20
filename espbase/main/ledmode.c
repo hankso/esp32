@@ -20,7 +20,7 @@
 #define RES_LED     LEDC_TIMER_13_BIT
 #define CH_LED      LEDC_CHANNEL_0
 
-static const char * TAG = "LED";
+static const char * TAG = "LEDMode";
 static led_blink_t state = LED_BLINK_RESET;
 
 #if !defined(CONFIG_BASE_USE_LED)           // led disabled
@@ -220,7 +220,7 @@ void led_initialize() {
     // mapping brightness 0-255 to duty by 13bit resolution
     local.duty_scale = ((1 << 13) - 1) / 255;
 #   elif defined(CONFIG_BASE_LED_MODE_RMT)
-    if (!( local.color = calloc(CONFIG_BASE_LED_NUM, sizeof(led_color_t)) )) {
+    if (EALLOC(local.color, CONFIG_BASE_LED_NUM, sizeof(led_color_t))) {
         ESP_LOGE(TAG, "initialize led_color failed");
         return;
     }

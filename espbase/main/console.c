@@ -253,9 +253,9 @@ static char * rpc_error(double code, const char *errstr) {
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddNumberToObject(error, "code", code);
     cJSON_AddStringToObject(error, "message", errstr);
-    char *ret = cJSON_PrintUnformatted(rep);
+    char *json = cJSON_PrintUnformatted(rep);
     cJSON_Delete(rep);
-    return ret;
+    return json;
 }
 
 static char * rpc_response(cJSON *id, const char *result) {
@@ -267,9 +267,9 @@ static char * rpc_response(cJSON *id, const char *result) {
     }
     cJSON_AddStringToObject(rep, "jsonrpc", "2.0");
     cJSON_AddStringToObject(rep, "result", result);
-    char *ret = cJSON_PrintUnformatted(rep);
+    char *json = cJSON_PrintUnformatted(rep);
     cJSON_Delete(rep);
-    return ret;
+    return json;
 }
 
 char * console_handle_rpc(const char *json) {

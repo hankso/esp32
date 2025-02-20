@@ -228,8 +228,8 @@ static void screen_lvgl_init() {
     const lvgl_port_cfg_t lvgl_conf = ESP_LVGL_PORT_INIT_CONFIG();
 #       else
     lvgl_port_cfg_t lvgl_conf = ESP_LVGL_PORT_INIT_CONFIG();
-    lvgl_conf.task_affinity = 1;    // run LVGL task on CPU1 if possible
-    lvgl_conf.stack_stack = 8192;   // 8k stack size
+    lvgl_conf.task_affinity = 1; // run LVGL task on CPU1 if possible
+    lvgl_conf.task_stack = 8192; // 8k stack size
 #       endif
     const lvgl_port_display_cfg_t disp_conf = {
         .io_handle = ctx.io,
@@ -245,7 +245,9 @@ static void screen_lvgl_init() {
         },
         .flags = {
             .buff_dma = true,
+#       if LVGL_VERSION_MAJOR >= 9
             .swap_bytes = SCREEN_DEPTH == 16,
+#       endif
         },
     };
     if (!err && !( err = lvgl_port_init(&lvgl_conf) )) {

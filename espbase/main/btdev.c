@@ -19,6 +19,13 @@
 #include "esp_gap_bt_api.h"
 #include "esp_gap_ble_api.h"
 
+#if !defined(CONFIG_BASE_BT_HID_DEVICE) && defined(CONFIG_BT_CLASSIC_ENABLED)
+#   undef CONFIG_BT_CLASSIC_ENABLED
+#endif
+#if !defined(CONFIG_BASE_BLE_HID_DEVICE) && defined(CONFIG_BT_BLE_ENABLED)
+#   undef CONFIG_BT_BLE_ENABLED
+#endif
+
 /******************************************************************************
  * Utilities
  */
@@ -93,7 +100,8 @@ extern void btdev_status(btmode_t mode) {
         if (num && addrs && !esp_bt_gap_get_bond_device_list(&num, addrs)) {
             printf("Bonded %d devices:\n", num);
             LOOPN(i, num) {
-                printf("  - " BDASTR "\n", BDA2STR(addrs[i]));
+                int j = !memcmp(addrs[i], ctx.addr, sizeof(ctx.addr));
+                printf("  %c " BDASTR "\n", "-*"[j], BDA2STR(addrs[i]));
             }
         }
         TRYFREE(addrs);
@@ -115,7 +123,8 @@ extern void btdev_status(btmode_t mode) {
         if (num && addrs && !esp_ble_get_bond_device_list(&num, addrs)) {
             printf("Bonded %d devices:\n", num);
             LOOPN(i, num) {
-                printf("  - " BDASTR "\n", BDA2STR(addrs[i].bd_addr));
+                int j = !memcmp(addrs[i].bd_addr, ctx.addr, sizeof(ctx.addr));
+                printf("  %c " BDASTR "\n", "-*"[j], BDA2STR(addrs[i].bd_addr));
             }
         }
         TRYFREE(addrs);
@@ -390,6 +399,7 @@ static void bt_gap_cb(
                 } else if (EIR_DATA(128BITS_UUID, ESP_UUID_LEN_128)) {
                     memcpy(uuid->uuid.uuid128, data, uuid->len = len);
                 }
+#undef          EIR_DATA
             }
         }
         if (ptr != dev) {
@@ -547,6 +557,7 @@ static void ble_gap_cb(
             memcpy(&dev->ble.gatts_uuid, data, len);
         if (ADV_DATA(APPEARANCE, sizeof(dev->ble.appearance)))
             memcpy(&dev->ble.appearance, data, len);
+#undef ADV_DATA
         if (ptr != dev) {
             if (!( ptr = s_devs )) {
                 s_devs = dev;
@@ -636,7 +647,7 @@ extern esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 #ifdef TARGET_ESP32
     conf.mode = mode;               // ignore CONFIG_BTDM_CTRL_MODE_XXX
 #endif
-#ifdef CONFIG_BT_CLASSIC_ENABLED
+#ifdef CONFIG_BASE_BT_HID_DEVICE
     if (HAS_BT(mode)) {
         conf.bt_max_acl_conn = 3;   // ignore CONFIG_BTDM_CTRL_MODE_XXX
         conf.bt_max_sync_conn = 3;
@@ -650,7 +661,7 @@ extern esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     char name[32] = { 0 };
     snprintf(name, sizeof(name), "%s-%s", Config.info.NAME, Config.info.UID);
 
-#ifdef CONFIG_BT_CLASSIC_ENABLED
+#ifdef CONFIG_BASE_BT_HID_DEVICE
     if (HAS_BT(mode)) {
         if (!err) err = esp_bt_dev_set_device_name(name);
         if (!err) err = esp_bt_gap_register_callback(bt_gap_cb);
@@ -662,7 +673,7 @@ extern esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 #   endif
     }
 #endif
-#ifdef CONFIG_BT_BLE_ENABLED
+#ifdef CONFIG_BASE_BLE_HID_DEVICE
     if (HAS_BLE(mode)) {
         if (!err) err = esp_ble_gap_set_device_name(name);
         if (!err) err = esp_ble_gap_register_callback(ble_gap_cb);
@@ -1017,17 +1028,18 @@ bool hidb_send_report(const hid_report_t *rpt) {
         sent |= !bt_send_report(ESP_HIDD_REPORT_TYPE_INTRDATA, rpt);
 #   endif
 #   ifdef CONFIG_BASE_BLE_HID_DEVICE
-    if (HAS_BLE(ctx.mode)) sent |= !ble_send_report(rpt);
+    if (HAS_BLE(ctx.mode))
+        sent |= !ble_send_report(rpt);
 #   endif
     return sent;
 }
 
 esp_err_t btmode_scan(uint32_t timeout_ms) {
     esp_err_t err = ESP_OK;
-#   ifdef CONFIG_BT_CLASSIC_ENABLED
+#   ifdef CONFIG_BASE_BT_HID_DEVICE
     if (!err && HAS_BT(ctx.mode)) err = bt_scan_entry(timeout_ms, true);
 #   endif
-#   ifdef CONFIG_BT_BLE_ENABLED
+#   ifdef CONFIG_BASE_BLE_HID_DEVICE
     if (!err && HAS_BLE(ctx.mode)) err = ble_scan_entry(timeout_ms, true);
 #   endif
     return err;
@@ -1043,10 +1055,10 @@ esp_err_t btmode_config(bool c, bool d) {
     ctx.cmode = cmode;
     ctx.dmode = dmode;
     config_set("sys.bt.scan", d ? "1" : "0");
-#   ifdef CONFIG_BT_CLASSIC_ENABLED
+#   ifdef CONFIG_BASE_BT_HID_DEVICE
     if (HAS_BT(ctx.mode)) err = esp_bt_gap_set_scan_mode(cmode, dmode);
 #   endif
-#   ifdef CONFIG_BT_BLE_ENABLED
+#   ifdef CONFIG_BASE_BLE_HID_DEVICE
     if (HAS_BLE(ctx.mode)) {
         if (d) {
             ADV_ENABLE();
@@ -1059,7 +1071,7 @@ esp_err_t btmode_config(bool c, bool d) {
 }
 
 esp_err_t btmode_battery(uint8_t pcent) {
-#   ifdef CONFIG_BT_BLE_ENABLED
+#   ifdef CONFIG_BASE_BLE_HID_DEVICE
     if (!HAS_BLE(ctx.mode) || !ctx.enabled || !ctx.connected)
         return ESP_ERR_INVALID_STATE;
     return esp_hidd_dev_battery_set(ctx.hiddev, pcent);

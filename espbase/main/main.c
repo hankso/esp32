@@ -25,6 +25,8 @@
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 void setup() {
+    esp_register_shutdown_handler(shutdown);
+
     // 1. low level drivers
     config_initialize();
     driver_initialize();
@@ -46,7 +48,6 @@ void setup() {
 
     led_set_blink(0);
     console_loop_begin(1);  // run REPL on Core 1 (i.e. App CPU)
-    esp_register_shutdown_handler(shutdown);
 }
 
 void loop() {

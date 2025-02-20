@@ -89,10 +89,10 @@ static const char * TAG = "Command";
  * */
 static bool arg_noerror(int argc, char **argv, void **argtable) {
     if (arg_parse(argc, argv, argtable) != 0) {
-        arg_hdr_t **table = (arg_hdr_t **) argtable;
+        arg_hdr_t **table = (arg_hdr_t **)argtable;
         int tabindex = 0;
         while (!(table[tabindex]->flag & ARG_TERMINATOR)) { tabindex++; }
-        arg_print_errors(stdout, (arg_end_t *) table[tabindex], argv[0]);
+        arg_print_errors(stdout, (arg_end_t *)table[tabindex], argv[0]);
         return false;
     }
     return true;
@@ -776,21 +776,32 @@ static int util_lstask(int argc, char **argv) {
 
 #ifdef CONSOLE_UTIL_LSMEM
 static struct {
-    arg_lit_t *verbose;
+    arg_lit_t *lvl;
+    arg_lit_t *chk;
     arg_end_t *end;
 } util_lsmem_args = {
-    .verbose = arg_litn("v", NULL, 0, 2, "additive option for more output"),
-    .end     = arg_end(1)
+    .lvl = arg_litn("v", NULL, 0, 2, "additive option for more output"),
+    .chk = arg_litn("c", NULL, 0, 3, "check heap memory integrity"),
+    .end = arg_end(2)
 };
 
 static int util_lsmem(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsmem_args);
-    switch (util_lsmem_args.verbose->count) {
+    switch (util_lsmem_args.lvl->count) {
     case 0: memory_info(); break;
     case 2: heap_caps_print_heap_info(MALLOC_CAP_DMA);
             heap_caps_print_heap_info(MALLOC_CAP_EXEC); FALLTH;
     case 1: heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             heap_caps_print_heap_info(MALLOC_CAP_INTERNAL); break;
+    default: break;
+    }
+    switch (util_lsmem_args.chk->count) {
+    case 3: heap_caps_check_integrity_all(true); break;
+    case 2: heap_caps_check_integrity(MALLOC_CAP_DMA, true);
+            heap_caps_check_integrity(MALLOC_CAP_EXEC, true); FALLTH;
+    case 1: heap_caps_check_integrity(MALLOC_CAP_DEFAULT, true);
+            heap_caps_check_integrity(MALLOC_CAP_INTERNAL, true); break;
+    default: break;
     }
     return ESP_OK;
 }
@@ -799,25 +810,25 @@ static int util_lsmem(int argc, char **argv) {
 #ifdef CONSOLE_UTIL_LSFS
 static struct {
     arg_str_t *dir;
+    arg_str_t *stat;
     arg_lit_t *ext;
     arg_end_t *end;
 } util_lsfs_args = {
-    .dir = arg_str0(NULL, NULL, "abspath", NULL),
-    .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
-    .end = arg_end(2)
+    .dir  = arg_str0(NULL, NULL, "path", NULL),
+    .stat = arg_str0("s", "stat", NULL, "print result of stat"),
+    .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
+    .end  = arg_end(3)
 };
 
 static int util_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsfs_args);
-    filesys_listdir(
-#   if defined(CONFIG_BASE_USE_FFS) && defined(CONFIG_BASE_USE_SDFS)
-        util_lsfs_args.ext->count ? FILESYS_SDCARD : FILESYS_FLASH
-#   elif defined(CONFIG_BASE_USE_FFS)
-        FILESYS_FLASH
-#   else
-        FILESYS_SDCARD
-#   endif
-        , ARG_STR(util_lsfs_args.dir, "/"), stdout);
+    bool sdcard = util_lsfs_args.ext->count;
+    filesys_type_t type = sdcard ? FILESYS_SDCARD : FILESYS_FLASH;
+    if (util_lsfs_args.stat->count) {
+        filesys_pstat(type, util_lsfs_args.stat->sval[0]);
+    } else {
+        filesys_listdir(type, ARG_STR(util_lsfs_args.dir, "/"), stdout);
+    }
     return ESP_OK;
 }
 #endif // CONSOLE_UTIL_LSFS
@@ -932,25 +943,16 @@ static int util_hist(int argc, char **argv) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
     const char *cmd = util_hist_args.cmd->sval[0];
     const char *dst = ARG_STR(util_hist_args.dst, "history.txt");
-    bool save = false;
+    bool save = false, sdcard = util_hist_args.ext->count;
     if (strstr(cmd, "save")) {
         save = true;
     } else if (!strstr(cmd, "load")) {
         printf("Invalid command: `%s`\n", cmd);
         return err;
     }
-#   ifndef CONFIG_BASE_USE_FFS
-    const char *mp = CONFIG_BASE_SDFS_MP;
-#   else
-    const char *mp = CONFIG_BASE_FFS_MP;
-#       ifdef CONFIG_BASE_USE_SDFS
-    if (util_hist_args.ext->count) mp = CONFIG_BASE_SDFS_MP;
-#       endif
-#   endif
-    char path[strlen(mp) + strlen(Config.sys.DIR_DATA) + strlen(dst) + 1];
-    sprintf(path, "%s%s%s", mp, Config.sys.DIR_DATA, dst);
-    struct stat st;
-    if (stat(path, &st) && !save) {
+    filesys_type_t type = sdcard ? FILESYS_SDCARD : FILESYS_FLASH;
+    const char *path = filesys_join(type, 2, Config.sys.DIR_DATA, dst);
+    if (!save && !filesys_exists(type, path)) {
         printf("History file `%s` does not exist\n", path);
         err = ESP_ERR_NOT_FOUND;
     } else {
@@ -1217,7 +1219,7 @@ static struct {
 static int net_ping(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ping_args);
     if (net_ping_args.dry->count)
-        return wifi_parse_addr(net_ping_args.host->sval[0], NULL);
+        return network_parse_addr(net_ping_args.host->sval[0], NULL);
     return ping_command(
         net_ping_args.host->sval[0],
         ARG_INT(net_ping_args.intv, 0),
@@ -1353,7 +1355,7 @@ static struct {
     .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
     .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
     .tout = arg_int0("t", NULL, "0-65535", "key/mouse timeout in ms"),
-    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BLE/SCN"),
+    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BT/SCN"),
     .end  = arg_end(6)
 };
 

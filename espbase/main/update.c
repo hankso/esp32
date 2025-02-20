@@ -13,7 +13,7 @@
 #include "esp_http_client.h"
 #include "esp_image_format.h"
 
-static const char *TAG = "ota";
+static const char *TAG = "Update";
 
 static struct {
     const esp_partition_t *target, *running;
@@ -136,10 +136,11 @@ const char * ota_updation_error() {
 }
 
 #ifdef CONFIG_BASE_OTA_FETCH
-const char * load_cert(const char *path, size_t *plen) {
+static char * load_cert(const char *path, size_t *plen) {
     char *buf = NULL;
     struct stat st;
-    if (stat(path, &st) || !st.st_size || EMALLOC(buf, st.st_size)) return buf;
+    if (stat(path, &st) || !st.st_size || st.st_size > 4096) return buf;
+    if (EMALLOC(buf, st.st_size)) return buf;
     FILE *fp = fopen(path, "r");
     size_t len = fp ? fread(buf, sizeof(char), st.st_size, fp) : 0;
     if (len != st.st_size) {
@@ -166,23 +167,21 @@ bool ota_updation_url(const char *url, bool force) {
         asize = sizeof(esp_app_desc_t),
         vsize = sizeof(new_info.version),
         tsize = sizeof(new_info.time);
-    char buf[hsize + ssize + asize + 128];
+    char buf[hsize + ssize + asize + 128], *cert = NULL;
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 2000,
         .keep_alive_enable = true,
     };
 #   ifdef CONFIG_BASE_USE_FFS
-    const char *fsmp = CONFIG_BASE_FFS_MP, *fn = "server.pem";
-    char path[strlen(fsmp) + strlen(Config.sys.DIR_DATA) + strlen(fn) + 1];
-    sprintf(path, "%s%s%s", fsmp, Config.sys.DIR_DATA, fn);
-    config.cert_pem = load_cert(path, &config.cert_len);
+    const char *fullpath = fjoin(2, Config.sys.DIR_DATA, "server.pem");
+    config.cert_pem = cert = load_cert(fullpath, &config.cert_len);
     config.skip_cert_common_name_check = config.cert_pem != NULL;
 #   endif
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         ctx.error = ESP_FAIL;
-        goto config_clean;
+        goto http_clean;
     }
     if (( ctx.error = esp_http_client_open(client, 0) )) goto http_clean;
     esp_http_client_fetch_headers(client);
@@ -240,10 +239,9 @@ ota_error:
     if (!ctx.error) ctx.error = ESP_FAIL;
     if (ctx.handle) esp_ota_abort(ctx.handle);
 http_clean:
+    TRYFREE(cert);
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
-config_clean:
-    TRYFREE(config.cert_pem);
     return ctx.error == ESP_OK;
 }
 #else

@@ -38,8 +38,43 @@ void filesys_initialize();
 bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
 bool filesys_release(filesys_type_t);                 // give write lock
 bool filesys_get_info(filesys_type_t, filesys_info_t *);
+
+// Prepend mountpoint to specified path automatically by filesys_norm
+const char * filesys_norm(filesys_type_t, const char *); // NOT reentrant
+const char * filesys_join(filesys_type_t, size_t argc, ...); // NOT reentrant
+
+// Return true if success/already-done, false if command failed
+bool filesys_touch(filesys_type_t, const char *);
+bool filesys_mkdir(filesys_type_t, const char *);
+bool filesys_rmdir(filesys_type_t, const char *);
+bool filesys_isdir(filesys_type_t, const char *);
+bool filesys_isfile(filesys_type_t, const char *);
 bool filesys_exists(filesys_type_t, const char *);
-void filesys_listdir(filesys_type_t, const char *, FILE *);
+
+typedef void (*walk_cb_t)(const char *basename, const struct stat *, void *arg);
+void filesys_walk(filesys_type_t, const char *, walk_cb_t, void *arg);
+void filesys_pstat(filesys_type_t, const char *);
+void filesys_listdir(filesys_type_t, const char *, FILE *stream);
+char * filesys_listdir_json(filesys_type_t, const char *); // need free
+
+// Aliases
+#define fnorm(...)      filesys_norm(FILESYS_FLASH, __VA_ARGS__)
+#define fjoin(...)      filesys_join(FILESYS_FLASH, __VA_ARGS__)
+#define ftouch(...)     filesys_touch(FILESYS_FLASH, __VA_ARGS__)
+#define fmkdir(...)     filesys_mkdir(FILESYS_FLASH, __VA_ARGS__)
+#define frmdir(...)     filesys_rmdir(FILESYS_FLASH, __VA_ARGS__)
+#define fisdir(...)     filesys_isdir(FILESYS_FLASH, __VA_ARGS__)
+#define fisfile(...)    filesys_isfile(FILESYS_FLASH, __VA_ARGS__)
+#define fexists(...)    filesys_exists(FILESYS_FLASH, __VA_ARGS__)
+
+#define snorm(...)      filesys_norm(FILESYS_SDCARD, __VA_ARGS__)
+#define sjoin(...)      filesys_join(FILESYS_SDCARD, __VA_ARGS__)
+#define stouch(...)     filesys_touch(FILESYS_SDCARD, __VA_ARGS__)
+#define smkdir(...)     filesys_mkdir(FILESYS_SDCARD, __VA_ARGS__)
+#define srmdir(...)     filesys_rmdir(FILESYS_SDCARD, __VA_ARGS__)
+#define sisdir(...)     filesys_isdir(FILESYS_SDCARD, __VA_ARGS__)
+#define sisfile(...)    filesys_isfile(FILESYS_SDCARD, __VA_ARGS__)
+#define sexists(...)    filesys_exists(FILESYS_SDCARD, __VA_ARGS__)
 
 #ifdef __cplusplus
 }
@@ -51,7 +86,7 @@ void filesys_listdir(filesys_type_t, const char *, FILE *);
  * - SDMMCFS is designed for SD Card FAT File System.
  *
  * - FLASHFS supports SPIFFS and FAT format.
- *   It is configured by `CONFIG_BASE_FFS_FAT` or `CONFIG_BASE_FFS_SPIFFS`.
+ *   It is configured by `CONFIG_BASE_FFS_FAT` or `CONFIG_BASE_FFS_SPI`.
  *
  * This cpp class relies on Arduino FS Abstract Layer but nothing.
  *
@@ -145,6 +180,7 @@ public:
     const char* name() const override;
 
     operator    bool()                  { return !_badfile || !_baddir; }
+    FILE *      getFile()               { return _file; }
     const char* path() const override   { return (const char *)_path; }
     size_t      size() const override   { getstat(); return _stat.st_size; }
     time_t      getLastWrite() override { getstat(); return _stat.st_mtime; }
