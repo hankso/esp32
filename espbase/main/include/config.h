@@ -21,6 +21,7 @@ typedef struct config_system_t {
     const char * USB_MODE;  // Select USB work mode
     const char * BT_MODE;   // Select BT work mode
     const char * BT_SCAN;   // Bluetooth discoverable
+    const char * FS_PART;   // File System partition label (see partition.csv)
 } config_sys_t;
 
 typedef struct config_network_t {

@@ -46,6 +46,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 
 ### ESP32 GPIO assignment
 
+```
 +-----+--------+-----------+---------+----------+---------+------------------------+
 | IO  | ALT0   | ALT1      | ALT2    | ALT3     | ALT4    | Comments               |
 +-----+--------+-----------+---------+----------+---------+------------------------+
@@ -92,6 +93,7 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 | 38  |        | SENSOR_CN |         |          |         | GPI  | ADC1_CH2 | IO2  |
 | 39  |        | SENSOR_VN |         |          |         | GPI  | ADC1_CH3 | IO3  |
 +-----+--------+-----------+---------+----------+---------+------+----------+------+
+```
 
 1. Strapping pin: GPIO0, GPIO2, GPIO5, GPIO12 (MTDI), and GPIO15 (MTDO) are strapping pins.
 2. JTAG: GPIO12-15 are usually used for inline debug.
@@ -151,6 +153,7 @@ PIN Value Usage
 
 ### ESP32 Pico D4 vs V3 vs V3-02
 
+```
 +------+----------------+---------------+---------------+
 | PIN  | PICO-V3-02     | PICO-V3       | PICO-D4       |
 +------+----------------+---------------+---------------+
@@ -165,9 +168,11 @@ PIN Value Usage
 +------+----------------+---------------+---------------+
 | Size | 7 x 7 x 1.11mm |        7 x 7 x 0.94mm         |
 +------+----------------+-------------------------------+
+```
 
 ### ESP32-S3 GPIO assignment
 
+```
 +-----+---------+-----------+---------+----------+----------+------+----------+
 | IO  | ALT0    | ALT1      | ALT2    | ALT3     | Analog   | RTC  | Comments |
 +-----+---------+-----------+---------+----------+----------+------+----------+
@@ -225,6 +230,7 @@ PIN Value Usage
 | 45* |         |           |         |          |                            |
 | 46* |         |           |         |          |                            |
 +-----+---------+-----------+---------+----------+----------------------------+
+```
 
 1. Strapping pin: GPIO0, GPIO3, GPIO45 and GPIO46 are strapping pins.
 2. USB-JTAG: GPIO19 and GPIO20 are used by USB-JTAG by default.

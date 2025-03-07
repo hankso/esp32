@@ -21,8 +21,9 @@ import struct
 import argparse
 import tempfile
 import threading
-import os.path as op
+import subprocess
 from io import StringIO
+from os import path as op, environ as env
 from posixpath import join as urljoin
 from wsgiref.simple_server import WSGIServer
 
@@ -43,12 +44,12 @@ except Exception:
 # these are default values
 __basedir__ = op.dirname(op.abspath(__file__))
 __codedir__ = op.join(__basedir__, 'main')
-__cmkfile__ = op.join(__basedir__, 'CMakeLists.txt')
-__partcsv__ = op.join(__basedir__, 'partitions.csv')
 __nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
+__partcsv__ = op.join(__basedir__, 'partitions.csv')
+__projcmk__ = op.join(__basedir__, 'CMakeLists.txt')
+__compcmk__ = op.join(__codedir__, 'CMakeLists.txt')
 __nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
 __certpem__ = op.join(__basedir__, 'files', 'data', 'server.pem')
-__lvgldir__ = op.join(__basedir__, 'managed_components', 'lvgl__lvgl')
 __distdir__ = (tuple(filter(
     lambda p: op.isdir(p) and os.listdir(p),
     [
@@ -60,6 +61,7 @@ __distdir__ = (tuple(filter(
 
 
 PORT = 9999
+IDF_PATH = env['IDF_PATH'] if op.isdir(env.get('IDF_PATH', '')) else ''
 
 
 def random_id(len=8):
@@ -72,7 +74,7 @@ def random_id(len=8):
 
 def project_name():
     try:
-        with open(__cmkfile__) as f:
+        with open(__projcmk__, encoding='utf8') as f:
             content = f.read()
         return re.findall(r'project\((\w+)[ \)]', content)[0]
     except Exception:
@@ -85,20 +87,20 @@ def firmware_url(filename='app.bin', port=PORT):
 
 
 def process_nvs(args):
-    idf_path = os.environ.get('IDF_PATH')
-    if not idf_path:
-        return
     try:
-        offset, size = '0xB000', '0x4000'
-        with open(__partcsv__, 'r') as f:
+        assert not args.offset or not args.size
+        args.offset, args.size = '0xB000', '0x4000'
+        with open(__partcsv__, encoding='utf8') as f:
             for line in f.readlines():
                 if line.startswith('#') or not line.strip():
                     continue
                 if 'data' not in line or 'nvs' not in line:
                     continue
                 chunks = [a.strip(',') for a in line.split()]
-                offset, size = chunks[3:5]
+                args.offset, args.size = chunks[3:5]
                 break
+    except AssertionError:
+        pass
     except Exception as e:
         print('Parse', __partcsv__, 'failed:', e)
     argv_backup = sys.argv[:]
@@ -107,17 +109,17 @@ def process_nvs(args):
             'components/nvs_flash/nvs_partition_generator',
             'components/esptool_py/esptool',
         ):
-            sys.path.append(op.join(idf_path, folder))
+            sys.path.append(op.join(IDF_PATH, folder))
         from nvs_partition_gen import main as nvs_gen
         from esptool import _main as nvs_flash
-        if op.isdir(op.dirname(__nvsdist__)):
-            dist = __nvsdist__
+        if op.isdir(op.dirname(args.pack)):
+            dist = args.pack
         else:
             dist = tempfile.mktemp()
-        sys.argv[1:] = ['generate', args.out, dist, size]
+        sys.argv[1:] = ['generate', args.out, dist, args.size]
         nvs_gen()
         if args.flash:
-            sys.argv[1:] = ['-p', args.flash, 'write_flash', offset, dist]
+            sys.argv[1:] = ['-p', args.flash, 'write_flash', args.offset, dist]
             nvs_flash()
     except Exception as e:
         return print('Generate NVS partition binary failed:', e)
@@ -127,32 +129,33 @@ def process_nvs(args):
         sys.argv = argv_backup
 
 
-def genid(args):
-    if op.exists(args.tpl):
-        with open(args.tpl, 'r') as f:
-            prefix = project_name()
-            data = f.read() \
-                .replace('{NAME}', prefix) \
-                .replace('{UID}', random_id(args.len)) \
-                .replace('{URL}', firmware_url(prefix + '.bin')) \
-                .replace('\n\n', '\n') \
-                .replace(' ', '')
-    else:
-        data = random_id(args.len)
-    if args.pack and 'IDF_PATH' in os.environ:
+def gencfg(args):
+    if not op.isfile(args.tpl):
+        return
+    with open(args.tpl, encoding='utf8') as f:
+        prefix = project_name()
+        data = f.read() \
+            .replace('{NAME}', prefix) \
+            .replace('{UID}', random_id(args.len)) \
+            .replace('{URL}', firmware_url(prefix + '.bin')) \
+            .replace('\n\n', '\n') \
+            .replace(' ', '')
+    if args.out == sys.stdout and IDF_PATH:
         args.out = tempfile.mktemp()
     if hasattr(args.out, 'name'):
         filename = args.out.name
     else:
-        filename = str(args.out).strip('<>')
+        filename = str(args.out)
     if not args.quiet:
         print('Writing NVS information to `%s`' % filename)
     if hasattr(args.out, 'write'):
         args.out.write(data)
+        args.out.flush()
     else:
-        with open(args.out, 'w') as f:
+        with open(args.out, 'w', encoding='utf8') as f:
             f.write(data)
-    if args.pack:
+    if args.pack and IDF_PATH and filename[0] != '<':
+        args.out = filename
         process_nvs(args)
 
 
@@ -172,9 +175,10 @@ def font_output(args):
 
 
 def font_icon(args):
-    if not op.exists(__lvgldir__):
+    lvgldir = op.join(__basedir__, 'managed_components', 'lvgl__lvgl')
+    if not op.exists(lvgldir):
         return ''
-    fontdir = op.join(__lvgldir__, 'scripts', 'built_in_font')
+    fontdir = op.join(lvgldir, 'scripts', 'built_in_font')
     if args.size % 8:
         print('Skip UNSCII-8 because size is not multiple of 8')
         cmd = '-r 0x20-0x7F --font "%s"' % op.join(fontdir, 'unscii-8.ttf')
@@ -220,10 +224,11 @@ def genfont(args):
     2. lv_font_conv --help
     '''
     symbols = set()
+    tpl = re.compile(r'[\u4E00-\u9FA5]')  # chinese characters
     for root, dirs, files in os.walk(__codedir__):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp')), files):
-            with open(op.join(root, fn), encoding='utf-8') as f:
-                symbols.update(re.findall(r'[\u4E00-\u9FA5]', f.read()))
+            with open(op.join(root, fn), encoding='utf8') as f:
+                symbols.update(tpl.findall(f.read()))
     if not symbols:
         return print('No chinese characters found. Skip')
     if not op.exists(args.font):
@@ -231,15 +236,151 @@ def genfont(args):
     args.out = font_output(args)
     cmd = (
         'lv_font_conv --bpp %d --size %d --no-kerning --format %s -o "%s"'
-        ' --font "%s" --symbols "%s" -r 0x3000-0x301F %s'  # chinese characters
+        ' --font "%s" --symbols "%s" -r 0x3000-0x301F %s'
     ) % (
         args.bpp, args.size, 'bin' if args.bin else 'lvgl', args.out,
         args.font, ''.join(sorted(symbols)), font_icon(args)
     )
-    print('Executing command', cmd)
-    rc = os.system(cmd)
-    if rc == 0 and not args.bin:
-        font_postproc(args.out)
+    try:
+        print('Executing command', cmd)
+        subprocess.check_call(cmd)
+        assert args.bin
+    except Exception:
+        return
+    font_postproc(args.out)
+
+
+# see ESP-IDF docs -> API Guides -> Build system -> common requirements
+ESP_IDF_COMMON = '''
+    app_trace bootloader console cxx driver efuse esp32 esp_common esp_eth
+    esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif esp_phy esp_pm
+    esp_ringbuf esp_rom esp_system esp_timer esp_wifi espcoredump esptool_py
+    freertos hal heap ieee802154 log lwip main mbedtls newlib nvs_flash
+    openthread partition_table pthread soc spi_flash tcpip_adapter vfs
+    wpa_supplicant xtensa
+'''.split()
+
+
+def glob_headers(dirname):
+    '''find .h files and return relative posix path'''
+    try:
+        dirname = glob.glob(dirname)[0]
+        return [
+            op.relpath(path, dirname).replace('\\', '/')
+            for path in glob.glob(op.join(dirname, '**/*.h'), recursive=True)
+        ]
+    except Exception:
+        return []
+
+
+def find_includes(components, headers):
+    '''
+    1. find component directories under `components`
+    2. find INCLUDE_DIRS from component CMakeLists.txt
+    3. find *.h files under INCLUDE_DIRS use `glob_headers`
+    4. mark a component as dependency if `headers` are found
+    '''
+    tpl = re.compile(r'INCLUDE_DIRS ([\w\-/" ]+)', re.I)
+    comps = {}
+    for cmakefile in glob.glob(op.join(components, '*/CMakeLists.txt')):
+        compdir = op.dirname(cmakefile)
+        compname = op.basename(compdir)
+        if compname in ESP_IDF_COMMON or 'arduino' in compname:
+            continue
+        found = set()
+        with open(cmakefile, encoding='utf8') as f:
+            for line in tpl.findall(f.read()):
+                for folder in line.split():
+                    folder = folder.strip('"')
+                    if not folder or folder[0] == '$':
+                        continue
+                    path = op.join(compdir, folder)
+                    found.update(glob_headers(path))
+        if len(found):
+            extra = None
+        else:
+            extra = glob_headers(compdir)
+        for header in list(headers):
+            if extra is not None:
+                for path in extra:
+                    if path.endswith(header):
+                        break
+                else:
+                    continue
+            elif header not in found:
+                continue
+            headers.remove(header)
+            comps.setdefault(compname, []).append(header)
+    return comps
+
+
+def update_dependencies(comps):
+    '''overwrite main/CMakeLists.txt REQUIRES field'''
+    if not op.isfile(__compcmk__):
+        return
+    tpl = re.compile(r'REQUIRES ([\w\- ]+)')
+    try:
+        with open(__compcmk__, encoding='utf8') as f:
+            content = f.read()
+        comps = set(comps).union(tpl.findall(content)[0].split())
+        with open(__compcmk__, 'w', encoding='utf8') as f:
+            f.write(tpl.sub('REQUIRES ' + ' '.join(sorted(comps)), content))
+    except Exception as e:
+        print('Update main/CMakeLists.txt failed:', e)
+
+
+def gendeps(args):
+    headers = set()
+    tpl = re.compile(r'# *include *["<]([\w\.\-/]+)[>"]')
+    for root, dirs, files in os.walk(__codedir__):
+        for fn in filter(lambda fn: fn.endswith(('.c', '.cpp', '.h')), files):
+            with open(op.join(root, fn), encoding='utf8') as f:
+                headers.update(tpl.findall(f.read()))
+    try:
+        headers.difference_update(os.listdir(op.join(__codedir__, 'include')))
+    except Exception as e:
+        print('Skip local headers failed:', e)
+    if not op.isdir(IDF_PATH):
+        if not args.quiet:
+            print('\n'.join(sorted(headers)))
+        return
+    try:
+        headers.difference_update(glob_headers(op.join(
+            env['IDF_TOOLS_PATH'], 'tools/xtensa-esp-elf',
+            '*/xtensa-esp-elf/xtensa-esp-elf/include/'
+        )))
+        for header in list(headers):
+            if header.startswith('driver/') or header.startswith('soc/'):
+                headers.remove(header)
+    except Exception as e:
+        print('Skip libc headers failed:', e)
+    find_includes(op.join(__basedir__, 'managed_components'), headers)  # skip
+    comps = find_includes(op.join(IDF_PATH, 'components'), headers)
+    comps.update(find_includes(op.join(IDF_PATH, '..', 'components'), headers))
+    comps = sorted(comps, key=lambda v: len(v))
+    if not args.quiet:
+        print(' '.join(comps))
+    update_dependencies(comps)
+
+
+def prebuild(args):
+    print('-- Running prebuild scripts (%s) ...' % __file__)
+    try:
+        os.unlink(op.join(
+            __basedir__, 'managed_components',
+            'espressif__elf_loader', '.component_hash'
+        ))
+    except Exception:
+        pass
+    try:
+        srcdir = op.join(__basedir__, 'webpage')
+        dstdir = op.join(__basedir__, 'files', 'www')
+        if (op.getmtime(dstdir) + 10) < op.getmtime(srcdir):
+            subprocess.check_call('pnpm run -C "%s" build' % srcdir)
+    except Exception:
+        pass
+    args.quiet = True
+    gendeps(args)
 
 
 def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
@@ -284,7 +425,7 @@ def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
     return  # not found
 
 
-def searchesp(args):
+def search(args):
     if zeroconf:
         chunks = re.findall(
             r'_?([a-zA-Z0-9\-]+)', args.service.replace('local', '')
@@ -380,7 +521,7 @@ def edit_upload():
 def config_load():
     configs = []
     try:
-        args = make_parser().parse_args(['--quiet', 'genid'])
+        args = make_parser().parse_args(['--quiet', 'gencfg'])
         args.out = StringIO()
         args.func(args)
         args.out.seek(0)
@@ -446,14 +587,14 @@ def static_assets(filename, root, fileman=False, redirect=False):
     if not hasattr(static_assets, 'tpl'):
         p1 = op.abspath(op.join(root, '**', 'fileman*', 'index*.html*'))
         p2 = op.abspath(op.join(root, '**', 'fileman*.html*'))
-        tpls = (glob.glob(p1, recursive=True) + glob.glob(p2, recursive=True))
+        tpls = glob.glob(p1, recursive=True) + glob.glob(p2, recursive=True)
         if tpls:
             print('Using template %s' % relpath(tpls[0], strip=True))
             with open(tpls[0], 'rb') as f:
                 bstr = f.read()
             if tpls[0].endswith('.gz'):
                 bstr = gzip.decompress(bstr)
-            static_assets.tpl = bstr.decode('utf-8')
+            static_assets.tpl = bstr.decode('utf8')
         else:
             static_assets.tpl = None
     if not fileman or not static_assets.tpl:
@@ -480,6 +621,14 @@ def test_apis(apis):
             print('408 - TIMEOUT')
 
 
+def redirect_esp32(esphost):
+    def wrapper():
+        target = esphost + bottle.request.path
+        print('Redirect to %s %s' % (target, dict(bottle.request.params)))
+        return bottle.redirect(target)
+    return wrapper if esphost else lambda: ''
+
+
 class SSLServer(WSGIServer):
     def get_request(self):
         client, addr = self.socket.accept()
@@ -491,16 +640,6 @@ class SSLServer(WSGIServer):
         else:
             self.base_environ['HTTPS'] = 'no'
         return client, addr
-
-
-def find_esphost(args):
-    try:
-        assert args.esphost  # TODO: UDP scan esphost
-        url = 'http://%s:%d/api/alive' % (args.esphost, args.port)
-        assert requests.get(url, timeout=1).ok
-        return url[:-10]
-    except Exception:
-        pass
 
 
 def webserver(args):
@@ -525,7 +664,7 @@ def webserver(args):
         args.esphost = url[:-10]
     except Exception:
         try:
-            args.esphost = 'http://' + searchesp(argparse.Namespace(
+            args.esphost = 'http://' + search(argparse.Namespace(
                 service='id', all=False, oneshot=True, timeout=1, quiet=True
             ))
         except Exception:
@@ -540,14 +679,9 @@ def webserver(args):
         print('checking username `%s` password `%s`' % (username, password))
         return True
 
-    def redirect_esp32():
-        target = args.esphost + bottle.request.path
-        print('Redirect to %s %s' % (target, dict(bottle.request.params)))
-        return bottle.redirect(target)
-
     api = bottle.Bottle()
-    api.route('/alive', 'GET', redirect_esp32 if args.esphost else lambda: '')
-    api.route('/exec', 'POST', redirect_esp32 if args.esphost else lambda: '')
+    api.route('/alive', 'GET', redirect_esp32(args.esphost))
+    api.route('/exec', 'POST', redirect_esp32(args.esphost))
     api.route('/edit', 'GET', lambda: edit_get(args.root))
     api.route('/editu', 'POST', edit_upload)
     api.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
@@ -562,17 +696,16 @@ def webserver(args):
             (args.esphost + '/api' + r.rule, r.method) for r in api.routes
         ])
 
+    if not args.quiet:
+        print('WebServer running at `%s`' % relpath(args.root, strip=True))
+        if not args.static and args.esphost:
+            print('Redirect requests to alive ESP32 at', args.esphost)
+        elif not args.static:
+            print('Simulate ESP32 APIs: cmd/edit/config/update etc.')
     app = bottle.Bottle()
     if op.exists(args.certfile):
         app.ssl_opt = {'server_side': True, 'certfile': args.certfile}
-    if not args.quiet:
-        print('WebServer running at `%s`' % relpath(args.root, strip=True))
     if not args.static:
-        if not args.quiet:
-            if args.esphost:
-                print('Redirect requests to alive ESP32 at', args.esphost)
-            else:
-                print('Simulate ESP32 APIs: cmd/edit/config/update etc.')
         app.mount('/api', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/auth', ['GET', 'POST'], bottle.auth_basic(check)(lambda: ''))
@@ -617,21 +750,25 @@ def make_parser():
         '--oneshot', action='store_true', help='stop search after found one')
     sparser.add_argument(
         '--timeout', type=float, default=3, help='search duration in sec')
-    sparser.set_defaults(func=searchesp)
+    sparser.set_defaults(func=search)
 
     sparser = subparsers.add_parser(
-        'genid', help='Generate unique ID with NVS flash template')
+        'gencfg', help='Generate unique ID with NVS flash template')
     sparser.add_argument(
-        '--pack', action='store_true', help='package into nvs binary file')
+        '--tpl', default=__nvsfile__, help='render nvs from template')
+    sparser.add_argument(
+        '--pack', default=__nvsdist__, help='package into nvs binary file')
     sparser.add_argument(
         '--flash', metavar='COM', help='flash NVS binary to specified port')
+    sparser.add_argument(
+        '--offset', type=str, help='nvs partition offset')
+    sparser.add_argument(
+        '--size', type=str, help='nvs partition size')
     sparser.add_argument(
         '-l', '--len', type=int, default=6, help='length of UID')
     sparser.add_argument(
         '-o', '--out', default=sys.stdout, help='write to file if specified')
-    sparser.add_argument(
-        '-t', '--tpl', default=__nvsfile__, help='render nvs from template')
-    sparser.set_defaults(func=genid)
+    sparser.set_defaults(func=gencfg)
 
     sparser = subparsers.add_parser(
         'genfont', help='Scan .c files and tree-shake fonts for LVGL')
@@ -642,6 +779,14 @@ def make_parser():
         '-s', '--size', type=int, default=12, help='font size in pixels')
     sparser.add_argument('-o', '--out', help='output font path')
     sparser.set_defaults(func=genfont)
+
+    sparser = subparsers.add_parser(
+        'gendeps', help='Scan source files to resolve dependencies')
+    sparser.set_defaults(func=gendeps)
+
+    sparser = subparsers.add_parser(
+        'prebuild', help='Automatically executed by CMakeLists.txt')
+    sparser.set_defaults(func=prebuild)
 
     return parser
 

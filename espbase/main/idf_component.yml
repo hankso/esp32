@@ -4,11 +4,11 @@
 dependencies:
   idf: ">=4.4"
 
-  knob: "*"
+  knob: "^1.0.0"
   button: "^3.5.0"
-  led_indicator: "*"
+  elf_loader: "^1.0.0"
+  led_indicator: "^1.1.0"
 
-  lvgl/lvgl: "^8"
   esp_lvgl_port: "^2.4.4"
 
   tinyusb:

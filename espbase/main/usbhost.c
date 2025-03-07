@@ -55,7 +55,7 @@ static struct {
  * Helper functions
  */
 
-extern void usbhost_status(usbmode_t mode) {
+void usbhost_status(usbmode_t mode) {
     usb_host_lib_info_t info;
     esp_err_t err = usb_host_lib_info(&info);
     if (err) {
@@ -328,13 +328,13 @@ exit:
     vTaskDelete(NULL);
 }
 
-extern esp_err_t cdc_host_init() { return usbh_common_init(cdc_host_task, CDC); }
-extern esp_err_t cdc_host_exit() { return usbh_common_exit(); }
+esp_err_t cdc_host_init() { return usbh_common_init(cdc_host_task, CDC); }
+esp_err_t cdc_host_exit() { return usbh_common_exit(); }
 
 #else // CONFIG_BASE_USB_CDC_HOST
 
-extern esp_err_t cdc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t cdc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_HOST
 
@@ -453,13 +453,13 @@ exit:
     vTaskDelete(NULL);
 }
 
-extern esp_err_t msc_host_init() { return usbh_common_init(msc_host_task, MSC); }
-extern esp_err_t msc_host_exit() { return usbh_common_exit(); }
+esp_err_t msc_host_init() { return usbh_common_init(msc_host_task, MSC); }
+esp_err_t msc_host_exit() { return usbh_common_exit(); }
 
 #else // CONFIG_BASE_USB_MSC_HOST
 
-extern esp_err_t msc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t msc_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_HOST
 
@@ -518,9 +518,8 @@ static void hid_event_cb(
         if (size < sizeof(hid_mouse_report_t)) return;
         hid_handle_mouse((hid_mouse_report_t *)data, NULL, NULL);
     } else if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
-        char buf[64];
-        snprintf(buf, sizeof(buf), "%s %s", HID, hid_protocol_str(params.proto));
-        printf(buf); hexdump(data, size, 80 - strlen(buf));
+        int offset = printf("%s %s ", HID, hid_protocol_str(params.proto));
+        if (offset > 0) hexdump(data, size, 80 - offset);
     }
 }
 
@@ -612,13 +611,13 @@ exit:
     vTaskDelete(NULL);
 }
 
-extern esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, HID); }
-extern esp_err_t hid_host_exit() { return usbh_common_exit(); }
+esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, HID); }
+esp_err_t hid_host_exit() { return usbh_common_exit(); }
 
 #else // CONFIG_BASE_USB_HID_HOST
 
-extern esp_err_t hid_host_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t hid_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t hid_host_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t hid_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_HOST
 

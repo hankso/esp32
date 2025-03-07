@@ -8,38 +8,50 @@
 
 #include "globals.h"
 
+#include "dirent.h"                 // for DIR
+#include "sys/stat.h"               // for struct stat
 #include "diskio_impl.h"            // for FF_DRV_NOT_USED
 #include "wear_levelling.h"         // for wl_handle_t
 #include "driver/sdmmc_types.h"     // for sdmmc_card_t
+
+#if defined(CONFIG_BASE_USE_ELF) && !__has_include("esp_elf.h")
+#   warning "Run `idf.py add-dependency espressif/elf_loader`"
+#   undef CONFIG_BASE_USE_ELF
+#endif
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#define PATH_MAX_LEN 255
+
+typedef char filesys_path_t[PATH_MAX_LEN];
+
 typedef enum {
-    FILESYS_FLASH,              // if defined CONFIG_BASE_USE_FFS
-    FILESYS_SDCARD,             // if defined CONFIG_BASE_USE_SDFS
+    FILESYS_FLASH = 1,  // if defined CONFIG_BASE_USE_FFS
+    FILESYS_SDCARD,     // if defined CONFIG_BASE_USE_SDFS
 } filesys_type_t;
 
+#define FILESYS_TYPE(sdcard) ( (sdcard) ? FILESYS_SDCARD : FILESYS_FLASH )
+
 typedef struct {
+    filesys_type_t type;
     uint64_t used;
     uint64_t total;
     size_t blkcnt;
     size_t blksize;
-    int pdrv;                   // available if FAT Flash or FAT SDCard
-    union {
-        wl_handle_t wlhdl;      // if defined CONFIG_BASE_FFS_FAT
-        sdmmc_card_t *card;
-    };
-    filesys_type_t type;
+    int pdrv; // available if FAT Flash or FAT SDCard
 } filesys_info_t;
 
 void filesys_initialize();
 bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
 bool filesys_release(filesys_type_t);                 // give write lock
 bool filesys_get_info(filesys_type_t, filesys_info_t *);
+void filesys_print_info(filesys_type_t);
 
-// Prepend mountpoint to specified path automatically by filesys_norm
+// Mountpoint will be prepended to the path according to filesys_type_t
+char * filesys_norm_r(filesys_type_t, filesys_path_t, const char *);
+char * filesys_join_r(filesys_type_t, filesys_path_t, size_t argc, ...);
 const char * filesys_norm(filesys_type_t, const char *); // NOT reentrant
 const char * filesys_join(filesys_type_t, size_t argc, ...); // NOT reentrant
 
@@ -51,15 +63,21 @@ bool filesys_isdir(filesys_type_t, const char *);
 bool filesys_isfile(filesys_type_t, const char *);
 bool filesys_exists(filesys_type_t, const char *);
 
-typedef void (*walk_cb_t)(const char *basename, const struct stat *, void *arg);
+typedef void (*walk_cb_t)(const char *basename, const struct stat *, void *);
 void filesys_walk(filesys_type_t, const char *, walk_cb_t, void *arg);
 void filesys_pstat(filesys_type_t, const char *);
 void filesys_listdir(filesys_type_t, const char *, FILE *stream);
 char * filesys_listdir_json(filesys_type_t, const char *); // need free
+uint8_t * filesys_load(filesys_type_t, const char *, size_t *); // need free
+esp_err_t filesys_readelf(filesys_type_t, const char *, int verbose); // 0-4
+esp_err_t filesys_execute(filesys_type_t, const char *, int argc, char **argv);
 
 // Aliases
+#define fnormr(...)     filesys_norm_r(FILESYS_FLASH, __VA_ARGS__)
+#define fjoinr(...)     filesys_join_r(FILESYS_FLASH, __VA_ARGS__)
 #define fnorm(...)      filesys_norm(FILESYS_FLASH, __VA_ARGS__)
 #define fjoin(...)      filesys_join(FILESYS_FLASH, __VA_ARGS__)
+#define fload(...)      filesys_load(FILESYS_FLASH, __VA_ARGS__)
 #define ftouch(...)     filesys_touch(FILESYS_FLASH, __VA_ARGS__)
 #define fmkdir(...)     filesys_mkdir(FILESYS_FLASH, __VA_ARGS__)
 #define frmdir(...)     filesys_rmdir(FILESYS_FLASH, __VA_ARGS__)
@@ -67,8 +85,11 @@ char * filesys_listdir_json(filesys_type_t, const char *); // need free
 #define fisfile(...)    filesys_isfile(FILESYS_FLASH, __VA_ARGS__)
 #define fexists(...)    filesys_exists(FILESYS_FLASH, __VA_ARGS__)
 
+#define snormr(...)     filesys_norm_r(FILESYS_SDCARD, __VA_ARGS__)
+#define sjoinr(...)     filesys_join_r(FILESYS_SDCARD, __VA_ARGS__)
 #define snorm(...)      filesys_norm(FILESYS_SDCARD, __VA_ARGS__)
 #define sjoin(...)      filesys_join(FILESYS_SDCARD, __VA_ARGS__)
+#define sload(...)      filesys_load(FILESYS_SDCARD, __VA_ARGS__)
 #define stouch(...)     filesys_touch(FILESYS_SDCARD, __VA_ARGS__)
 #define smkdir(...)     filesys_mkdir(FILESYS_SDCARD, __VA_ARGS__)
 #define srmdir(...)     filesys_rmdir(FILESYS_SDCARD, __VA_ARGS__)
@@ -79,191 +100,3 @@ char * filesys_listdir_json(filesys_type_t, const char *); // need free
 #ifdef __cplusplus
 }
 #endif
-
-/* Framework EspAsyncWebServer depends on Arduino FS libraries, so we have to
- * implement our file system based on Arduino FS instead of native ESP32 VFS.
- *
- * - SDMMCFS is designed for SD Card FAT File System.
- *
- * - FLASHFS supports SPIFFS and FAT format.
- *   It is configured by `CONFIG_BASE_FFS_FAT` or `CONFIG_BASE_FFS_SPI`.
- *
- * This cpp class relies on Arduino FS Abstract Layer but nothing.
- *
- * fs::File implements an `operator bool()` operator, thus File instances
- * can be validated in a boolean context like:
- *
- *      File file = MyFS.open("/filename");
- *      if (!!file || file==true || (bool)file || file ? true : false) {
- *          printf("FileImplPtr is valid\n");
- *          file.close();
- *      }
- *
- * fs::File's boolean operator is actually the validation of `FileImplPtr _p`,
- * which is returned and registered by fs::FSImpl::open. If file doesn't exist
- * or `mode` doesn't contain write flag, `open` should return a null pointer.
- * So we can use a different `exists` logic and employ it in `open`.
- *
- * Note that fs::FileImpl's `operator bool()` has no relation with FileImplPtr,
- * it is used to determine whether the file exists:
- *
- *      MyFSFileImpl file_impl(MyFS, "/path", "r");
- *      if (file_impl) {
- *          printf("file / folder does exist\n");
- *          file_impl.close();
- *      }
- *
- * Note: File system adds about 108 KB to the final firmware.
- */
-
-#ifdef __cplusplus
-
-#include "dirent.h"                 // for DIR
-#include "sys/stat.h"               // for struct stat
-
-#include <FS.h>                     // arduino-esp32/libraries/FS
-#include <FSImpl.h>
-
-namespace fs {
-
-class CFSFileImpl;
-
-class CFSImpl : public FSImpl {
-protected:
-    friend class CFSFileImpl;
-public:
-    FileImplPtr open(const char *path, const char *mode, const bool create) override;
-    bool        exists(const char *path) override;
-    bool        rename(const char *from, const char *to) override;
-    bool        remove(const char *path) override;
-    bool        mkdir(const char *path) override;
-    bool        rmdir(const char *path) override;
-};
-
-class CFSFileImpl : public FileImpl {
-protected:
-    CFSImpl *           _fs;
-    FILE *              _file;
-    DIR *               _dir;
-    bool                _badfile;
-    bool                _baddir;
-    char *              _path;
-    bool                _isdir;
-    char *              _npath; // path of next file
-    bool                _nisdir;
-    char *              _fpath; // path with mountpoint
-    mutable bool        _written;
-    mutable struct stat _stat;
-private:
-    void dir_next();
-
-    bool getstat() const {
-        if (!_fpath) return false;
-        if (!_written) return true;
-        if (!stat(_fpath, &_stat)) {
-            _written = false;
-            return true;
-        } else {
-            memset(&_stat, 0, sizeof(_stat));
-            return false;
-        }
-    }
-public:
-    CFSFileImpl(CFSImpl *fs, const char *path, const char *mode);
-    ~CFSFileImpl() override { close(); }
-    size_t      write(const uint8_t *buf, size_t size) override;
-    size_t      read(uint8_t *buf, size_t size) override;
-    bool        seek(uint32_t pos, SeekMode mode) override;
-    size_t      tell() const;
-    void        flush() override;
-    void        close() override;
-    const char* name() const override;
-
-    operator    bool()                  { return !_badfile || !_baddir; }
-    FILE *      getFile()               { return _file; }
-    const char* path() const override   { return (const char *)_path; }
-    size_t      size() const override   { getstat(); return _stat.st_size; }
-    time_t      getLastWrite() override { getstat(); return _stat.st_mtime; }
-    size_t      position() const override { return tell(); }
-    boolean     isDirectory(void) override { return _isdir; }
-    void        rewindDirectory(void) override { if (!_baddir) rewinddir(_dir); }
-
-    bool        setBufferSize(size_t size);
-    boolean     seekDir(long pos) override;
-    String      getNextFileName(void) override;
-    String      getNextFileName(bool *isDir) override;
-    FileImplPtr openNextFile(const char *mode) override;
-};
-
-class CFS : public FS {
-protected:
-    uint64_t _total, _used;
-public:
-    CFS() : FS(FSImplPtr(new CFSImpl())), _total(0), _used(0) {}
-
-    // work through directory
-    virtual void walk(const char *, void (*cb)(File, void *), void *) = 0;
-    // print information of file entries by walk through directory
-    void list(const char *dir, FILE *stream);
-    // conver list result to JSON
-    char * list(const char *dir);
-
-    uint64_t usedBytes() { return _used; }
-    uint64_t totalBytes() { return _total; }
-
-    void getInfo(filesys_info_t *info) {
-        memset(info, 0, sizeof(filesys_info_t));
-        info->used = _used;
-        info->total = _total;
-        info->pdrv = FF_DRV_NOT_USED;
-    }
-
-    void printInfo(FILE *stream = stdout) {
-        fprintf(stream, "File System used %llu/%llu KB (%llu%%)\n",
-                _used / 1024, _total / 1024, 100 * _used / (_total ?: 1));
-    }
-};
-
-#ifdef CONFIG_BASE_USE_FFS
-class FLASHFS : public CFS {
-private:
-    const char *_label;
-    wl_handle_t _wlhdl = WL_INVALID_HANDLE;
-public:
-    // can specify partition label name
-    FLASHFS(const char *label=NULL) : _label(label) {}
-
-    bool begin(bool fmt=0, const char *mp=CONFIG_BASE_FFS_MP, uint8_t max=10);
-    void end();
-
-    void walk(const char *path, void (*cb)(File, void *), void *arg) override;
-    void getInfo(filesys_info_t *info);
-};
-#endif
-
-#ifdef CONFIG_BASE_USE_SDFS
-class SDMMCFS : public CFS {
-private:
-    sdmmc_card_t *_card = NULL;
-public:
-    SDMMCFS() {}
-
-    bool begin(bool fmt=0, const char *mp=CONFIG_BASE_SDFS_MP, uint8_t max=10);
-    void end();
-
-    void walk(const char *path, void (*cb)(File, void *), void *arg) override;
-    void getInfo(filesys_info_t *info);
-    void printInfo(FILE *stream = stdout);
-};
-#endif
-
-} // namespace fs
-
-#ifdef CONFIG_BASE_USE_FFS
-extern fs::FLASHFS FFS;
-#endif
-#ifdef CONFIG_BASE_USE_SDFS
-extern fs::SDMMCFS SDFS;
-#endif
-
-#endif // __cplusplus

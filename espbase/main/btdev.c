@@ -74,7 +74,7 @@ static EventBits_t clearBits(EventBits_t bits) {
     return ctx.evtgrp ? xEventGroupClearBits(ctx.evtgrp, bits) : 0;
 }
 
-extern void btdev_status(btmode_t mode) {
+void btdev_status(btmode_t mode) {
     printf("Connectable: %s, discoverable: %s, evtgrp: 0b%s\n",
         ctx.cmode ? "true" : "false",
         ctx.dmode == ESP_BT_GENERAL_DISCOVERABLE
@@ -622,7 +622,7 @@ static void ble_gap_cb(
     }
 }
 
-extern esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
+esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     esp_err_t err = ESP_OK;
     if (BT_ENABLED()) return err;
 
@@ -703,7 +703,7 @@ extern esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     return err;
 }
 
-extern esp_err_t bt_common_exit(bool clean) {
+esp_err_t bt_common_exit(bool clean) {
     esp_err_t err = ESP_OK;
     if (BT_IDLE()) return err;
     if (!err) err = esp_bluedroid_disable();
@@ -861,7 +861,7 @@ static void bt_hidd_cb(esp_hidd_cb_event_t event, esp_hidd_cb_param_t *param) {
     }
 }
 
-extern esp_err_t bt_hidd_init(btmode_t prev) {
+esp_err_t bt_hidd_init(btmode_t prev) {
     esp_err_t err = bt_common_init(ESP_BT_MODE_CLASSIC_BT, !ISBT(prev));
     esp_bt_cod_t cod = { .major = ESP_BT_COD_MAJOR_DEV_PERIPHERAL };
     if (!err) err = esp_bt_gap_set_cod(cod, ESP_BT_SET_COD_MAJOR_MINOR);
@@ -871,7 +871,7 @@ extern esp_err_t bt_hidd_init(btmode_t prev) {
     return err;
 }
 
-extern esp_err_t bt_hidd_exit(btmode_t next) {
+esp_err_t bt_hidd_exit(btmode_t next) {
     esp_err_t err = esp_bt_hid_device_deinit();
     if (!err && !ISBT(next)) err = bt_common_exit(true);
     return err;
@@ -879,8 +879,8 @@ extern esp_err_t bt_hidd_exit(btmode_t next) {
 
 #else
 
-extern esp_err_t bt_hidd_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t bt_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t bt_hidd_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t bt_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_BT_HID_DEVICE
 
@@ -981,7 +981,7 @@ static void ble_hidd_cb(void *a, esp_event_base_t b, int32_t id, void *data) {
     }
 }
 
-extern esp_err_t ble_hidd_init(btmode_t prev) {
+esp_err_t ble_hidd_init(btmode_t prev) {
     esp_err_t err = bt_common_init(ESP_BT_MODE_BLE, !ISBLE(prev));
     esp_hid_raw_report_map_t ble_report_maps[] = {
         {
@@ -1008,7 +1008,7 @@ extern esp_err_t ble_hidd_init(btmode_t prev) {
     return err;
 }
 
-extern esp_err_t ble_hidd_exit(btmode_t next) {
+esp_err_t ble_hidd_exit(btmode_t next) {
     esp_err_t err = esp_hidd_dev_deinit(ctx.hiddev);
     if (!err && !ISBLE(next)) err = bt_common_exit(true);
     return err;
@@ -1016,8 +1016,8 @@ extern esp_err_t ble_hidd_exit(btmode_t next) {
 
 #else
 
-extern esp_err_t ble_hidd_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t ble_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t ble_hidd_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t ble_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_BLE_HID_DEVICE
 

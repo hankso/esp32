@@ -5,21 +5,20 @@
  * Desc: We are using https://docs.lvgl.io/8.4/
  */
 
-#include "screen.h"
-#include "config.h"
-#include "hidtool.h"
-
 /******************************************************************************
  * Compatibility
  */
 
-#if __has_include("config.h")
+#if __has_include("screen.h")   // ESP32
+#   include "screen.h"
 #   include "config.h"
+#   include "filesys.h"
+#   include "hidtool.h"
 #   include "freertos/FreeRTOS.h"
 #   include "freertos/semphr.h"
 #   define MUTEX()              xSemaphoreCreateBinary()
 #   define ACQUIRE(s)           ( (s) ? xSemaphoreTake((s), TIMEOUT(50)) : 0 )
-#   define RELEASE(s)           do { if (s) xSemaphoreGive(s); } while(0)
+#   define RELEASE(s)           do { if (s) xSemaphoreGive(s); } while (0)
 #   define ERR_NO_ERR           ESP_OK
 #   define ERR_NO_MEM           ESP_ERR_NO_MEM
 #   define ERR_INVALID_ARG      ESP_ERR_INVALID_ARG
@@ -35,7 +34,8 @@
                     CONFIG_BASE_FFS_MP,         \
                     Config.sys.DIR_DATA // FIXME: change to filesys_xxx
 #   endif
-#else
+#elif __has_include("lvgl.h")   // WIN32 or LINUX
+#   define WITH_LVGL
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)
 #   define ACQUIRE(s)           ( (s) ? !WaitForSingleObject((s), 1) : 0 )
 #   define RELEASE(s)           do { if (s) ReleaseMutex(s); } while (0)
@@ -49,7 +49,7 @@
 #   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
 #endif
 
-#if __has_include("lvgl.h")
+#ifdef WITH_LVGL
 #include "lvgl.h"
 
 /******************************************************************************
@@ -703,4 +703,4 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
     }
     return ERR_NO_ERR;
 }
-#endif // lvgl.h
+#endif // WITH_LVGL

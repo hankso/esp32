@@ -27,16 +27,16 @@
 #define NOTUSED(x)              (void)(x)
 #define _STR_IMPL_(x)           #x
 #define STR(x)                  _STR_IMPL_(x)
-#define CASESTR(x, offset)      case x: return #x + offset;
-#define CASESTRV(v, x, offset)  case x: (v) = #x + offset; break;
+#define CASESTR(x, offset)      case x: return #x + offset
+#define CASESTRV(v, x, offset)  case x: (v) = #x + offset; break
 #define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
 #define LOOP(x, low, high)      for (int x = (low); x < (high); x++)
 #define LOOPD(x, high, low)     for (int x = (high); x > (low); x--)
 #define LOOPN(x, n)             LOOP(x, 0, (n))
 #define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
-#define LPCHR(c, n)             do { LOOPN(x, (n)) putchar(c); } while(0)
-#define LPCHRN(c, n)            do { LPCHR((c), (n)); putchar('\n'); } while(0)
-#define TRYNULL(p, f)           do { if (p) f(p); (p) = NULL; } while(0)
+#define LPCHR(c, n)             do { LOOPN(x, (n)) putchar(c); } while (0)
+#define LPCHRN(c, n)            do { LPCHR((c), (n)); putchar('\n'); } while (0)
+#define TRYNULL(p, f)           do { if (p) f(p); (p) = NULL; } while (0)
 #define TRYFREE(p)              TRYNULL((p), free)
 
 #define TIMEOUT(m)              ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
@@ -126,12 +126,14 @@
 extern "C" {
 #endif
 
-// defined in utils.c
+// implemented in utils.c
 void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
 
 bool strbool(const char *);
 char * strtrim(char *str, const char *chars);
+
+char * b64encode(char *out, const char *inp, size_t len);
 
 bool endswith(const char *, const char *tail);
 bool startswith(const char *, const char *head);

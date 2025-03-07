@@ -55,11 +55,10 @@ static void ble_hidh_cb(void *a, esp_event_base_t b, int32_t id, void *data) {
     } else if (rid == REPORT_ID_DIAL && len == 2) {
         hid_report_dial(HID_TARGET_SCN, param->input.data[0]);
     } else {
-        char buf[64];
         const uint8_t *bda = esp_hidh_dev_bda_get(param->input.dev);
-        snprintf(buf, sizeof(buf), BDASTR " %s ID %d",
-                 BDA2STR(bda), esp_hid_usage_str(usage), rid);
-        printf(buf); hexdump(param->input.data, len, 80 - strlen(buf));
+        int offset = printf(BDASTR " %s ID %d ",
+                            BDA2STR(bda), esp_hid_usage_str(usage), rid);
+        if (offset > 0) hexdump(param->input.data, len, 80 - offset);
     }
 }
 
@@ -69,7 +68,7 @@ static const esp_hidh_config_t conf = {
     .callback_arg = NULL,
 };
 
-extern esp_err_t ble_hidh_init(btmode_t prev) {
+esp_err_t ble_hidh_init(btmode_t prev) {
     if (hid_enabled) return ESP_OK;
     esp_err_t err = bt_common_init(ESP_BT_MODE_BLE, !ISBLE(prev));
     if (!err)
@@ -79,7 +78,7 @@ extern esp_err_t ble_hidh_init(btmode_t prev) {
     return err;
 }
 
-extern esp_err_t ble_hidh_exit(btmode_t next) {
+esp_err_t ble_hidh_exit(btmode_t next) {
     if (!hid_enabled) return ESP_OK;
     esp_err_t err = esp_hidh_deinit();
     if (!err && !ISBLE(next)) err = bt_common_exit(true);
@@ -89,12 +88,12 @@ extern esp_err_t ble_hidh_exit(btmode_t next) {
 
 #else
 
-extern esp_err_t ble_hidh_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t ble_hidh_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t ble_hidh_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t ble_hidh_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_BLE_HID_HOST
 
-extern void bthost_status(btmode_t mode) {
+void bthost_status(btmode_t mode) {
 #ifdef CONFIG_BASE_BLE_HID_HOST
     if (mode == BLE_HIDH) {
         if (!hiddev) {

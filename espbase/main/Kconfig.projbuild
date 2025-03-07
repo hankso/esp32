@@ -40,8 +40,8 @@ menu "ESP Base Configuration"
         config BASE_USB_MSC_DEVICE
             bool "Enable USB MSC Slave mode"
             select TINYUSB_MSC_ENABLED
-            imply USE_FFS
-            imply USE_SDFS
+            imply BASE_USE_FFS
+            imply BASE_USE_SDFS
             default y
 
         config BASE_USB_HID_HOST
@@ -331,7 +331,7 @@ menu "ESP Base Configuration"
 
         config BASE_OTA_FETCH
             bool "Enable OTA updation from URL"
-            default n
+            default y
             help
                 Enable ota_updation_url function (~140KB)
 
@@ -369,6 +369,14 @@ menu "ESP Base Configuration"
             string "SDCard FileSystem Mount Point"
             default "/sdcard"
     endif
+
+    config BASE_USE_ELF
+        bool "Enable ELF Loader"
+        depends on BASE_USE_FFS || BASE_USE_SDFS
+        select ELF_LOADER
+        default y
+        help
+            Enable filesys_elf_xxx functions (~7KB)
 
     config BASE_ALS_TRACK
         bool "Enable Ambient Light Sensor"

@@ -135,24 +135,11 @@ const char * ota_updation_error() {
     return ctx.error != ESP_OK ? esp_err_to_name(ctx.error) : NULL;
 }
 
-#ifdef CONFIG_BASE_OTA_FETCH
-static char * load_cert(const char *path, size_t *plen) {
-    char *buf = NULL;
-    struct stat st;
-    if (stat(path, &st) || !st.st_size || st.st_size > 4096) return buf;
-    if (EMALLOC(buf, st.st_size)) return buf;
-    FILE *fp = fopen(path, "r");
-    size_t len = fp ? fread(buf, sizeof(char), st.st_size, fp) : 0;
-    if (len != st.st_size) {
-        TRYFREE(buf);
-    } else if (plen) {
-        *plen = len;
-    }
-    fclose(fp);
-    return buf;
-}
-
 bool ota_updation_url(const char *url, bool force) {
+#ifndef CONFIG_BASE_OTA_FETCH
+    ctx.error = ESP_ERR_NOT_SUPPORTED;
+    return false; NOTUSED(url); NOTUSED(force);
+#else
     if (!ctx.target || ctx.handle) return false;
     if (!url) url = Config.app.OTA_URL;
     if (!strlen(url)) {
@@ -175,7 +162,8 @@ bool ota_updation_url(const char *url, bool force) {
     };
 #   ifdef CONFIG_BASE_USE_FFS
     const char *fullpath = fjoin(2, Config.sys.DIR_DATA, "server.pem");
-    config.cert_pem = cert = load_cert(fullpath, &config.cert_len);
+    config.cert_len = 4096; // skip files larger than 4KB
+    config.cert_pem = cert = (char *)fload(fullpath, &config.cert_len);
     config.skip_cert_common_name_check = config.cert_pem != NULL;
 #   endif
     esp_http_client_handle_t client = esp_http_client_init(&config);
@@ -243,13 +231,8 @@ http_clean:
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     return ctx.error == ESP_OK;
-}
-#else
-bool ota_updation_url(const char *u, bool f) {
-    ctx.error = ESP_ERR_NOT_SUPPORTED;
-    return false; NOTUSED(u); NOTUSED(f);
-}
 #endif // CONFIG_BASE_OTA_FETCH
+}
 
 static const char * const ota_img_states[] = {
     "New", "Pending", "Valid", "Invalid", "Aborted",

@@ -48,7 +48,7 @@ static bool cdc_enabled = false, msc_enabled = false, hid_enabled = false;
  * Helper functions
  */
 
-extern void usbdev_status(usbmode_t mode) {
+void usbdev_status(usbmode_t mode) {
     printf("inited: %s, mounted: %s\n",
             inited ? "true" : "false", mounted ? "true" : "false");
 #ifdef CONFIG_BASE_USB_CDC_DEVICE
@@ -281,7 +281,7 @@ static void cdc_device_cb(int itf, cdcacm_event_t *event) {
 }
 #   endif
 
-extern esp_err_t cdc_device_init(usbmode_t prev) {
+esp_err_t cdc_device_init(usbmode_t prev) {
     if (cdc_enabled) return ESP_OK;
     esp_err_t err = usbd_common_init();
     tinyusb_config_cdcacm_t acm_conf = {
@@ -306,7 +306,7 @@ extern esp_err_t cdc_device_init(usbmode_t prev) {
     return err;
 }
 
-extern esp_err_t cdc_device_exit(usbmode_t next) {
+esp_err_t cdc_device_exit(usbmode_t next) {
     esp_err_t err = ESP_OK;
     if (!cdc_enabled) return err;
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_CONSOLE
@@ -322,8 +322,8 @@ extern esp_err_t cdc_device_exit(usbmode_t next) {
 
 #else // CONFIG_BASE_USB_CDC_DEVICE
 
-extern esp_err_t cdc_device_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t cdc_device_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_CDC_DEVICE
 
@@ -340,7 +340,7 @@ extern esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 #   endif
 
 #   define CHECK_LUN(lun, retval)                                           \
-    {                                                                       \
+    do {                                                                    \
         if ((lun) >= NUM_DISK) {                                            \
             ESP_LOGE(TAG, "%s invalid lun number %u", __func__, (lun));     \
             return retval;                                                  \
@@ -349,7 +349,7 @@ extern esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
             ESP_LOGE(TAG, "%s invalid lun drive %u", __func__, (lun));      \
             return retval;                                                  \
         }                                                                   \
-    }
+    } while (0)
 
 #   ifdef TARGET_IDF_4
 
@@ -448,7 +448,7 @@ int32_t tud_msc_scsi_cb(
 
 #   endif // TARGET_IDF_4
 
-extern esp_err_t msc_device_init(usbmode_t prev) {
+esp_err_t msc_device_init(usbmode_t prev) {
     esp_err_t err = ESP_OK;
     if (msc_enabled) return err;
     if (
@@ -481,7 +481,7 @@ extern esp_err_t msc_device_init(usbmode_t prev) {
     return err;
 }
 
-extern esp_err_t msc_device_exit(usbmode_t next) {
+esp_err_t msc_device_exit(usbmode_t next) {
     esp_err_t err = ESP_OK;
     if (!msc_enabled) return err;
 #   ifdef TARGET_IDF_5
@@ -494,8 +494,8 @@ extern esp_err_t msc_device_exit(usbmode_t next) {
 
 #else // CONFIG_BASE_USB_MSC_DEVICE
 
-extern esp_err_t msc_device_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t msc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t msc_device_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t msc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_DEVICE
 
@@ -585,7 +585,7 @@ static void hid_device_task(void *arg) {
 }
 #endif
 
-extern esp_err_t hid_device_init(usbmode_t prev) {
+esp_err_t hid_device_init(usbmode_t prev) {
     if (hid_enabled) return ESP_OK;
     esp_err_t err = usbd_common_init();
 #ifdef TARGET_IDF_4
@@ -609,7 +609,7 @@ extern esp_err_t hid_device_init(usbmode_t prev) {
     return err;
 }
 
-extern esp_err_t hid_device_exit(usbmode_t next) {
+esp_err_t hid_device_exit(usbmode_t next) {
     if (!hid_enabled) return ESP_OK;
 #ifdef TARGET_IDF_4
     TRYNULL(hid.task, vTaskDelete); // avoid memory leak and enable reentry
@@ -622,8 +622,8 @@ extern esp_err_t hid_device_exit(usbmode_t next) {
 
 #else // CONFIG_BASE_USB_HID_DEVICE
 
-extern esp_err_t hid_device_init() { return ESP_ERR_NOT_SUPPORTED; }
-extern esp_err_t hid_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t hid_device_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t hid_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_HID_DEVICE
 

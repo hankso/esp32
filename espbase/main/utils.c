@@ -45,6 +45,22 @@ char * strtrim(char *str, const char *chars) {
     return str + head;
 }
 
+char * b64encode(char *buf, const char *inp, size_t len) {
+    const char *end = inp + len, chars[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    if (!inp || (!buf && ECALLOC(buf, 1, (len + 2) / 3 * 4 + 1))) return buf;
+    for (char *out = buf; inp < end; inp += 3, out += 4) {
+        uint32_t u24 = inp[0] << 16;
+        if ((inp + 1) < end) u24 |= inp[1] << 8;
+        if ((inp + 2) < end) u24 |= inp[2];
+        out[0] = chars[(u24 >> 18) & 0x3F];
+        out[1] = chars[(u24 >> 12) & 0x3F];
+        out[2] = (inp + 1) >= end ? '=' : chars[(u24 >> 6) & 0x3F];
+        out[3] = (inp + 2) >= end ? '=' : chars[u24 & 0x3F];
+    }
+    return buf;
+}
+
 bool endswith(const char *str, const char *tail) {
     if (!str || !tail) return false;
     int offset = strlen(str) - strlen(tail);
@@ -110,9 +126,9 @@ static char hexdigits(uint8_t v) {
 
 void hexdump(const void *src, size_t bytes, size_t maxlen) {
     size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
-    LOOPN(i, count) printf(" %02X", ((uint8_t *)src)[i++]);
+    LOOPN(i, count) { printf("%02X ", ((uint8_t *)src)[i]); }
     if (bytes && maxbytes && bytes > maxbytes)
-        printf(" ... [%u/%u]", count, bytes);
+        printf("... [%u/%u]", count, bytes);
     putchar('\n');
 }
 
@@ -293,8 +309,8 @@ static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
 
 void task_info(uint8_t sort_attr) {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
-    // Running Ready Blocked Suspended Deleted
-    static const char task_states[] = "*RBSD", *taskname;
+    //                              Running Ready Blocked Suspended Deleted
+    const char *taskname, states[] = "*RBSD";
     uint32_t ulTotalRunTime = 0;
     uint16_t num = uxTaskGetNumberOfTasks();
     TaskStatus_t tmp, *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
@@ -307,15 +323,10 @@ void task_info(uint8_t sort_attr) {
         vPortFree(tasks);
         return;
     }
-    // Sort tasks by pcTaskName and xCoreID
-    LOOPN(i, num) {
-        LOOP(j, i + 1, num) {
-            if (task_compare(sort_attr, tasks + i, tasks + j)) continue;
-            tmp = tasks[i];
-            tasks[i] = tasks[j];
-            tasks[j] = tmp;
-        }
-    }
+    LOOPN(i, num) { LOOP(j, i + 1, num) { // sort tasks by specified attribute
+        if (task_compare(sort_attr, tasks + i, tasks + j)) continue;
+        tmp = tasks[i]; tasks[i] = tasks[j]; tasks[j] = tmp;
+    } }
 #   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     LOOPN(i, num) { ulTotalRunTime += tasks[i].ulRunTimeCounter; }
 #   endif
@@ -324,7 +335,7 @@ void task_info(uint8_t sort_attr) {
         if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
             taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
         printf("%3d  (%c)  %-15s %2d  %3d %3d%% %7s\n",
-               tasks[i].xTaskNumber, task_states[tasks[i].eCurrentState],
+               tasks[i].xTaskNumber, states[tasks[i].eCurrentState],
                taskname, tasks[i].uxCurrentPriority,
                tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
                100 * tasks[i].ulRunTimeCounter / (ulTotalRunTime ?: 1),
@@ -496,7 +507,8 @@ static uint8_t partition_used(const esp_partition_t *part) {
             return 100 * stat.used_entries / stat.total_entries;
     } else if (
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT ||
-        part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS
+        part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS ||
+        !strcmp(part->label, Config.sys.FS_PART)
     ) {
         filesys_info_t info;
         if (filesys_get_info(FILESYS_FLASH, &info) && info.total)

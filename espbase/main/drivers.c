@@ -1073,11 +1073,11 @@ static void twdt_initialize() {
     // Idle tasks are created on each core automatically by RTOS scheduler
     // with the lowest possible priority (0). Our tasks have higher priority,
     // thus leaving almost no time for idle tasks to run. Disable WDT on them.
-    #ifdef CONFIG_FREERTOS_UNICORE
+#   ifdef CONFIG_FREERTOS_UNICORE
     LOOPN(i, 1)
-    #else
+#   else
     LOOPN(i, 2)
-    #endif // CONFIG_FREERTOS_UNICORE
+#   endif
     {
         TaskHandle_t idle = xTaskGetIdleTaskHandleForCPU(i);
         if (idle && !esp_task_wdt_status(idle) && !esp_task_wdt_delete(idle)) {
@@ -1090,8 +1090,9 @@ static void twdt_initialize() {
 esp_err_t twdt_feed() {
 #ifdef CONFIG_TASK_WDT
     return esp_task_wdt_reset();
-#endif // CONFIG_TASK_WDT
+#else
     return ESP_OK;
+#endif
 }
 
 void driver_initialize() {

@@ -5,15 +5,15 @@
   "description": "Generated from espbase/main/config.h",
   "type": "object",
   "properties": {
-    "sys.path.data": {
+    "sys.dir.data": {
       "description": "Directory to storage font, image files etc.",
       "type": "string"
     },
-    "sys.path.docs": {
+    "sys.dir.docs": {
       "description": "Directory to generated documentation",
       "type": "string"
     },
-    "sys.path.html": {
+    "sys.dir.html": {
       "description": "Directory to static webpage files",
       "type": "string"
     },
@@ -46,6 +46,10 @@
       "description": "Bluetooth discoverable",
       "type": "string",
       "pattern": "^[01yn]?$"
+    },
+    "sys.fs.part": {
+      "description": "File System partition label (see partition.csv)",
+      "type": "string"
     },
     "net.sta.ssid": {
       "description": "SSID of the AP to connect after startup",

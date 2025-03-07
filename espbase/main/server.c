@@ -12,12 +12,28 @@
 #include "ledmode.h"
 #include "timesync.h"
 
+#include "esp_rom_md5.h"
+#include "esp_http_server.h"
+
+#ifdef CONFIG_BASE_USE_WEBSERVER
+
+#define ESP_ERR_HTTPD_AUTH_DIGEST   (ESP_ERR_HTTPD_BASE + 10)
+#define ESP_ERR_HTTPD_SKIP_DATA     (ESP_ERR_HTTPD_BASE + 11)
+
+#define FLAG_AP_ONLY    BIT0
+#define FLAG_NEED_AUTH  BIT1
+#define FLAG_DIR_DATA   BIT2
+#define FLAG_DIR_DOCS   BIT3
+#define FLAG_DIR_HTML   BIT4
+
 #define TYPE_HTML "text/html"
 #define TYPE_TEXT "text/plain"
 #define TYPE_JSON "application/json"
 #define TYPE_UENC "application/x-www-form-urlencoded"
 #define TYPE_MPRT "multipart/form-data"
-#define CHUNK_SIZE 512
+#define CHUNK_SIZE 1024
+
+#define send_str httpd_resp_sendstr // simple alias
 
 static const char *TAG = "Server";
 static const char *ERROR_HTML =
@@ -47,515 +63,6 @@ static const char *UPDATE_HTML =
 "<body>"
 "</html>";
 
-#if defined(CONFIG_BASE_USE_WIFI) && defined(CONFIG_BASE_USE_WEBSERVER)
-
-#include <AsyncTCP.h>
-#include <ESPAsyncWebServer.h>
-
-static void log_msg(AsyncWebServerRequest *req, const char *msg = "") {
-    ESP_LOGI(TAG, "%s %s %s", req->methodToString(), req->url().c_str(), msg);
-}
-
-static void log_param(AsyncWebServerRequest *req) {
-    size_t len = req->params();
-    if (!len) return;
-    AsyncWebParameter *p;
-    for (uint8_t i = 0; (i < len) && (p = req->getParam(i)); i++) {
-        ESP_LOGI(TAG, "Param[%d] key:%s, post:%d, file:%d[%d] `%s`",
-                i, p->name().c_str(), p->isPost(), p->isFile(), p->size(),
-                p->isFile() ? "[skip file content]" : p->value().c_str());
-    }
-}
-
-/******************************************************************************
- * HTTP & static files API
- */
-
-String getWebpage() {
-    static String basename = "index.html", none = "";
-    String path = Config.sys.DIR_HTML + basename;
-    return (FFS.exists(path) || FFS.exists(path + ".gz")) ? path : none;
-}
-
-void onSuccess(AsyncWebServerRequest *req) {
-    log_msg(req);
-    req->send(200);
-}
-
-void onCommand(AsyncWebServerRequest *req) {
-    log_msg(req);
-    log_param(req);
-    if (req->hasParam("cmd", true)) {
-        char *ret = NULL;
-        const char *cmd = req->getParam("cmd", true)->value().c_str();
-        if (!strlen(cmd)) {
-            req->send(400, TYPE_TEXT, "Invalid command to execute");
-        } else if (( ret = console_handle_command(cmd, true, false) )) {
-            req->send(200, TYPE_TEXT, ret);
-        } else {
-            req->send(200);
-        }
-        TRYFREE(ret);
-    } else if (req->hasParam("gcode", true)) {
-        const char *gcode = req->getParam("gcode", true)->value().c_str();
-        ESP_LOGW(TAG, "GCode parser: `%s`", gcode);
-        req->send(501, TYPE_TEXT, "GCode parser is not implemented yet");
-    } else {
-        req->send(400, TYPE_TEXT, "Invalid parameter");
-    }
-}
-
-void onConfig(AsyncWebServerRequest *req) {
-    log_msg(req);
-    if (req->hasParam("json", true)) {
-        if (!config_loads(req->getParam("json", true)->value().c_str())) {
-            req->send(500, TYPE_TEXT, "Load config from JSON failed");
-        } else {
-            req->send(200);
-        }
-    } else {
-        char *json = config_dumps();
-        if (!json) {
-            req->send(500, TYPE_TEXT, "Dump configs into JSON failed");
-        } else {
-            req->send(200, TYPE_JSON, json);
-        }
-        TRYFREE(json);
-    }
-}
-
-void onUpdate(AsyncWebServerRequest *req) {
-    log_msg(req);
-    if (!req->hasParam("raw") && getWebpage().length()) {
-        req->redirect("/updation"); // vue.js SPA router
-    } else {
-        req->send(200, TYPE_HTML, UPDATE_HTML); // fallback to simple one
-    }
-}
-
-void onUpdateDone(AsyncWebServerRequest *req) {
-    log_msg(req);
-    log_param(req);
-    if (req->hasParam("reset", true)) {
-        log_msg(req, "reset");
-        ota_updation_reset();
-        req->send(200, TYPE_TEXT, "OTA Updation reset done");
-    } else if (req->hasParam("size", true)) {
-        String size = req->getParam("size", true)->value();
-        log_msg(req, ("size: " + size).c_str());
-        // erase OTA target partition for preparing
-        if (!ota_updation_begin(size.toInt())) {
-            req->send(400, TYPE_TEXT, ota_updation_error());
-        } else {
-            req->send(200, TYPE_TEXT, "OTA Updation ready for upload");
-        }
-    } else {
-        const char *error = ota_updation_error();
-        if (error) return req->send(400, TYPE_TEXT, error);
-        req->send(200, TYPE_TEXT, "OTA Updation success - reboot");
-        msleep(500);
-        esp_restart();
-    }
-}
-
-void onUpdatePost(
-    AsyncWebServerRequest *req, String filename,
-    size_t index, uint8_t *data, size_t len, bool isFinal
-) {
-    if (!index) {
-        log_msg(req, filename.c_str());
-        if (!ota_updation_begin(0)) {
-            AsyncWebServerResponse *res = req->beginResponse(
-                400, TYPE_TEXT, ota_updation_error());
-            res->addHeader("Connection", "close");
-            return req->send(res);
-        }
-        printf("Update file: %s\n", filename.c_str());
-    }
-    if (!ota_updation_error()) {
-        led_set_light(0, 1);
-        ota_updation_write(data, len);
-        led_set_light(0, 0);
-    }
-    if (isFinal) {
-        if (!ota_updation_end())
-            return req->send(400, TYPE_TEXT, ota_updation_error());
-        printf("Update success: %s\n", format_size(index + len, false));
-    }
-}
-
-void onEditor(AsyncWebServerRequest *req) {
-    log_msg(req);
-    if (req->hasParam("list")) { // listdir
-        String path = req->getParam("path")->value();
-        if (!path.startsWith("/")) path = "/" + path;
-        File root = FFS.open(path);
-        if (!root) {
-            req->send(404, TYPE_TEXT, path + " dir does not exists");
-        } else if (!root.isDirectory()) {
-            req->send(400, TYPE_TEXT, "No file entries under " + path);
-        } else {
-            root.close();
-            char *json = FFS.list(path.c_str());
-            req->send(200, TYPE_JSON, json ? json : "failed");
-            TRYFREE(json);
-        }
-    } else if (req->hasParam("path")) { // serve static files for editor
-        String path = req->getParam("path")->value();
-        if (!path.startsWith("/")) path = "/" + path;
-        File file = FFS.open(path);
-        if (!file) {
-            req->send(404, TYPE_TEXT, path + " file does not exist");
-        } else if (file.isDirectory()) {
-            req->send(400, TYPE_TEXT, "Could not download dir " + path);
-        } else {
-            req->send(file, path, String(), req->hasParam("download"));
-        }
-    } else if (getWebpage().length()) { // redirect to editor page
-        req->redirect("/editor");
-    } else {
-        req->send(404, TYPE_HTML, ERROR_HTML);
-    }
-}
-
-void onCreate(AsyncWebServerRequest *req) {
-    // handle file|dir create
-    log_msg(req);
-    if (!req->hasParam("path")) {
-        return req->send(400, TYPE_TEXT, "No filename specified");
-    }
-    String
-        path = req->getParam("path")->value(),
-        type = req->hasParam("type") ? \
-               req->getParam("type")->value() : "file";
-    if (type == "file") {
-        if (FFS.exists(path)) {
-            return req->send(403, TYPE_TEXT, "File already exists");
-        }
-        File file = FFS.open(path, "w");
-        if (!file) {
-            return req->send(500, TYPE_TEXT, "Create failed");
-        }
-    } else if (type == "dir") {
-        File dir = FFS.open(path);
-        if (dir.isDirectory()) {
-            dir.close();
-            return req->send(403, TYPE_TEXT, "Dir already exists");
-        } else if (!FFS.mkdir(path)) {
-            return req->send(500, TYPE_TEXT, "Create failed");
-        }
-    }
-    req->send(200);
-}
-
-void onDelete(AsyncWebServerRequest *req) {
-    // handle file|dir delete
-    log_msg(req);
-    if (!req->hasParam("path"))
-        return req->send(400, TYPE_TEXT, "No path specified");
-    String path = req->getParam("path")->value();
-    if (!FFS.exists(path))
-        return req->send(403, TYPE_TEXT, "File/dir does not exist");
-    if (
-        path == Config.sys.DIR_DATA ||
-        path == Config.sys.DIR_DOCS ||
-        path == Config.sys.DIR_HTML
-    )
-        return req->send(400, TYPE_TEXT, "No access to delete");
-    if (!FFS.remove(path)) {
-        req->send(500, TYPE_TEXT, "Delete file/dir failed");
-    } else if (req->hasParam("from")) {
-        req->redirect(req->getParam("from")->value());
-    } else {
-        req->send(200);
-    }
-}
-
-void onUpload(
-    AsyncWebServerRequest *req, String filename,
-    size_t index, uint8_t *data, size_t len, bool isFinal
-) {
-    static File file;
-    if (!index) {
-        log_msg(req, filename.c_str());
-        if (file) return req->send(400, TYPE_TEXT, "Busy uploading");
-        if (!filename.startsWith("/")) filename = "/" + filename;
-        if (FFS.exists(filename) && !req->hasParam("overwrite")) {
-            return req->send(403, TYPE_TEXT, "File already exists");
-        }
-        printf("Upload file: %s\n", filename.c_str());
-        file = FFS.open(filename, "w");
-    }
-    if (file) {
-        led_set_light(0, 1);
-        file.write(data, len);
-        led_set_light(0, 0);
-        printf("\rProgress: %8s", format_size(index, false));
-    }
-    if (isFinal && file) {
-        file.flush();
-        file.close();
-        printf("Upload success: %s\n", format_size(index + len, false));
-    }
-}
-
-void onUploadStrict(
-    AsyncWebServerRequest *req, String filename,
-    size_t index, uint8_t *data, size_t len, bool isFinal
-) {
-    if (!filename.startsWith(Config.sys.DIR_DATA)) {
-        log_msg(req, "No access to upload");
-        return req->send(400, TYPE_TEXT, "No access to upload");
-    }
-    onUpload(req, filename, index, data, len, isFinal);
-}
-
-void onError(AsyncWebServerRequest *req) {
-    log_msg(req, "onError");
-    if (req->method() == HTTP_OPTIONS) return req->send(200);
-    String index = getWebpage();
-    if (index.length()) return req->send(FFS, index);
-    return req->send(404, TYPE_HTML, ERROR_HTML);
-}
-
-/******************************************************************************
- * WebSocket message parser and callbacks
- */
-
-typedef struct {
-    AsyncWebSocketClient *client;
-    char name[32];
-    char *buf;
-    size_t idx;
-    size_t len;
-} wsdata_ctx_t;
-
-void handle_websocket_message(wsdata_ctx_t *ctx) {
-    if (!ctx->buf || !ctx->len) return;
-    char *ret;
-    if (ctx->buf[0] == '{') {
-        ret = console_handle_rpc(ctx->buf); // handle JSON-RPC
-    } else {
-        ret = console_handle_command(ctx->buf, true, false); // handle cmds
-    }
-    if (ret) {
-        ctx->client->text(ret);
-        TRYFREE(ret);
-    }
-}
-
-/* AsyncWebSocket Frame Information struct contains
- * {
- *   uint8_t  message_opcode // WS_TEXT | WS_BINARY
- *   uint8_t  opcode         // WS_CONTINUATION if fragmented
- *
- *   uint32_t num            // frame number of a fragmented message
- *   uint8_t  final          // whether this is the last frame
- *   
- *   uint64_t len            // length of the current frame
- *   uint64_t index          // data offset in current frame
- * }
- *
- * Assuming that a Message from the ws client is fragmented as follows:
- *   | Frame0__ | Frame1___ | Frame2____ |
- *     ^   ^      ^           ^  ^
- *     A   B      C           D  E
- * A: num=0, final=false, opcode=message_opcode,  index=0, len=8,  size=4
- * B: num=0, final=false, opcode=message_opcode,  index=4, len=8,  size=4
- * C: num=1, final=false, opcode=WS_CONTINUATION, index=0, len=9,  size=9
- * D: num=2, final=true,  opcode=WS_CONTINUATION, index=0, len=10, size=3
- * E: num=2, final=true,  opcode=WS_CONTINUATION, index=3, len=10, size=7
- */
-static void onWebSocketData(
-    wsdata_ctx_t *ctx, AwsFrameInfo *info, uint8_t *data, size_t size
-) {
-    if (info->final && info->num == 0) {
-        // Message is not fragmented so there's only one frame
-        ESP_LOGD(TAG, "%s msg[%llu]", ctx->name, info->len);
-        if (info->index == 0) {
-            // We are starting this only frame
-            ctx->len = ((info->opcode == WS_TEXT) ? 1 : 2) * info->len + 1;
-            if (EMALLOC(ctx->buf, ctx->len)) goto clean;
-            ctx->idx = 0;
-        } else if (!ctx->buf) {
-            ESP_LOGW(TAG, "%s error: lost first packets. Skip", ctx->name);
-            goto clean;
-        } else {
-            // This frame is splitted into packets
-        }
-    } else if (info->index == 0) {
-        // Message is fragmented. Starting a new frame
-        ESP_LOGD(TAG, "%s msg frame%d[%llu]", ctx->name, info->num, info->len);
-        size_t len = ((info->message_opcode == WS_TEXT) ? 1 : 2) * info->len;
-        if (info->num == 0) {
-            // Starting the first frame
-            if (EMALLOC(ctx->buf, ctx->len = len + 1)) goto clean;
-            ctx->idx = 0;
-        } else if (!ctx->buf) {
-            ESP_LOGW(TAG, "%s error: lost first frame. Skip", ctx->name);
-            goto clean;
-        } else {
-            // Extend buffer for the coming frame
-            char *tmp = (char *)realloc(ctx->buf, ctx->len + len);
-            if (tmp == NULL) goto clean;
-            ctx->buf = tmp;
-            ctx->len += len;
-        }
-    } else if (!ctx->buf) {
-        ESP_LOGW(TAG, "%s error: lost message head. Skip", ctx->name);
-        goto clean;
-    } else {
-        // Message is fragmented. Current frame is splitted
-        ESP_LOGD(TAG, "%s msg frame%d[%llu] packet[%llu-%llu]",
-                 ctx->name, info->num, info->len,
-                 info->index, info->index + size);
-    }
-    // Save/append packets to message buffer
-    if (info->opcode == WS_TEXT) {
-        ctx->idx += snprintf(
-            ctx->buf + ctx->idx, ctx->len - ctx->idx, (char *)data);
-    } else {
-        for (size_t i = 0; i < size; i++) {
-            ctx->idx += snprintf(
-                ctx->buf + ctx->idx, ctx->len - ctx->idx, "%02X", data[i]);
-        }
-    }
-    if (!info->final || info->index + size != info->len) return;
-    // Current message end and all frames buffered
-    handle_websocket_message(ctx);
-clean:
-    ctx->idx = ctx->len = 0;
-    TRYFREE(ctx->buf);
-    return;
-}
-
-static void onWebSocket(
-    AsyncWebSocket *server, AsyncWebSocketClient *client,
-    AwsEventType type, void *arg, uint8_t *data, size_t datalen
-) {
-    wsdata_ctx_t *ctx;
-    server->cleanupClients();
-    if (!( ctx = (wsdata_ctx_t *)client->_tempObject )) {
-        if (ECALLOC(ctx, 1, sizeof(wsdata_ctx_t))) {
-            ESP_LOGE(TAG, "Could not allocate context for websocket");
-            return client->close();
-        }
-        ctx->client = client;
-        snprintf(ctx->name, sizeof(ctx->name), "ws#%u %s:%d",
-                 client->id(), client->remoteIP().toString().c_str(),
-                 client->remotePort());
-        client->_tempObject = ctx;
-    }
-    switch (type) {
-    case WS_EVT_CONNECT:
-        ESP_LOGI(TAG, "%s connected", ctx->name);
-        client->ping();
-        break;
-    case WS_EVT_DISCONNECT:
-        ESP_LOGI(TAG, "%s disconnected", ctx->name);
-        TRYFREE(client->_tempObject);
-        break;
-    case WS_EVT_PONG:
-        break;
-    case WS_EVT_ERROR:
-        ESP_LOGW(TAG, "%s error(%u)", ctx->name, *((uint16_t *)arg));
-        break;
-    case WS_EVT_DATA:
-        onWebSocketData(ctx, (AwsFrameInfo *)arg, data, datalen);
-        break;
-    default:
-        ESP_LOGD(TAG, "%s event %d datalen %u", ctx->name, type, datalen);
-    }
-}
-
-/******************************************************************************
- * Web Server API
- */
-
-class APIRewrite : public AsyncWebRewrite {
-    public:
-        // Rewrite "/api/xxx" to "/xxx"
-        APIRewrite(): AsyncWebRewrite("/api/", "/") {}
-        bool match(AsyncWebServerRequest *request) override {
-            if (!request->url().startsWith(_from)) return false;
-            _toUrl = request->url().substring(_from.length() - 1);
-            return true;
-        }
-};
-
-static AsyncWebServer webserver = AsyncWebServer(80);
-static AsyncWebSocket websocket = AsyncWebSocket("/ws");
-static bool started = false;
-
-void server_loop_begin() {
-    if (started) return;
-    webserver.begin();
-    started = true;
-}
-
-void server_loop_end() {
-    if (started) {
-        webserver.end();
-        started = false;
-    }
-}
-
-void server_initialize() {
-    webserver.reset();
-    webserver.addRewrite(new APIRewrite());
-
-    // WebSocket Handler
-    websocket.onEvent(onWebSocket);
-    websocket.setAuthentication(Config.web.WS_NAME, Config.web.WS_PASS);
-    webserver.addHandler(&websocket);
-    // STA APIs
-    webserver.on("/alive", HTTP_ANY, onSuccess);
-    webserver.on("/exec", HTTP_POST, onCommand);
-    // AP APIs
-    webserver.on("/edit", HTTP_GET, onEditor).setFilter(ON_AP_FILTER);
-    webserver.on("/edit", HTTP_PUT, onCreate).setFilter(ON_AP_FILTER);
-    webserver.on("/edit", HTTP_DELETE, onDelete).setFilter(ON_AP_FILTER);
-    webserver.on("/edit", HTTP_POST, onSuccess, onUpload)
-        .setFilter(ON_AP_FILTER);
-    webserver.on("/config", HTTP_ANY, onConfig).setFilter(ON_AP_FILTER);
-    webserver.on("/update", HTTP_GET, onUpdate).setFilter(ON_AP_FILTER);
-    webserver.on("/update", HTTP_POST, onUpdateDone, onUpdatePost)
-        .setFilter(ON_AP_FILTER);
-    webserver.on("/apmode", HTTP_ANY, onSuccess).setFilter(ON_AP_FILTER);
-    // Static files
-    webserver.serveStatic("/data/", FFS, Config.sys.DIR_DATA);
-    webserver.serveStatic("/docs/", FFS, Config.sys.DIR_DOCS);
-    webserver.serveStatic("/",      FFS, Config.sys.DIR_HTML)
-        .setDefaultFile("index.html")
-        .setCacheControl("max-age=3600")
-        .setLastModified(__DATE__ " " __TIME__ " GMT")
-        .setAuthentication(Config.web.HTTP_NAME, Config.web.HTTP_PASS);
-    webserver.onFileUpload(onUploadStrict);
-    webserver.onNotFound(onError);
-
-    // Headers
-    DefaultHeaders::Instance().addHeader("Access-Control-Allow-Origin", "*");
-
-    server_loop_begin();
-}
-
-#elif defined(CONFIG_BASE_USE_WIFI) // && CONFIG_BASE_USE_WEBSERVER
-
-#include "esp_rom_md5.h"
-#include "esp_tls_crypto.h"
-#include "esp_http_server.h"
-
-#define ESP_ERR_HTTPD_AUTH_DIGEST   (ESP_ERR_HTTPD_BASE + 10)
-#define ESP_ERR_HTTPD_SKIP_DATA     (ESP_ERR_HTTPD_BASE + 11)
-
-#define FLAG_AP_ONLY    BIT0
-#define FLAG_NEED_AUTH  BIT1
-#define FLAG_DIR_DATA   BIT2
-#define FLAG_DIR_DOCS   BIT3
-#define FLAG_DIR_HTML   BIT4
-
-#define send_str httpd_resp_sendstr // alias for just better syntax
-
 static httpd_handle_t server;
 
 typedef struct http_param {
@@ -569,29 +76,32 @@ typedef struct http_param {
 
 static void free_params(void *ctx) {
     for (http_param_t *ptr = (http_param_t *)ctx, *next; ptr; ptr = next) {
-        next = ptr->next;
-        TRYFREE(ptr->key);
-        TRYFREE(ptr->val);
-        TRYFREE(ptr);
+        TRYFREE(ptr->key); TRYFREE(ptr->val);
+        next = ptr->next; free(ptr);
     }
 }
 
 // parse urlencoded key-val pairs: <key1>[=<val1>]&<key2>=<val2>
-static void parse_params(char *buf, bool body, void ** ctx) {
-    if (!buf || !ctx) return;
-    http_param_t *ptr = *(http_param_t **)ctx, *param;
-    while (ptr && ptr->next) { ptr = ptr->next; }
+static void parse_params(char *buf, bool body, void **arg) {
+    if (!buf || !arg) return;
+    http_param_t **ctx = (http_param_t **)arg, *ptr, *param;
     for (char *tok = strtok(buf, "&"); tok; tok = strtok(NULL, "&")) {
         char *eql = strchr(tok, '=') ?: (tok + strlen(tok));
-        if (ECALLOC(param, 1, sizeof(http_param_t))) break;
-        param->key = strndup(tok, eql - tok);
-        param->val = strlen(eql) > 1 ? strdup(eql + 1) : NULL;
-        param->body = body;
-        if (param->key) {
-            ptr = ptr ? (ptr->next = param) : (*(http_param_t **)ctx = param);
-        } else {
-            TRYFREE(param->val);
-            TRYFREE(param);
+        char *key = strndup(tok, eql - tok);
+        char *val = strlen(eql) > 1 ? strdup(eql + 1) : NULL;
+        if (!key) { TRYFREE(val); break; } // ESP_ERR_NO_MEM
+        for (ptr = *ctx;; ptr = ptr->next) {
+            if (ptr && ptr->next && strncmp(ptr->key, tok, eql - tok)) continue;
+            if (ptr && ptr->next) {
+                TRYFREE(ptr->key); TRYFREE(ptr->val);
+                ptr->key = key; ptr->val = val; ptr->body = body;
+            } else if (ECALLOC(param, 1, sizeof(http_param_t))) {
+                TRYFREE(key); TRYFREE(val);
+            } else {
+                param->key = key; param->val = val; param->body = body;
+                ptr = ptr ? (ptr->next = param) : (*ctx = param);
+            }
+            break;
         }
     }
 }
@@ -695,14 +205,11 @@ static http_auth_t * auth_init() {
     ctx->ulen = strlen(ctx->user = Config.web.HTTP_NAME);
     ctx->plen = strlen(ctx->pass = Config.web.HTTP_PASS);
     md5_catcol(ctx->ha1, 3, ctx->user, ctx->host, ctx->pass);
-    char buf[ctx->ulen + ctx->plen + 2];    // 1 for ':' and 1 for '\0'
-    size_t len = (1 + (ctx->ulen + ctx->plen) / 3) * 4 + 1, notused;
+    char buf[ctx->ulen + ctx->plen + 2];        // 2 for ':' and '\0'
     sprintf(buf, "%s:%s", ctx->user, ctx->pass);
-    if (!ECALLOC(ctx->basic, 1, 6 + len)) { // 6 for "Basic "
-        esp_crypto_base64_encode(
-            (uint8_t *)stpcpy(ctx->basic, "Basic "), len,
-            &notused, (uint8_t *)buf, strlen(buf));
-    }
+    size_t len = (strlen(buf) + 2) / 3 * 4 + 7; // 7 for "Basic " and '\0'
+    if (!ECALLOC(ctx->basic, 1, len))
+        b64encode(stpcpy(ctx->basic, "Basic "), buf, strlen(buf));
     return ctx;
 }
 
@@ -739,12 +246,13 @@ static bool auth_validate(http_auth_t *ctx, const char *method, char *resp) {
     return (strtol(vals[6], NULL, 0) + 86400) > get_timestamp_us(NULL);
 }
 
-static const char * get_index(const char *dirname) {
-    static char path[255];
-    snprintf(path, sizeof(path) - 3, fjoin(2, dirname, "index.html"));
-    if (fisfile(path)) return path;
-    if (fisfile(strcat(path, ".gz"))) return path;
-    return NULL;
+static const char * get_static(const char *path) {
+    // 1. search default file "index.html" under folder
+    // 2. try to append ".gz" if origin filename is not found
+    static char buf[PATH_MAX_LEN + 3];
+    fnormr(buf, path);
+    if (fisdir(buf)) fjoinr(buf, 2, buf, "index.html");
+    return (fisfile(buf) || fisfile(strcat(buf, ".gz"))) ? buf : NULL;
 }
 
 static char * get_header(httpd_req_t *req, const char *key) {
@@ -753,6 +261,13 @@ static char * get_header(httpd_req_t *req, const char *key) {
     if (len <= 1 || ECALLOC(buf, 1, len)) return buf;
     if (httpd_req_get_hdr_value_str(req, key, buf, len)) TRYFREE(buf);
     return buf;
+}
+
+static bool has_header(httpd_req_t *req, const char *key, const char *val) {
+    char *header = get_header(req, key);
+    bool ret = val ? header && strcasestr(header, val) : header != NULL;
+    TRYFREE(header);
+    return ret;
 }
 
 static bool has_param(httpd_req_t *req, const char *key, int body) {
@@ -787,9 +302,14 @@ static esp_err_t send_err(httpd_req_t *req, int code, const char *msg) {
     return httpd_resp_send_err(req, ecode, msg);
 }
 
-static inline const char * guess_type(const char *filename) {
+static const char * guess_type(const char *filename) {
     const char *ext = strrchr(filename, '.');
     if (!ext || !strlen(++ext))  return TYPE_TEXT;
+    if (!strcmp(ext, "gz")) {
+        char *prev = (char *)memrchr(filename, '.', ext - filename - 1);
+        if (!prev) return "application/x-gzip";
+        ext = prev + 1;
+    }
     if (startswith(ext, "htm"))  return TYPE_HTML;
     if (startswith(ext, "json")) return TYPE_JSON;
     if (startswith(ext, "css"))  return "text/css";
@@ -804,36 +324,44 @@ static inline const char * guess_type(const char *filename) {
     if (startswith(ext, "svg"))  return "image/svg+xml";
     if (startswith(ext, "pdf"))  return "application/pdf";
     if (startswith(ext, "zip"))  return "application/zip";
-    if (startswith(ext, "gz"))   return "application/x-gzip";
     if (startswith(ext, "js"))   return "application/javascript";
     return TYPE_TEXT;
 }
 
-static esp_err_t send_file(httpd_req_t *req, const char *path, bool download) {
-    FILE *fd;
-    size_t len;
+static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
     struct stat st;
-    const char *fullpath = fnorm(path), *dispos[2] = {"inline", "attachment"};
-    char *buf, *basename = strrchr(fullpath, '/');
-    char clen[10], cdis[strlen(basename ?: "") + 24];
-    if (!basename || stat(fullpath, &st) || !( fd = fopen(fullpath, "r") ))
+    const char *fullpath = fnorm(path);
+    char *basename = strrchr(fullpath, '/');
+    if (!basename || stat(fullpath, &st))
         return send_err(req, 500, "Failed to open file");
-    sprintf(cdis, "%s; filename=\"%s\"", dispos[download], basename + 1);
+
+    const char *mtime = format_datetime(&st.st_mtim);
+    if (has_header(req, "If-Modified-Since", mtime)) {
+        httpd_resp_set_status(req, "304 Not Modified");
+        return send_str(req, NULL);
+    }
+
+    char clen[10], cdis[strlen(basename) + 24], *buf = basename + 1;
+    httpd_resp_set_type(req, guess_type(basename));
+    httpd_resp_set_hdr(req, "Last-Modified", mtime);
+    sprintf(cdis, "%s; filename=\"%s\"", dl ? "attachment" : "inline", buf);
     httpd_resp_set_hdr(req, "Content-Disposition", cdis);
-    httpd_resp_set_hdr(req, "Content-Type", guess_type(basename));
     if (endswith(basename, ".gz"))
         httpd_resp_set_hdr(req, "Content-Encoding", "gzip");
     if (st.st_size) {
         snprintf(clen, sizeof(clen), "%ld", st.st_size);
         httpd_resp_set_hdr(req, "Content-Length", clen);
     }
-    esp_err_t err = EMALLOC(buf, CHUNK_SIZE);
+
+    size_t len;
+    FILE *fd = fopen(fullpath, "r");
+    esp_err_t err = fd ? EMALLOC(buf, CHUNK_SIZE) : ESP_ERR_INVALID_STATE;
     while (!err && ( len = fread(buf, 1, CHUNK_SIZE, fd) )) {
         err = httpd_resp_send_chunk(req, buf, len);
     }
-    httpd_resp_sendstr_chunk(req, NULL);
     TRYFREE(buf);
-    fclose(fd);
+    TRYNULL(fd, fclose);
+    httpd_resp_sendstr_chunk(req, NULL);
     if (err) send_err(req, 500, "Failed to send file");
     return err;
 }
@@ -947,32 +475,43 @@ static esp_err_t redirect(httpd_req_t *req, const char *location) {
     return send_str(req, "redirect");
 }
 
-static void log_msg(httpd_req_t *req, const char *msg = "") {
+static void log_msg(httpd_req_t *req) {
     const char *mstr = http_method_str((httpd_method_t)req->method);
-    ESP_LOGI(TAG, "%s %s %s", mstr, req->uri, msg);
+    if (req->content_len) {
+        ESP_LOGI(TAG, "%s %s %d", mstr, req->uri, req->content_len);
+    } else {
+        ESP_LOGI(TAG, "%s %s", mstr, req->uri);
+    }
 }
 
 static void log_param(httpd_req_t *req) {
     http_param_t *param = (http_param_t *)req->sess_ctx;
     for (int i = 0; param; param = param->next) {
+        if (!param->key || !strlen(param->key)) continue;
         ESP_LOGI(TAG, "Param[%d] key:%s, query:%d `%s`",
-                 i++, param->key, !param->body, param->val);
+                 i++, param->key, !param->body, param->val ?: "");
     }
 }
 
 #define CHECK_REQUEST(req)                                                  \
-    {                                                                       \
+    do {                                                                    \
         esp_err_t err = check_request(req);                                 \
         if (err) return err < 0 ? ESP_FAIL : ESP_OK;                        \
-    }
+    } while (0)
 
 static esp_err_t check_request(httpd_req_t *req) {
     log_msg(req);
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = ESP_OK;
-    if (!err && !req->sess_ctx) {
-        // parse URL query and POST body (size < CHUNK_SIZE)
-        req->free_ctx = free_params;
+    req->free_ctx = free_params;
+    http_param_t *ptr = (http_param_t *)req->sess_ctx;
+    if (ptr) {
+        TRYNULL(ptr->next, free_params);
+    } else if (!( err = ECALLOC(ptr, 1, sizeof(http_param_t)) )) {
+        ptr->key = strdup(""); // SENTINEL
+        req->sess_ctx = ptr;
+    }
+    if (!err) {
         size_t qlen = httpd_req_get_url_query_len(req) + 1;
         if (qlen > 1) {
             char buf[qlen];
@@ -983,9 +522,11 @@ static esp_err_t check_request(httpd_req_t *req) {
                 send_err(req, 400, "Invalid query");
             }
         }
-        char *ctype = get_header(req, "Content-Type");
+    }
+    if (!err) { // parse POST body which size < CHUNK_SIZE
+        bool wanted = has_header(req, "Content-Type", TYPE_UENC);
         size_t clen = req->content_len < CHUNK_SIZE ? req->content_len : 0;
-        if (clen && (!ctype || strstr(ctype, TYPE_UENC))) {
+        if (clen && wanted) {
             char buf[clen + 1];
             if (( err = httpd_req_recv(req, buf, clen) ) > 0) {
                 buf[url_decode(buf, err)] = '\0';
@@ -998,16 +539,15 @@ static esp_err_t check_request(httpd_req_t *req) {
                 err = err ?: ESP_FAIL;
             }
         }
-        TRYFREE(ctype);
     }
-    if (false && !err && (int)req->user_ctx & FLAG_AP_ONLY) { // TODO DEBUG
-        char *host = get_header(req, "Host");
-        if (strcmp(host ?: "", Config.net.AP_HOST)) {
+#ifndef CONFIG_BASE_DEBUG
+    if (!err && (int)req->user_ctx & FLAG_AP_ONLY) {
+        if (!has_header(req, "Host", Config.net.AP_HOST)) {
             send_err(req, 403, "AP interface only");
             err = ESP_ERR_NOT_SUPPORTED;
         }
-        TRYFREE(host);
     }
+#endif
     if (!err && (int)req->user_ctx & FLAG_NEED_AUTH) {
         char *auth = get_header(req, "Authorization"), *rstr = NULL;
         const char *mstr = http_method_str((httpd_method_t)req->method);
@@ -1030,8 +570,9 @@ static esp_err_t check_request(httpd_req_t *req) {
 }
 
 static esp_err_t on_error(httpd_req_t *req, httpd_err_code_t err) {
-    log_msg(req, __func__);
     if (req->method == HTTP_OPTIONS) return send_str(req, NULL);
+    const char *index = get_static(Config.sys.DIR_HTML);
+    if (index) return send_file(req, index, false);
     return send_err(req, 404, ERROR_HTML);
 }
 
@@ -1113,7 +654,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
     const char *type = get_param(req, "type", FROM_ANY) ?: "";
     const char *path = fnorm(get_param(req, "path", FROM_ANY));
     if (!strlen(path)) {
-        if (req->method == HTTP_GET && get_index(Config.sys.DIR_HTML))
+        if (req->method == HTTP_GET && get_static(Config.sys.DIR_HTML))
             return redirect(req, "/editor");
         return send_err(req, 400, "No path specified");
     }
@@ -1127,7 +668,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
             TRYFREE(json);
             return ESP_OK;
         } else if (!fisfile(path)) {
-            return send_err(req, 404, NULL);
+            return send_err(req, 400, "Path is directory");
         } else {
             return send_file(req, path, has_param(req, "download", FROM_ANY));
         }
@@ -1199,7 +740,7 @@ error:
 static esp_err_t on_update(httpd_req_t *req) {
     CHECK_REQUEST(req);
     if (req->method == HTTP_GET) {
-        if (!has_param(req, "raw", FROM_ANY) && get_index(Config.sys.DIR_HTML))
+        if (!has_param(req, "raw", FROM_ANY) && get_static(Config.sys.DIR_HTML))
             return redirect(req, "/updation"); // vue.js router
         return send_str(req, UPDATE_HTML);
     }
@@ -1232,18 +773,11 @@ static esp_err_t on_static(httpd_req_t *req) {
     } else if (flag & FLAG_DIR_HTML && strlen(Config.sys.DIR_HTML)) {
         dirname = Config.sys.DIR_HTML;
     }
-    const char *path, *url = req->uri + (startswith(req->uri, "/api/") ? 4 : 0);
-    char basename[strcspn(url, "?#") + 3 + 1];
-    path = fjoin(2, dirname, strncpy(basename, url, sizeof(basename) - 4));
-    if (fisdir(path)) {
-        const char *index = get_index(path);
-        if (index) return send_file(req, index, false);
-        if (get_index(Config.sys.DIR_HTML)) return redirect(req, "/editor");
-    }
-    if (fisfile(path)) return send_file(req, path, false);
-    path = fjoin(2, dirname, strcat(basename, ".gz"));
-    if (fisfile(path)) return send_file(req, path, false);
-    return send_err(req, 404, NULL);
+    const char *url = req->uri + (startswith(req->uri, "/api/") ? 4 : 0);
+    char basename[strcspn(url, "?#") + 1];
+    snprintf(basename, sizeof(basename), url); // truncate and pad null
+    const char *path = get_static(fjoin(2, dirname, basename));
+    return path ? send_file(req, path, 0) : on_error(req, HTTPD_404_NOT_FOUND);
 }
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
@@ -1398,4 +932,4 @@ void server_initialize() {}
 void server_loop_begin() {}
 void server_loop_end() {}
 
-#endif // CONFIG_BASE_USE_WIFI && CONFIG_BASE_USE_WEBSERVER
+#endif // CONFIG_BASE_USE_WEBSERVER

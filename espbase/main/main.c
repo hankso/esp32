@@ -24,7 +24,7 @@
 
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
-void setup() {
+void app_main(void) {
     esp_register_shutdown_handler(shutdown);
 
     // 1. low level drivers
@@ -47,24 +47,9 @@ void setup() {
     server_initialize();
 
     led_set_blink(0);
-    console_loop_begin(1);  // run REPL on Core 1 (i.e. App CPU)
-}
-
-void loop() {
-    twdt_feed();
-    msleep(500);
-}
-
-#ifndef CONFIG_AUTOSTART_ARDUINO
-void loopTask(void *pvParameters) {
-    setup();
-    for (;;) {
-        loop();
-    }
-}
-
-void app_main(void) {
-    //                      function  task name  stacksize param prio hdlr cpu
-    xTaskCreatePinnedToCore(loopTask, "mainloop", 1024 * 4, NULL, 1, NULL, 1);
-}
+#ifdef CONFIG_BASE_DEBUG
+    console_loop_begin(1);      // run REPL on Core 1 (i.e. App CPU)
+#else
+    console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
 #endif
+}

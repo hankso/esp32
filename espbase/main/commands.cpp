@@ -26,6 +26,10 @@
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
 
+#ifndef CONFIG_BASE_USE_ELF
+#   undef CONSOLE_SYS_EXEC
+#endif
+
 #ifndef CONFIG_BASE_USE_USB
 #   undef CONSOLE_DRIVER_USB
 #endif
@@ -82,21 +86,31 @@ static const char * TAG = "Command";
  * Some common utilities
  */
 
-/* @brief   Parse command line arguments into argtable and catch any errors
- * @return
- *          - true  : arguments successfully parsed, no error
- *          - false : error occur
- * */
-static bool arg_noerror(int argc, char **argv, void **argtable) {
+static bool parse_noerror(int argc, char **argv, void **argtable) {
+    LOOPN(i, argc) {
+        if (!strcmp(argv[i], "--help")) {
+            printf("Usage: %s", argv[0]);
+            arg_print_syntax(stdout, argtable, "\n");
+            arg_print_glossary(stdout, argtable, "  %-20s %s\n");
+            return false;
+        }
+    }
     if (arg_parse(argc, argv, argtable) != 0) {
         arg_hdr_t **table = (arg_hdr_t **)argtable;
         int tabindex = 0;
         while (!(table[tabindex]->flag & ARG_TERMINATOR)) { tabindex++; }
         arg_print_errors(stdout, (arg_end_t *)table[tabindex], argv[0]);
+        printf("Try '%s --help' for more information\n", argv[0]);
         return false;
     }
     return true;
 }
+
+#define ARG_PARSE(c, v, t)                                                  \
+        do {                                                                \
+            if (!parse_noerror((c), (v), (void **)(t)))                     \
+                return ESP_ERR_CONSOLE_ARGPARSE;                            \
+        } while (0)
 
 static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
     LOOPN(i, ncmd) { ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) ); }
@@ -104,12 +118,6 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
 
 #define ARG_STR(p, s)   ((p)->count ? (p)->sval[0] : (s))
 #define ARG_INT(p, v)   ((p)->count ? (p)->ival[0] : (v))
-
-#define ARG_PARSE(c, v, t)                                                  \
-        do {                                                                \
-            if (!arg_noerror((c), (v), (void **)(t)))                       \
-                return ESP_ERR_INVALID_ARG;                                 \
-        } while (0)
 
 #define ESP_CMD(d, c, h)                                                    \
         {                                                                   \
@@ -268,11 +276,11 @@ static int sys_sleep(int argc, char **argv) {
     }
     esp_err_t err;
     if (light) {
-#ifdef CONFIG_BASE_USE_UART
+#   ifdef CONFIG_BASE_USE_UART
         fprintf(stderr, "Use UART wakeup, num: %d\n", NUM_UART);
         ESP_ERROR_CHECK( uart_set_wakeup_threshold(NUM_UART, 3) );
         ESP_ERROR_CHECK( esp_sleep_enable_uart_wakeup(NUM_UART) );
-#endif
+#   endif
         if (( err = enable_gpio_light_wakeup() )) return err;
     } else {
         if (( err = enable_gpio_deep_wakeup() )) return err;
@@ -280,9 +288,9 @@ static int sys_sleep(int argc, char **argv) {
 
     fprintf(stderr, "Turn to %s sleep mode\n", mode);
     fflush(stderr); fsync(fileno(stderr));
-#ifdef CONFIG_BASE_USE_UART
+#   ifdef CONFIG_BASE_USE_UART
     uart_tx_wait_idle(NUM_UART);
-#endif
+#   endif
     if (light) {
         esp_light_sleep_start();
     } else {
@@ -341,16 +349,60 @@ static int sys_update(int argc, char **argv) {
 }
 #endif // CONSOLE_SYS_UPDATE
 
+#ifdef CONSOLE_SYS_EXEC
+static struct {
+    arg_lit_t *ext;
+    arg_lit_t *hdr;
+    arg_str_t *path;
+    arg_lit_t *sep;
+    arg_str_t *argv;
+    arg_end_t *end;
+} sys_exec_args = {
+    .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
+    .hdr  = arg_litn("h", "header", 0, 4, "print ELF header and exit"),
+    .path = arg_str1(NULL, NULL, "path", "ELF file to run"),
+    .sep  = arg_lit0(NULL, "", NULL), // add '--' seperator to arg_print_syntax
+    .argv = arg_strn(NULL, NULL, "argv", 0, 10, "args MUST be after '--'"),
+    .end  = arg_end(5)
+};
+
+static esp_err_t sys_exec(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &sys_exec_args);
+    int eargc = sys_exec_args.argv->count + 1;
+    char **eargv = NULL;
+    const char *path = ARG_STR(sys_exec_args.path, NULL);
+    filesys_type_t type = FILESYS_TYPE(sys_exec_args.ext->count);
+    esp_err_t err = ESP_OK;
+    if (sys_exec_args.hdr->count) {
+        filesys_readelf(type, path, sys_exec_args.hdr->count);
+    } else if (!( err = ECALLOC(eargv, eargc, sizeof(char *)) )) {
+        char *basename = strrchr(path, '/');
+        LOOPN(i, eargc) {
+            eargv[i] = i ? strdup(sys_exec_args.argv->sval[i - 1]) :
+                           strdup(basename ? basename + 1 : path);
+            if (!eargv[i]) { err = ESP_ERR_NO_MEM; break; }
+        }
+        if (!err) err = filesys_execute(type, path, eargc, eargv);
+        LOOPN(i, eargc) { TRYFREE(eargv[i]); }
+        free(eargv);
+    }
+    return err;
+}
+#endif // CONSOLE_SYS_EXEC
+
 static void register_sys() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_SYS_RESTART
         ESP_CMD_ARG(sys, restart, "Software reset of ESP32"),
 #endif
+#ifdef CONSOLE_SYS_UPDATE
+        ESP_CMD_ARG(sys, update, "OTA Updation helper command"),
+#endif
 #ifdef CONSOLE_SYS_SLEEP
         ESP_CMD_ARG(sys, sleep, "Turn ESP32 into light/deep sleep mode"),
 #endif
-#ifdef CONSOLE_SYS_UPDATE
-        ESP_CMD_ARG(sys, update, "OTA Updation helper command"),
+#ifdef CONSOLE_SYS_EXEC
+        ESP_CMD_ARG(sys, exec, "Load and execute ELF files"),
 #endif
     };
     register_commands(cmds, LEN(cmds));
@@ -822,8 +874,7 @@ static struct {
 
 static int util_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsfs_args);
-    bool sdcard = util_lsfs_args.ext->count;
-    filesys_type_t type = sdcard ? FILESYS_SDCARD : FILESYS_FLASH;
+    filesys_type_t type = FILESYS_TYPE(util_lsfs_args.ext->count);
     if (util_lsfs_args.stat->count) {
         filesys_pstat(type, util_lsfs_args.stat->sval[0]);
     } else {
@@ -943,14 +994,14 @@ static int util_hist(int argc, char **argv) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
     const char *cmd = util_hist_args.cmd->sval[0];
     const char *dst = ARG_STR(util_hist_args.dst, "history.txt");
-    bool save = false, sdcard = util_hist_args.ext->count;
+    bool save = false;
     if (strstr(cmd, "save")) {
         save = true;
     } else if (!strstr(cmd, "load")) {
         printf("Invalid command: `%s`\n", cmd);
         return err;
     }
-    filesys_type_t type = sdcard ? FILESYS_SDCARD : FILESYS_FLASH;
+    filesys_type_t type = FILESYS_TYPE(util_hist_args.ext->count);
     const char *path = filesys_join(type, 2, Config.sys.DIR_DATA, dst);
     if (!save && !filesys_exists(type, path)) {
         printf("History file `%s` does not exist\n", path);

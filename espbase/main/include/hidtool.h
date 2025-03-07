@@ -193,9 +193,8 @@
 
 #if !defined(WITH_TUSB) || defined(DUAL_TUSB)
 
-/* @brief HID Keyboard & Mouse Input Report for Boot Interfaces
- *
- * @see B.1, p.60 of Device Class Definition for Human Interface Devices (HID)
+/* HID Keyboard & Mouse Input Report for Boot Interfaces
+ * See B.1, p.60 of Device Class Definition for Human Interface Devices (HID)
  * Version 1.11
  */
 typedef struct {

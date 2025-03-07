@@ -7,7 +7,7 @@
 #golden,     app,    factory,    0x010000,   0x0F0000,
 #silver0,    app,    ota_0,      0x100000,   0x100000,
 #silver1,    app,    ota_1,      0x200000,   0x100000,
-#storage,    data,   spiffs,     0x300000,   0x100000,
+#storage,    data,   ,           0x300000,   0x100000,
 
 # Balance OTA (dual 1728KB silver + 576KB storage)
 otadata,    data,   ota,        0x009000,   0x002000,
@@ -15,7 +15,7 @@ nvs,        data,   nvs,        0x00B000,   0x004000,
 phy_init,   data,   phy,        0x00F000,   0x001000,
 silver0,    app,    ota_0,      0x010000,   0x1B0000,
 silver1,    app,    ota_1,      ,           0x1B0000,
-storage,    data,   spiffs,     ,           0x090000,
+storage,    data,   ,           ,           0x090000,
 
 # Mass Storage OTA (dual 1M silver + 1984KB storage)
 #otadata,    data,   ota,        0x009000,   0x002000,
@@ -23,4 +23,4 @@ storage,    data,   spiffs,     ,           0x090000,
 #phy_init,   data,   phy,        0x00F000,   0x001000,
 #silver0,    app,    ota_0,      0x010000,   0x100000,
 #silver1,    app,    ota_1,      ,           0x100000,
-#storage,    data,   spiffs,     ,           0x1F0000,
+#storage,    data,   ,           ,           0x1F0000,

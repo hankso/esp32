@@ -88,9 +88,10 @@ void console_initialize() {
     setvbuf(stdout, NULL, _IONBF, 0);
     linenoiseSetMultiLine(1);
     linenoiseAllowEmpty(false);
+    linenoiseSetMaxLineLen(256);
     linenoiseSetCompletionCallback(&esp_console_get_completion);
     linenoiseSetHintsCallback((linenoiseHintsCallback *)&esp_console_get_hint);
-    linenoiseHistorySetMaxLen(100);
+    linenoiseHistorySetMaxLen(50);
     if (linenoiseProbe()) {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
@@ -180,13 +181,12 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
     FILE *bak = stdout;
     if (pipe) stdout = open_memstream(&buf, &size);
 
-    int code;
-    esp_err_t err = esp_console_run(cmd, &code);
-    if (err == ESP_ERR_NOT_FOUND) {
+    int code, err = esp_console_run(cmd, &code) ?: code;
+    if (err == ESP_OK || err == ESP_ERR_CONSOLE_ARGPARSE) {
+        // do nothing
+    } else if (err == ESP_ERR_NOT_FOUND) {
         ESP_LOGE(TAG, "Unrecognized command: `%s`", cmd);
-    } else if (err == ESP_OK && code != ESP_OK) {
-        ESP_LOGE(TAG, "Command error: %d (%s)", code, esp_err_to_name(code));
-    } else if (err != ESP_OK) {
+    } else {
         ESP_LOGE(TAG, "Command error: %d (%s)", err, esp_err_to_name(err));
     }
     if (pipe) {
@@ -194,15 +194,8 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
         stdout = bak;
     }
     if (buf != NULL) {
-        if (!size) {                        // empty string means no log output
-            TRYFREE(buf);
-        } else {                            // rstrip buffer string
-            while (size--) {
-                if (buf[size] != '\n' && buf[size] != '\r') break;
-                buf[size] = '\0';
-            }
-            buf[size + 1] = '\0';
-        }
+        while (size && strchr(" \r\n", buf[--size])) { buf[size] = '\0'; }
+        if (!size) TRYFREE(buf); // empty string means no log output
     }
     if (history) linenoiseHistoryAdd(cmd);
     if (running) xSemaphoreGive(running);
@@ -210,12 +203,14 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
 }
 
 void console_handle_one() {
-    char *cmd = linenoise(prompt);
+    char *cmd = linenoise(prompt), *trim = strtrim(cmd, " \t\r\n");
     putchar('\n'); fflush(stdout);
     if (!cmd) return;
-    console_handle_command(cmd, false, true);
+    if (trim[0] && trim[0] != 0x5B) {       // ctrl keycode
+        console_handle_command(trim, false, true);
+        putchar('\n'); fflush(stdout);      // one more blank line
+    }
     linenoiseFree(cmd);
-    putchar('\n'); fflush(stdout);      // one more blank line
 }
 
 void console_handle_loop(void *argv) {

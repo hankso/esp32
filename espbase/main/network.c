@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+#include "lwip/apps/netbiosns.h"
 #include "mdns.h"               // for mdns command
 #include "esp_sntp.h"           // for sntp command
 #include "ping/ping_sock.h"     // for ping command
@@ -35,6 +36,8 @@
 #define TSS_STOP_BIT        BIT7
 #define TSC_STOP_BIT        BIT8
 #define TS_STOPPED_BIT      BIT9
+
+#define UNCHANGED -1
 
 #define HAS_STA(m)  ( m == WIFI_MODE_STA || m == WIFI_MODE_APSTA )
 #define HAS_AP(m)   ( m == WIFI_MODE_AP || m == WIFI_MODE_APSTA )
@@ -128,8 +131,6 @@ static const char * wifi_ftm_str(wifi_ftm_status_t status) {
     default:                        return "ERROR";
     }
 }
-
-#define UNCHANGED -1
 
 static esp_err_t wifi_mode_switch(int sta, int ap, wifi_mode_t *mode) {
     wifi_mode_t origin, target;
@@ -408,11 +409,11 @@ void network_initialize() {
     if (!if_sta) if_sta = esp_netif_create_default_wifi_sta();
     if (!evtgrp) evtgrp = xEventGroupCreate();
 
-#define REGEVT(evt, cb) \
+#define REG_EVT(evt, cb) \
     esp_event_handler_instance_register(evt, ESP_EVENT_ANY_ID, cb, NULL, NULL)
-    ESP_ERROR_CHECK( REGEVT(WIFI_EVENT, &cb_wifi) );
-    ESP_ERROR_CHECK( REGEVT(IP_EVENT, &cb_ip) );
-#undef REGEVT
+    ESP_ERROR_CHECK( REG_EVT(WIFI_EVENT, &cb_wifi) );
+    ESP_ERROR_CHECK( REG_EVT(IP_EVENT, &cb_ip) );
+#undef REG_EVT
 
     wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&init_config) );
@@ -821,8 +822,11 @@ static esp_err_t mdns_initialize() {
 #ifdef CONFIG_BASE_USE_WEBSERVER
         mdns_service_add(NULL, "_http", "_tcp", 80, NULL, 0);
 #endif
+        netbiosns_init();
+        netbiosns_set_name(hostname);
         ESP_LOGI(TAG, "mDNS hostname set to %s", hostname);
     } else {
+        netbiosns_stop();
         mdns_free();
     }
     return err;
@@ -836,6 +840,7 @@ esp_err_t mdns_command(
     esp_err_t err = ESP_OK;
     if (ctrl) {
         if (!strbool(ctrl)) {
+            netbiosns_stop();
             mdns_free();
             mdns_running = false;
         } else if (!mdns_running) {

@@ -27,6 +27,7 @@ config_t Config = {
         .USB_MODE  = "HID_DEVICE",
         .BT_MODE   = "BLE_HIDD",
         .BT_SCAN   = "1",
+        .FS_PART   = "storage",
     },
     .net = {
         .STA_SSID  = "",
@@ -76,13 +77,14 @@ typedef struct {
 } config_entry_t;
 
 static config_entry_t rwlst[] = {       // read/write entries
-    {"sys.path.data",   &Config.sys.DIR_DATA,   NULL},
-    {"sys.path.docs",   &Config.sys.DIR_DOCS,   NULL},
-    {"sys.path.html",   &Config.sys.DIR_HTML,   NULL},
+    {"sys.dir.data",    &Config.sys.DIR_DATA,   NULL},
+    {"sys.dir.docs",    &Config.sys.DIR_DOCS,   NULL},
+    {"sys.dir.html",    &Config.sys.DIR_HTML,   NULL},
     {"sys.btn.high",    &Config.sys.BTN_HIGH,   NULL},
     {"sys.usb.mode",    &Config.sys.USB_MODE,   NULL},
     {"sys.bt.mode",     &Config.sys.BT_MODE,    NULL},
     {"sys.bt.scan",     &Config.sys.BT_SCAN,    NULL},
+    {"sys.fs.part",     &Config.sys.FS_PART,    NULL},
 
     {"net.sta.ssid",    &Config.net.STA_SSID,   NULL},
     {"net.sta.pass",    &Config.net.STA_PASS,   NULL},
