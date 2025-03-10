@@ -48,7 +48,7 @@ function(nvs_create_partition_image partition template)
     if("${size}" AND "${offset}")
         set(image_file ${CMAKE_BINARY_DIR}/${partition}.bin)
         add_custom_target(gen_${partition}_bin ALL
-            COMMAND ${helper_py} gencfg
+            COMMAND ${helper_py} --quiet gencfg
             --tpl ${template_fullpath}
             --pack ${image_file}
             --size ${size}

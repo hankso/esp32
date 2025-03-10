@@ -75,7 +75,7 @@ void usbdev_status(usbmode_t mode) {
     }
 #endif
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-    if (mode == HID_DEVICE) puts("Running as HID keyboard & mouse device");
+    if (mode == HID_DEVICE) puts("Running as HID keybd & mouse device");
 #endif
 }
 
@@ -534,10 +534,10 @@ static bool send_report(const hid_report_t *rpt, bool intask, uint16_t ms) {
                 hid_btncode_str(rpt->mouse.buttons),
                 rpt->mouse.x, rpt->mouse.y,
                 rpt->mouse.wheel, rpt->mouse.pan, sent);
-    } else if (rpt->id == REPORT_ID_KEYBOARD) {
+    } else if (rpt->id == REPORT_ID_KEYBD) {
         sent = tud_hid_report(rpt->id, &rpt->keybd, sizeof(rpt->keybd));
         uint8_t mod = rpt->keybd.modifier;
-        ESP_LOGI(HID, "keyboard Mod 0x%02X Key %s SENT %d",
+        ESP_LOGI(HID, "keybd Mod 0x%02X Key %s SENT %d",
                 mod, hid_keycodes_str(mod, rpt->keybd.keycode), sent);
     }
 #ifdef TARGET_IDF_4

@@ -228,12 +228,14 @@ typedef struct {
 #define ADD_SHIFT(mod) ( (mod) |= MOD_SHIFT )
 #define DEL_SHIFT(mod) ( (mod) &= ~MOD_SHIFT )
 
+#define hid_keybd_report_t hid_keyboard_report_t // alias
+
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 enum {
-    REPORT_ID_KEYBOARD = 1,
+    REPORT_ID_KEYBD = 1,
     REPORT_ID_MOUSE,
     REPORT_ID_DIAL,
 };
@@ -243,7 +245,7 @@ typedef struct {
     union {
         uint8_t dial[2];
         hid_mouse_report_t mouse;
-        hid_keyboard_report_t keybd;
+        hid_keybd_report_t keybd;
     };
 } hid_report_t;
 
@@ -266,17 +268,18 @@ const char * keycode2str(uint8_t keycode, uint8_t modifier);
 const char * hid_modifier_str(uint8_t modifier);
 const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycodes[6]);
 
+typedef enum {
+    HID_TARGET_USB, // USB Device | USB Host
+    HID_TARGET_BLE, // BT Device | BT Host
+    HID_TARGET_SCN, // Screen input device
+    HID_TARGET_ALL,
+    HID_TARGET_CNT
+} hid_target_t;     // interface the HID report is sent to or received from
+
 typedef void (*hid_key_cb)(uint8_t keycode, bool pressed);
 typedef void (*hid_pos_cb)(int x, int y, int8_t dx, int8_t dy);
-void hid_handle_mouse(hid_mouse_report_t *, hid_key_cb, hid_pos_cb);
-void hid_handle_keyboard(hid_keyboard_report_t *, hid_key_cb);
-
-typedef enum {
-    HID_TARGET_USB,
-    HID_TARGET_BLE,
-    HID_TARGET_SCN,
-    HID_TARGET_ALL,
-} hid_target_t;     // to which interface HID reports should be sent to
+void hid_handle_mouse(hid_target_t, hid_mouse_report_t *, hid_key_cb, hid_pos_cb);
+void hid_handle_keybd(hid_target_t, hid_keybd_report_t *, hid_key_cb);
 
 typedef enum {
     DIAL_UP = 0x00, // button release
@@ -296,8 +299,8 @@ bool hid_report_mouse_click(hid_target_t, const char *str, uint32_t ms);
 #define hid_report_mouse_scroll(t, v, h) hid_report_mouse((t), 0, 0, 0, (v), (h))
 #define hid_report_mouse_button(t, btn)  hid_report_mouse((t), (btn), 0, 0, 0, 0)
 
-bool hid_report_keyboard(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
-bool hid_report_keyboard_press(hid_target_t, const char *str, uint32_t ms);
+bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
+bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
 
 #ifdef __cplusplus
 }

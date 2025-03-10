@@ -9,7 +9,10 @@ dependencies:
   elf_loader: "^1.0.0"
   led_indicator: "^1.1.0"
 
+  lvgl/lvgl: "^8"
   esp_lvgl_port: "^2.4.4"
+
+  esp32-camera: "^2.0.15"
 
   tinyusb:
     version: ">=0.15.0~2"

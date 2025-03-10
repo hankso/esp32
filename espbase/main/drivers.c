@@ -77,7 +77,7 @@ static struct {
     .chans = { ADC_CHANNEL_MAX, ADC_CHANNEL_MAX },
     .unit = ADC_UNIT_1, // only use ADC1
     .atten = ADC_ATTEN_DB_12,
-#ifdef CONFIG_BASE_ADC_HALL
+#ifdef CONFIG_BASE_ADC_HALL_SENSOR
     .width = ADC_WIDTH_BIT_12,
 #else
     .width = ADC_WIDTH_BIT_DEFAULT,
@@ -152,12 +152,14 @@ static void adc_initialize() {
 }
 
 int adc_hall() {
-#if defined(CONFIG_BASE_ADC_HALL) && defined(TARGET_IDF_4)
+#if defined(CONFIG_BASE_ADC_HALL_SENSOR) && defined(TARGET_IDF_4)
     int raw = 0;
+    adc_power_acquire();
     LOOPN(i, CONFIG_BASE_ADC_MULTISAMPLING) {
         usleep(10);
         raw += hall_sensor_read();
     }
+    adc_power_release();
     ITER(chan, adc.chans) {
         if (chan != ADC_CHANNEL_MAX) adc1_config_channel_atten(chan, adc.atten);
     }
@@ -754,11 +756,19 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
 #ifdef CONFIG_BASE_USE_INT
     [PIN_INT]   = "Interrupt",
 #endif
-#ifdef PIN_ADC1
+#if defined(CONFIG_BASE_ADC_HALL_SENSOR)
+    [PIN_ADC1]  = "HALL Sensor P",
+    [PIN_ADC2]  = "HALL Sensor N",
+#elif defined(CONFIG_BASE_ADC_JOYSTICK)
+    [PIN_ADC1]  = "Joystick X",
+    [PIN_ADC2]  = "Joystick Y",
+#else
+#   ifdef PIN_ADC1
     [PIN_ADC1]  = "ADC1",
-#endif
-#ifdef PIN_ADC2
+#   endif
+#   ifdef PIN_ADC2
     [PIN_ADC2]  = "ADC2",
+#   endif
 #endif
 #ifdef CONFIG_BASE_USE_DAC
     [PIN_DAC]   = "DAC",
@@ -784,22 +794,18 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
 
 #ifdef CONFIG_BASE_USE_BTN
 static button_handle_t btn[2];
-#   ifdef CONFIG_BASE_ADC_JOYSTICK
-static button_handle_t joystick[4];
-#   endif
-static const char *BTAG = "Button";
 
 static void cb_button(void *arg, void *data) {
+    static const char *BTAG = "Button";
     int pin = (int)data;
-    button_event_t event = iot_button_get_event(arg);
-    switch (event) {
-    case BUTTON_PRESS_UP:
-        ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
-        if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_UP);
-        break;
+    switch (iot_button_get_event(arg)) {
     case BUTTON_PRESS_DOWN:
         ESP_LOGI(BTAG, "%d press", pin);
         if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_DN);
+        break;
+    case BUTTON_PRESS_UP:
+        ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
+        if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_UP);
         break;
     case BUTTON_SINGLE_CLICK:
         ESP_LOGI(BTAG, "%d single click", pin);
@@ -814,42 +820,44 @@ static void cb_button(void *arg, void *data) {
         ESP_LOGI(BTAG, "%d long press %d",
                  pin, iot_button_get_long_press_hold_cnt(arg));
         break;
-    default: return;
+    default: break;
     }
-#   ifdef CONFIG_BASE_ADC_JOYSTICK
-    if (event == BUTTON_PRESS_DOWN || event == BUTTON_LONG_PRESS_HOLD) {
-        LOOPN(i, LEN(adc.pins)) {
-            if (adc.pins[i] != pin) continue;
-            int xy = adc_joystick(NULL, NULL);
-            if (xy == -1) break;
-            int x = (xy >> 16) > 2000 ? 1 : ((xy >> 16) < 1300 ? -1 : 0);
-            int y = (xy & 0xFFFF) > 2000 ? 1 : ((xy & 0xFFFF) < 1300 ? -1 : 0);
-            hid_report_mouse_move(HID_TARGET_ALL, x * 5, y * 5);
-        }
-    }
-#   endif
 }
 
-static button_handle_t button_init(button_config_t *conf, gpio_num_t pin) {
+#   ifdef CONFIG_BASE_ADC_JOYSTICK
+static button_handle_t jstk[4];
+
+static void cb_joystick(void *arg, void *data) {
+    button_event_t event = iot_button_get_event(arg);
+    if (event != BUTTON_PRESS_DOWN && event != BUTTON_LONG_PRESS_HOLD) return;
+    int x = adc_read(0), y = adc_read(1);
+    if (x == -1 || y == -1) return;
+    x = x > 1900 ? (x - 1900) : x < 1400 ? (1400 - x) : 0;
+    y = y > 1900 ? (y - 1900) : y < 1400 ? (1400 - y) : 0;
+    hid_report_mouse_move(HID_TARGET_ALL, x / 28, y / 28); // -50 ~ +50
+}
+#   endif
+
+static button_handle_t button_init(
+    button_config_t *conf, gpio_num_t pin, button_cb_t cb
+) {
     button_handle_t hdl = iot_button_create(conf);
     if (!hdl) {
-        ESP_LOGE(BTAG, "bind to GPIO%d failed", pin);
+        ESP_LOGE(TAG, "bind to GPIO%d failed", pin);
     } else LOOPN(event, BUTTON_EVENT_MAX) {
         if (event == BUTTON_MULTIPLE_CLICK) {
-            /*
             button_event_config_t evt = {
                 .event = event,
                 .event_data.multiple_clicks.clicks = 3,
             };
-            iot_button_register_event_cb(hdl, evt, cb_button, (void *)pin);
-            */
-            continue;
+            iot_button_register_event_cb(hdl, evt, cb, (void *)pin);
+        } else {
+            iot_button_register_cb(hdl, event, cb, (void *)pin);
         }
-        iot_button_register_cb(hdl, event, cb_button, (void *)pin);
     }
     return hdl;
 }
-#endif
+#endif // CONFIG_BASE_USE_BTN
 
 #ifdef CONFIG_BASE_USE_KNOB
 static knob_handle_t knob;
@@ -937,27 +945,29 @@ static void gpio_initialize() {
             .active_level = strbool(Config.sys.BTN_HIGH),
         }
     };
-    btn[0] = button_init(&btn_conf, PIN_BTN);
+    btn[0] = button_init(&btn_conf, PIN_BTN, cb_button);
     if (startswith(gpio_default_usage[GPIO_NUM_0] ?: "", "Strapping")) {
         btn_conf.gpio_button_config.gpio_num = GPIO_NUM_0;
         btn_conf.gpio_button_config.active_level = 0;
-        btn[1] = button_init(&btn_conf, GPIO_NUM_0);
+        btn[1] = button_init(&btn_conf, GPIO_NUM_0, cb_button);
     }
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
     btn_conf.type = BUTTON_TYPE_ADC;
     btn_conf.long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20;
-    // FIXME: BUTTON_LONG_PRESS_HOLD stall if joystick ADC value > 2.0V
+#       ifdef TARGET_IDF_5
+    btn_conf.adc_button_config.adc_handle = adc.oneshot;
+#       endif
     LOOPN(i, LEN(adc.chans)) {
         if (adc.chans[i] == ADC_CHANNEL_MAX) continue;
         btn_conf.adc_button_config.adc_channel = adc.chans[i];
         btn_conf.adc_button_config.button_index = 0;
         btn_conf.adc_button_config.min = 0;
-        btn_conf.adc_button_config.max = 1300; // 0-1.3V
-        joystick[2 * i + 0] = button_init(&btn_conf, adc.pins[i]);
+        btn_conf.adc_button_config.max = 1400; // 0.0-1.4V
+        jstk[2 * i + 0] = button_init(&btn_conf, adc.pins[i], cb_joystick);
         btn_conf.adc_button_config.button_index = 1;
-        btn_conf.adc_button_config.min = 2000;
-        btn_conf.adc_button_config.max = 3300; // 2.0-3.3V
-        joystick[2 * i + 1] = button_init(&btn_conf, adc.pins[i]);
+        btn_conf.adc_button_config.min = 1900;
+        btn_conf.adc_button_config.max = 3300; // 1.9-3.3V
+        jstk[2 * i + 1] = button_init(&btn_conf, adc.pins[i], cb_joystick);
     }
 #   endif
 #endif

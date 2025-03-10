@@ -1,5 +1,5 @@
 /*
- * File: screen.c
+ * File: scndrv.c
  * Authors: Hank <hankso1106@gmail.com>
  * Time: 2024/4/25 12:25:37
  */
@@ -42,7 +42,7 @@ static struct {
     esp_lcd_panel_handle_t hdl;
     esp_lcd_panel_io_handle_t io;
 #   if defined(WITH_LVGL)
-    lv_disp_t *disp;
+    lv_display_t *disp;
 #   endif
 #endif
 } ctx;
@@ -239,6 +239,9 @@ static void screen_lvgl_init() {
         .hres = SCREEN_H_RES,
         .vres = SCREEN_V_RES,
         .monochrome = SCREEN_DEPTH == 1,
+#       if LVGL_VERSION_MAJOR >= 9
+        .color_format = LV_COLOR_FORMAT_RGB565,
+#       endif
         .rotation = {           // must be same as esp_lcd_panel_mirror
             .mirror_x = true,
             .mirror_y = true,

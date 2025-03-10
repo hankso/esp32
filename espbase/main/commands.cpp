@@ -1456,13 +1456,13 @@ static int app_hid(int argc, char **argv) {
             hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
         }
     } else if (press) {
-        hid_report_keyboard_press(to, press, tout_ms);
+        hid_report_keybd_press(to, press, tout_ms);
     } else if (typein) {
-        char buf[2] = { 0 };
+        char buf[2] = { 0, 0 };
         tout_ms = MAX(50, tout_ms) / 2;
         LOOPN(i, strlen(typein)) {
             buf[0] = typein[i];
-            hid_report_keyboard_press(to, buf, tout_ms); msleep(tout_ms);
+            hid_report_keybd_press(to, buf, tout_ms); msleep(tout_ms);
         }
     }
     return err;

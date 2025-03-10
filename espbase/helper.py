@@ -103,30 +103,30 @@ def process_nvs(args):
         pass
     except Exception as e:
         print('Parse', __partcsv__, 'failed:', e)
-    argv_backup = sys.argv[:]
+    argv_backup, stdout_backup = sys.argv[:], sys.stdout
+    if args.quiet:
+        sys.stdout = None
     try:
-        for folder in (
-            'components/nvs_flash/nvs_partition_generator',
-            'components/esptool_py/esptool',
-        ):
-            sys.path.append(op.join(IDF_PATH, folder))
+        for c in ('nvs_flash/nvs_partition_generator', 'esptool_py/esptool'):
+            sys.path.append(op.join(IDF_PATH, 'components', c))
         from nvs_partition_gen import main as nvs_gen
         from esptool import _main as nvs_flash
         if op.isdir(op.dirname(args.pack)):
             dist = args.pack
         else:
-            dist = tempfile.mktemp()
+            dist = tempfile.mktemp() + '.bin'
         sys.argv[1:] = ['generate', args.out, dist, args.size]
         nvs_gen()
         if args.flash:
             sys.argv[1:] = ['-p', args.flash, 'write_flash', args.offset, dist]
             nvs_flash()
-    except Exception as e:
-        return print('Generate NVS partition binary failed:', e)
+    except (SystemExit, Exception) as e:
+        return print('Generate NVS binary failed:', e, file=sys.stderr)
     finally:
         if op.exists(args.out):
             os.remove(args.out)
         sys.argv = argv_backup
+        sys.stdout = stdout_backup
 
 
 def gencfg(args):
@@ -242,11 +242,12 @@ def genfont(args):
         args.font, ''.join(sorted(symbols)), font_icon(args)
     )
     try:
-        print('Executing command', cmd)
-        subprocess.check_call(cmd)
-        assert args.bin
-    except Exception:
-        return
+        if not args.quiet:
+            print('Executing command', cmd)
+        subprocess.check_call(cmd, shell=True)
+        assert not args.bin
+    except Exception as e:
+        return print('Error', e)
     font_postproc(args.out)
 
 

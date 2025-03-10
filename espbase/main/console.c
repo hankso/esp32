@@ -96,7 +96,7 @@ void console_initialize() {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
-        ESP_LOGW(TAG, "Try use Miniterm.py / PuTTY / SecureCRT.");
+        ESP_LOGW(TAG, "Try using Miniterm.py / PuTTY / SecureCRT.");
     }
     esp_console_config_t console_config = {
         .max_cmdline_length = 256,

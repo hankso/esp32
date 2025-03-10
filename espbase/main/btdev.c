@@ -733,7 +733,7 @@ static const char * BT = "BT HIDD";
 
 static esp_err_t bt_send_report(uint8_t report_type, const hid_report_t *rpt) {
     if (!ctx.enabled || !ctx.connected) return ESP_ERR_INVALID_STATE;
-    if (rpt->id == REPORT_ID_KEYBOARD) {
+    if (rpt->id == REPORT_ID_KEYBD) {
         return esp_bt_hid_device_send_report(
             report_type, rpt->id, sizeof(rpt->keybd), (void *)&rpt->keybd);
     } else if (rpt->id == REPORT_ID_MOUSE) {
@@ -930,17 +930,15 @@ static const esp_ble_adv_params_t hidd_adv_params = {
 
 static esp_err_t ble_send_report(const hid_report_t *rpt) {
     if (!ctx.enabled || !ctx.connected) return ESP_ERR_INVALID_STATE;
-    if (rpt->id == REPORT_ID_KEYBOARD) {
-        return esp_hidd_dev_input_set(
+    switch (rpt->id) {
+    case REPORT_ID_KEYBD: return esp_hidd_dev_input_set(
             ctx.hiddev, 0, rpt->id, (void *)&rpt->keybd, sizeof(rpt->keybd));
-    } else if (rpt->id == REPORT_ID_MOUSE) {
-        return esp_hidd_dev_input_set(
+    case REPORT_ID_MOUSE: return esp_hidd_dev_input_set(
             ctx.hiddev, 0, rpt->id, (void *)&rpt->mouse, sizeof(rpt->mouse));
-    } else if (rpt->id == REPORT_ID_DIAL) {
-        return esp_hidd_dev_input_set(
+    case REPORT_ID_DIAL:  return esp_hidd_dev_input_set(
             ctx.hiddev, 0, rpt->id, (void *)rpt->dial, sizeof(rpt->dial));
+    default: return ESP_ERR_INVALID_ARG;
     }
-    return ESP_ERR_INVALID_ARG;
 }
 
 static bool ble_check_status(esp_err_t status, const char * msg) {

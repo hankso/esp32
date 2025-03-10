@@ -98,7 +98,7 @@ extern "C" {
 #   define PIN_INT      GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
 #endif
 
-#if defined(CONFIG_BASE_ADC_HALL)
+#if defined(CONFIG_BASE_ADC_HALL_SENSOR)
 #   define PIN_ADC1     GPIO_NUMBER(36)
 #   define PIN_ADC2     GPIO_NUMBER(39)
 #elif defined(CONFIG_BASE_ADC_JOYSTICK)

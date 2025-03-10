@@ -28,16 +28,16 @@ extern "C" {
 #endif
 
 typedef enum {  // Usage                    Argument
-    SCN_INIT,   // initialize
+    SCN_INIT,   // initialize               lv_disp_t *
     SCN_EXIT,   // deinitialize
     SCN_STAT,   // print statistics
-    SCN_FONT,   // load font from disk      char *
     SCN_INP,    // handle input             hid_report_t *
-    SCN_DPI,    // mouse sensitivity        float *         (> 0)
-    SCN_ROT,    // change screen rotation   int *           (LV_DISP_ROT_XXX)
-    SCN_FPS,    // change refresh rate      int *           (0-100)
-    SCN_BTN,    // virtual button click     int *           (0-6)
-    SCN_PBAR,   // draw progress bar        int *           (0-100)
+    SCN_FONT,   // load font from disk      char *  (under DIR_DATA)
+    SCN_DPI,    // mouse sensitivity        float * (> 0)
+    SCN_ROT,    // change screen rotation   int *   (LV_DISPLAY_ROTATION_XXX)
+    SCN_FPS,    // change refresh rate      int *   (0-100)
+    SCN_BTN,    // virtual button click     int *   (0-6)
+    SCN_PBAR,   // draw progress bar        int *   (0-100)
 } scn_cmd_t;
 
 void screen_initialize();

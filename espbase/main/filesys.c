@@ -1,5 +1,5 @@
 /* 
- * File: filesys.cpp
+ * File: filesys.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-05-15 19:42:04
  */
@@ -173,7 +173,7 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
         info->pdrv = ff_diskio_get_pdrv_wl(wlhdl);
         FATFS *fs;
         DWORD free_clust;
-        char drv[] = { (char)(48 + info->pdrv), ':', '\0' };
+        char drv[] = { '0' + info->pdrv, ':', '\0' };
         uint64_t ssize = wl_sector_size(wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
         if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
             info->used = ssize * (fs->n_fatent - 2 - free_clust) * fs->csize;
@@ -197,7 +197,7 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
         info->blksize = devs[1].card->csd.sector_size;
         FATFS *fs;
         DWORD free_clust;
-        char drv[] = { (char)(48 + info->pdrv), ':', '\0' };
+        char drv[] = { '0' + info->pdrv, ':', '\0' };
         if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
 #   if FF_MAX_SS != FF_MIN_SS
             uint64_t ssize = fs->ssize; // == card->csd.sector_size ?
@@ -281,7 +281,7 @@ char * filesys_norm_r(
                 if (strchr("\\/", inp[2])) {
                     inp++; continue;
                 } else if (inp[2] == '.' && strchr("\\/", inp[3])) {
-                    char *prev = (char *)memrchr(buf, '/', out - buf);
+                    char *prev = memrchr(buf, '/', out - buf);
                     if (prev && prev != buf) out = prev;
                     inp += 2; continue;
                 }
@@ -391,11 +391,11 @@ void filesys_pstat(filesys_type_t type, const char *path) {
         }
     }
     printf("  File: %s\n"
-           "  Size: %d\t\tBlocks: %d\tIO Block: %d\t%s\n"
+           "  Size: %ld\t\tBlocks: %ld\tIO Block: %ld\t%s\n"
            "Device: %xh/%dd\t\tInode: %d\tLinks: %d\n"
            "Access: (%04o/%s)  Uid: %d\tGid: %d\n"
            "Access: %s\nModify: %s\nChange: %s\n",
-           path, (int)st.st_size, (int)st.st_blocks, (int)st.st_blksize, desc,
+           path, st.st_size, st.st_blocks, st.st_blksize, desc,
            st.st_dev, st.st_dev, st.st_ino, st.st_nlink,
            st.st_mode & ~S_IFMT, statperm(st.st_mode), st.st_uid, st.st_gid,
            tbuf[0], tbuf[1], tbuf[2]);
@@ -483,7 +483,7 @@ void filesys_walk(
     struct stat st;
     struct dirent *ent;
     filesys_path_t dirname;
-    char **lst[2] = {NULL, NULL}, **ptr, *slash; NOTUSED(slash);
+    char **lst[2] = {NULL, NULL}, *slash; NOTUSED(slash);
     size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 }; // for dir and non-dir
     DIR *dir = opendir(filesys_norm_r(type, dirname, path));
     while (( ent = readdir(dir) )) {
@@ -502,9 +502,7 @@ void filesys_walk(
         int i = ent->d_type != DT_DIR;
         if (cnt[i] == num[i]) {
             num[i] = (num[i] ?: 5) * 2;
-            if (( ptr = (char **)realloc(lst[i], num[i] * sizeof(ptr)) )) {
-                lst[i] = ptr; // enlarge buffer to store duplicated filenames
-            } else goto exit;
+            if (EREALLOC(lst[i], num[i] * sizeof(char **))) goto exit;
         }
         if (!( lst[i][cnt[i]++] = strdup(ent->d_name) )) goto exit;
     }
@@ -532,7 +530,7 @@ void filesys_walk(
 exit:
     LOOPN(i, LEN(lst)) {
         while (cnt[i] > 0) { free(lst[i][--cnt[i]]); }  // strdup
-        if (num[i]) free(lst[i]);                       // realloc
+        if (num[i]) free(lst[i]);                       // allocated
     }
     closedir(dir);
 }

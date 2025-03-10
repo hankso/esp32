@@ -137,7 +137,7 @@ menu "ESP Base Configuration"
         bool "Enable Screen" if BASE_USE_I2C || BASE_USE_SPI
         default y
         help
-            Enable scn_xxx functions (+100KB)
+            Enable scn_xxx functions (+200KB)
     if BASE_USE_SCREEN
         choice
             prompt "Select Screen interface"
@@ -236,18 +236,19 @@ menu "ESP Base Configuration"
             range 0 1024
             default 64
 
+        config BASE_ADC_HALL_SENSOR
+            bool "Read HALL sensor value" if IDF_TARGET_ESP32
+            default y
+            help
+                Compatible with BASE_ADC_SINGLE and BASE_ADC_JOYSTICK
+
         choice
             prompt "Select ADC sensor features"
-            default BASE_ADC_HALL if IDF_TARGET_ESP32
-            default BASE_ADC_SINGLE
+            default BASE_ADC_JOYSTICK
             config BASE_ADC_SINGLE
                 bool "Try to use Read ADC normally"
             config BASE_ADC_JOYSTICK
                 bool "Read joystick value by ADC"
-            config BASE_ADC_HALL
-                bool "Read hall sensor value by ADC" if IDF_TARGET_ESP32
-                help
-                    Compatible with BASE_ADC_DEFAULT & BASE_ADC_JOYSTICK
         endchoice
     endif
 
@@ -293,7 +294,7 @@ menu "ESP Base Configuration"
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE & Bluedroid host"
         select BT_ENABLED
-        default y
+        default n
         help
             Enable btmode_xxx functions (465-600KB)
     if BASE_USE_BT
@@ -514,7 +515,7 @@ menu "ESP Base Configuration"
             default 4 if IDF_TARGET_ESP32S3
             default 35
 
-        if BASE_USE_ADC && !BASE_ADC_HALL
+        if BASE_USE_ADC && !BASE_ADC_HALL_SENSOR
             config BASE_GPIO_ADC1
                 int "ADC pin number 1"
                 range 32 39 if IDF_TARGET_ESP32

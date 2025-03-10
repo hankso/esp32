@@ -379,7 +379,7 @@ enum {
     HID_COLLECTION_END
 
 const uint8_t hid_descriptor_report[] = {
-    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBOARD)),// 65 Bytes
+    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBD)),   // 65 Bytes
     TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE)),      // 79 Bytes
     TUD_HID_REPORT_DESC_DIAL(HID_REPORT_ID(REPORT_ID_DIAL)),        // 56 Bytes
 };
@@ -507,23 +507,25 @@ bool hid_report_mouse_click(hid_target_t to, const char *str, uint32_t ms) {
     return sent;
 }
 
-void hid_handle_mouse(hid_mouse_report_t *rpt, hid_key_cb key, hid_pos_cb pos) {
+void hid_handle_mouse(
+    hid_target_t from, hid_mouse_report_t *rpt,
+    hid_key_cb key_cb, hid_pos_cb pos_cb
+) {
     if (!rpt) return;
-    hid_report_t report = { .id = REPORT_ID_MOUSE, .mouse = *rpt };
-    hid_report_send(HID_TARGET_SCN, &report);
-    static int x = 0, y = 0, btns = 0;
-    x += rpt->x; y += rpt->y;
-    if (pos) pos(x, y, rpt->x, rpt->y);
-    LOOPN(i, key ? 5 : 0) {
+    static int xs[HID_TARGET_CNT], ys[HID_TARGET_CNT], btns[HID_TARGET_CNT];
+    xs[from] += rpt->x;
+    ys[from] += rpt->y;
+    if (pos_cb) pos_cb(xs[from], ys[from], rpt->x, rpt->y);
+    if (key_cb) LOOPN(i, 5) {
         uint8_t btn = BIT(i);
-        if ((rpt->buttons & btn) == (btns & btn)) continue;
-        key(btn, rpt->buttons & btn);
+        if ((rpt->buttons & btn) == (btns[from] & btn)) continue;
+        key_cb(btn, rpt->buttons & btn);
     }
-    btns = rpt->buttons;
-    ESP_LOGI(TAG, "X: %06d Y: %06d |%c|%c|%c|", x, y,
-             btns & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
-             btns & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
-             btns & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
+    btns[from] = rpt->buttons;
+    ESP_LOGI(TAG, "X: %06d Y: %06d |%c|%c|%c|", xs[from], ys[from],
+             btns[from] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
+             btns[from] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
+             btns[from] & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
 }
 
 /******************************************************************************
@@ -705,52 +707,54 @@ const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycode[6]) {
     return buf;
 }
 
-bool hid_report_keyboard(
+bool hid_report_keybd(
     hid_target_t to, uint8_t mod, const uint8_t *keycode, size_t len
 ) {
     hid_report_t report = {
-        .id = REPORT_ID_KEYBOARD,
+        .id = REPORT_ID_KEYBD,
         .keybd = { .modifier = mod, .keycode = { 0 } }
     };
     memcpy(report.keybd.keycode, keycode, MIN(len, 6));
     return hid_report_send(to, &report);
 }
 
-bool hid_report_keyboard_press(hid_target_t to, const char *str, uint32_t ms) {
+bool hid_report_keybd_press(hid_target_t to, const char *str, uint32_t ms) {
     uint8_t modifier = str2modifier(str), klen = 0;
     const uint8_t *keycode = str2keycodes(str, &modifier);
     while (klen < 6) { if (keycode[klen] == HID_KEY_NONE) break; klen++; }
-    bool sent = hid_report_keyboard(to, modifier, keycode, klen);
+    bool sent = hid_report_keybd(to, modifier, keycode, klen);
     if (sent && (modifier || klen) && ms) {
         msleep(ms);
-        sent = hid_report_keyboard(to, 0, NULL, 0);
+        sent = hid_report_keybd(to, 0, NULL, 0);
     }
     return sent;
 }
 
-void hid_handle_keyboard(hid_keyboard_report_t *rpt, hid_key_cb key) {
+void hid_handle_keybd(
+    hid_target_t from, hid_keybd_report_t *rpt, hid_key_cb key_cb
+) {
     if (!rpt) return;
-    hid_report_t report = { .id = REPORT_ID_MOUSE, .keybd = *rpt };
-    hid_report_send(HID_TARGET_SCN, &report);
-    static uint8_t pmod, prev[LEN(rpt->keycode)] = { HID_KEY_ERROR_UNDEFINED };
-    uint8_t *next = rpt->keycode;
-    LOOPN(i, sizeof(prev)) {
+    static uint8_t kcnum = LEN(rpt->keycode);
+    static uint8_t pmods[HID_TARGET_CNT];
+    static uint8_t prevs[HID_TARGET_CNT][LEN(rpt->keycode)];
+    uint8_t *next = rpt->keycode, *prev = prevs[from];
+    LOOPN(i, kcnum) {
         bool prev_found = false, next_found = false;
-        LOOPN(j, sizeof(prev)) {
+        LOOPN(j, kcnum) {
             if (prev[i] == next[j]) next_found = true;
             if (next[i] == prev[j]) prev_found = true;
         }
         if (prev[i] > HID_KEY_ERROR_UNDEFINED && !next_found) {
-            if (key) key(prev[i], false);
-            ESP_LOGI(TAG, "%s released", keycode2str(prev[i], pmod));
+            if (key_cb) key_cb(prev[i], false);
+            ESP_LOGI(TAG, "%s released", keycode2str(prev[i], pmods[from]));
         }
         if (next[i] > HID_KEY_ERROR_UNDEFINED && !prev_found) {
-            if (key) key(next[i], true);
+            if (key_cb) key_cb(next[i], true);
             ESP_LOGI(TAG, "%s pressed modifier %s",
                      keycode2str(next[i], rpt->modifier),
                      hid_modifier_str(rpt->modifier));
         }
     }
-    memcpy(prev, next, sizeof(prev));
-    pmod = rpt->modifier;
+    memcpy(prev, next, kcnum);
+    pmods[from] = rpt->modifier;
 }

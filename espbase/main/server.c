@@ -1,5 +1,5 @@
 /* 
- * File: server.cpp
+ * File: server.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  */
@@ -75,7 +75,7 @@ typedef struct http_param {
 } http_param_t;
 
 static void free_params(void *ctx) {
-    for (http_param_t *ptr = (http_param_t *)ctx, *next; ptr; ptr = next) {
+    for (http_param_t *ptr = ctx, *next; ptr; ptr = next) {
         TRYFREE(ptr->key); TRYFREE(ptr->val);
         next = ptr->next; free(ptr);
     }
@@ -191,7 +191,7 @@ static const char * md5_catcol(char out[33], size_t argc, ...) {
 }
 
 static void auth_exit(void *arg) {
-    http_auth_t *ctx = (http_auth_t *)arg;
+    http_auth_t *ctx = arg;
     if (ctx) {
         TRYFREE(ctx->basic);
         TRYFREE(ctx);
@@ -271,17 +271,17 @@ static bool has_header(httpd_req_t *req, const char *key, const char *val) {
 }
 
 static bool has_param(httpd_req_t *req, const char *key, int body) {
-    for (http_param_t *p = (http_param_t *)req->sess_ctx; p; p = p->next) {
-        if (strcasecmp(p->key, key)) continue;
-        if (body == FROM_ANY || p->body == !!body) return true;
+    for (http_param_t *param = req->sess_ctx; param; param = param->next) {
+        if (strcasecmp(param->key, key)) continue;
+        if (body == FROM_ANY || param->body == !!body) return true;
     }
     return false;
 }
 
 static const char * get_param(httpd_req_t *req, const char *key, int body) {
-    for (http_param_t *p = (http_param_t *)req->sess_ctx; p; p = p->next) {
-        if (strcasecmp(p->key, key)) continue;
-        if (body == FROM_ANY || p->body == !!body) return p->val;
+    for (http_param_t *param = req->sess_ctx; param; param = param->next) {
+        if (strcasecmp(param->key, key)) continue;
+        if (body == FROM_ANY || param->body == !!body) return param->val;
     }
     return NULL;
 }
@@ -306,7 +306,7 @@ static const char * guess_type(const char *filename) {
     const char *ext = strrchr(filename, '.');
     if (!ext || !strlen(++ext))  return TYPE_TEXT;
     if (!strcmp(ext, "gz")) {
-        char *prev = (char *)memrchr(filename, '.', ext - filename - 1);
+        char *prev = memrchr(filename, '.', ext - filename - 1);
         if (!prev) return "application/x-gzip";
         ext = prev + 1;
     }
@@ -476,7 +476,7 @@ static esp_err_t redirect(httpd_req_t *req, const char *location) {
 }
 
 static void log_msg(httpd_req_t *req) {
-    const char *mstr = http_method_str((httpd_method_t)req->method);
+    const char *mstr = http_method_str(req->method);
     if (req->content_len) {
         ESP_LOGI(TAG, "%s %s %d", mstr, req->uri, req->content_len);
     } else {
@@ -485,11 +485,11 @@ static void log_msg(httpd_req_t *req) {
 }
 
 static void log_param(httpd_req_t *req) {
-    http_param_t *param = (http_param_t *)req->sess_ctx;
-    for (int i = 0; param; param = param->next) {
+    int cnt = 0;
+    for (http_param_t *param = req->sess_ctx; param; param = param->next) {
         if (!param->key || !strlen(param->key)) continue;
         ESP_LOGI(TAG, "Param[%d] key:%s, query:%d `%s`",
-                 i++, param->key, !param->body, param->val ?: "");
+                 cnt++, param->key, !param->body, param->val ?: "");
     }
 }
 
@@ -504,7 +504,7 @@ static esp_err_t check_request(httpd_req_t *req) {
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
     esp_err_t err = ESP_OK;
     req->free_ctx = free_params;
-    http_param_t *ptr = (http_param_t *)req->sess_ctx;
+    http_param_t *ptr = req->sess_ctx;
     if (ptr) {
         TRYNULL(ptr->next, free_params);
     } else if (!( err = ECALLOC(ptr, 1, sizeof(http_param_t)) )) {
@@ -550,8 +550,8 @@ static esp_err_t check_request(httpd_req_t *req) {
 #endif
     if (!err && (int)req->user_ctx & FLAG_NEED_AUTH) {
         char *auth = get_header(req, "Authorization"), *rstr = NULL;
-        const char *mstr = http_method_str((httpd_method_t)req->method);
-        http_auth_t *ctx = (http_auth_t *)httpd_get_global_user_ctx(req->handle);
+        const char *mstr = http_method_str(req->method);
+        http_auth_t *ctx = httpd_get_global_user_ctx(req->handle);
         if (ctx && !auth_validate(ctx, mstr, auth)) {
             if (( rstr = auth_request(ctx, strbool(Config.web.AUTH_BASE)) )) {
                 httpd_resp_set_hdr(req, "Connection", "keep-alive");
@@ -626,7 +626,7 @@ static esp_err_t on_upload_file(httpd_req_t *req, const char *name,
             goto error;
         }
         printf("Upload file: %s\n", path);
-        led_set_blink((led_blink_t)1);
+        led_set_blink(1);
     }
     if (fd && len) {
         if (len != fwrite(data, 1, len, fd)) {
@@ -721,7 +721,7 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
         if (strcmp(name, "update")) return ESP_ERR_HTTPD_SKIP_DATA;
         if (!has_param(req, "size", -1) && !ota_updation_begin(0)) goto error;
         printf("Update file: %s\n", name);
-        led_set_blink((led_blink_t)2);
+        led_set_blink(2);
     }
     if (len && !ota_updation_write(data, len)) goto error;
     if (end) {
@@ -732,7 +732,7 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
     }
     return ESP_OK;
 error:
-    led_set_blink((led_blink_t)0);
+    led_set_blink(0);
     send_err(req, 500, ota_updation_error());
     return ESP_FAIL;
 }
@@ -782,7 +782,7 @@ static esp_err_t on_static(httpd_req_t *req) {
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
 static void handle_websocket_message(void *arg) {
-    httpd_ws_frame_t *pkt = (httpd_ws_frame_t *)arg;
+    httpd_ws_frame_t *pkt = arg;
     if (!pkt) return;
     if (pkt->payload) {
         int fd = *(int *)(pkt->payload + pkt->len + 1);

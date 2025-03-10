@@ -1,21 +1,25 @@
 /*
- * File: scngui.c
+ * File: scnlvgl.c
  * Authors: Hank <hankso1106@gmail.com>
  * Time: 2024/4/3 2:08:42
- * Desc: We are using https://docs.lvgl.io/8.4/
+ * Desc: We are using https://docs.lvgl.io/9.2/
  */
 
 /******************************************************************************
  * Compatibility
  */
 
-#if __has_include("screen.h")   // ESP32
+#if __has_include("esp_lvgl_port.h")
 #   include "screen.h"
 #   include "config.h"
 #   include "filesys.h"
 #   include "hidtool.h"
+#   include "esp_lvgl_port.h"
 #   include "freertos/FreeRTOS.h"
 #   include "freertos/semphr.h"
+#   define LOGI(...)            ESP_LOGI("LVGL", __VA_ARGS__)
+#   define LOGW(...)            ESP_LOGW("LVGL", __VA_ARGS__)
+#   define LOGE(...)            ESP_LOGE("LVGL", __VA_ARGS__)
 #   define MUTEX()              xSemaphoreCreateBinary()
 #   define ACQUIRE(s)           ( (s) ? xSemaphoreTake((s), TIMEOUT(50)) : 0 )
 #   define RELEASE(s)           do { if (s) xSemaphoreGive(s); } while (0)
@@ -25,28 +29,22 @@
 #   define ERR_INVALID_STATE    ESP_ERR_INVALID_STATE
 #   define ERR_NOT_FOUND        ESP_ERR_NOT_FOUND
 #   define ERR_NOT_SUPPORTED    ESP_ERR_NOT_SUPPORTED
-#   define LOGI(...)            ESP_LOGI("LVGL", __VA_ARGS__)
-#   define LOGE(...)            ESP_LOGE("LVGL", __VA_ARGS__)
-#   if defined(CONFIG_LV_USE_FS_POSIX) && defined(CONFIG_BASE_FFS_MP)
-#   define PATH_FMT "%c:%s%s"
-#   define PATH_LEN strlen(CONFIG_BASE_FFS_MP) + strlen(Config.sys.DIR_DATA) + 3
-#   define PATH_VAL CONFIG_LV_FS_POSIX_LETTER,  \
-                    CONFIG_BASE_FFS_MP,         \
-                    Config.sys.DIR_DATA // FIXME: change to filesys_xxx
-#   endif
-#elif __has_include("lvgl.h")   // WIN32 or LINUX
+#elif __has_include("lvgl.h") && _WIN32
 #   define WITH_LVGL
+#   define LOGI(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
+#   define LOGW(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
+#   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)
 #   define ACQUIRE(s)           ( (s) ? !WaitForSingleObject((s), 1) : 0 )
 #   define RELEASE(s)           do { if (s) ReleaseMutex(s); } while (0)
-#   define ERR_NO_ERR           0
-#   define ERR_NO_MEM           1
-#   define ERR_INVALID_ARG      2
-#   define ERR_INVALID_STATE    3
-#   define ERR_NOT_FOUND        4
-#   define ERR_NOT_SUPPORTED    5
-#   define LOGI(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
-#   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
+enum {
+    ERR_NO_ERR,
+    ERR_NO_MEM,
+    ERR_INVALID_ARG,
+    ERR_INVALID_STATE,
+    ERR_NOT_FOUND,
+    ERR_NOT_SUPPORTED
+};
 #endif
 
 #ifdef WITH_LVGL
@@ -67,6 +65,42 @@
 #define DEG(rad) ( (rad) * RAD_TO_DEG )
 
 #define PREFIX(level)  ( ">-+*"[(level) % 4] ) // see 0x2500-0x257F
+
+#if LVGL_VERSION_MAJOR >= 9
+#   define LVGL9
+#   define lv_timer_get_period(t)   ( *(uint32_t *)(t) ) // hotfix
+#   ifndef lv_disp_get_hor_res
+#   define lv_disp_get_hor_res      lv_display_get_horizontal_resolution
+#   define lv_disp_get_ver_res      lv_display_get_vertical_resolution
+#   endif
+#   define send_event               lv_obj_send_event
+#   define refresh_timer            lv_display_get_refr_timer
+#   define screen_active            lv_display_get_screen_active
+#else
+#   define LVGL8
+#   define lv_timer_get_period(t)   ( (t)->period )
+#   define lv_obj_delete            lv_obj_del
+#   define lv_obj_remove_flag       lv_obj_clear_flag
+#   define lv_text_get_size         lv_txt_get_size
+#   define lv_anim_delete           lv_anim_del
+#   define lv_group_delete          lv_group_del
+#   define lv_image_class           lv_img_class
+#   define lv_image_set_src         lv_img_set_src
+#   define lv_screen_load           lv_scr_load
+#   define lv_screen_load_anim      lv_scr_load_anim
+#   define lv_button_class          lv_btn_class
+#   define lv_button_create         lv_btn_create
+#   define lv_binfont_create        lv_font_load
+#   define lv_binfont_destroy       lv_font_free
+#   define lv_display_get_theme     lv_disp_get_theme
+#   define lv_display_set_theme     lv_disp_set_theme
+#   define lv_display_set_default   lv_disp_set_default
+#   define lv_display_get_rotation  lv_disp_get_rotation
+#   define lv_display_set_rotation  lv_disp_set_rotation
+#   define send_event               lv_event_send
+#   define refresh_timer            _lv_disp_get_refr_timer
+#   define screen_active            lv_disp_get_scr_act
+#endif
 
 typedef struct screen screen_t;
 typedef int (*screen_cb_t)(screen_t *);
@@ -97,14 +131,18 @@ static const lv_indev_type_t types[] = {
 };
 
 static struct {
-    uint32_t event;                 // custom LVGL event id
+    uint32_t event;                 // custom LVGL event code
     int curr, width, height;        // current screen & display size
     screen_t scr[LEN(inits)];       // created screens
-    const lv_font_t *font;          // pointer to current font
+    lv_style_t style_font;          // style for custom font
+    lv_theme_t theme_font;          // theme for custom font
+    lv_font_t *font;                // pointer to cascaded fonts
     lv_disp_t *disp;                // pointer to current display
     lv_group_t *group;              // input controlled group
-    lv_indev_drv_t drv[LEN(types)]; // input device drivers
     lv_indev_t *indev[LEN(types)];  // input devices
+#ifdef LVGL8
+    lv_indev_drv_t drv[LEN(types)]; // input device drivers
+#endif
     void * mutex;
     struct {
         int x, y;
@@ -136,9 +174,9 @@ static int screen_change(screen_t *next, uint32_t anim_ms) {
     if (anim_ms) {
         int anim = LV_SCR_LOAD_ANIM_MOVE_LEFT;
         if (next < prev) anim = LV_SCR_LOAD_ANIM_MOVE_RIGHT;
-        lv_scr_load_anim(next->root, anim, anim_ms, 0, false);
+        lv_screen_load_anim(next->root, anim, anim_ms, 0, false);
     } else {
-        lv_scr_load(next->root);
+        lv_screen_load(next->root);
     }
     if (next->enter) err = next->enter(next);
     ctx.curr = idx;
@@ -152,10 +190,10 @@ static void dump_obj(lv_obj_t *obj, int lvl) {
          if (cls == &lv_obj_class)      cstr = "screen";
     else if (cls == &lv_arc_class)      cstr = "arc";
     else if (cls == &lv_bar_class)      cstr = "bar";
-    else if (cls == &lv_btn_class)      cstr = "btn";
-    else if (cls == &lv_img_class)      cstr = "img";
     else if (cls == &lv_line_class)     cstr = "line";
     else if (cls == &lv_label_class)    cstr = "label";
+    else if (cls == &lv_image_class)    cstr = "image";
+    else if (cls == &lv_button_class)   cstr = "button";
     else if (cls == &lv_switch_class)   cstr = "switch";
     else if (cls == &lv_slider_class)   cstr = "slider";
     else if (cls == &lv_checkbox_class) cstr = "checkbox";
@@ -203,39 +241,42 @@ static void dump_font(const lv_font_t *font) {
 }
 
 static lv_obj_t * create_img(const char *fn, lv_obj_t *node) {
-#ifdef PATH_FMT
-    char path[PATH_LEN + strlen(fn)];
-    snprintf(path, sizeof(path), PATH_FMT "%s", PATH_VAL, fn);
+#if defined(CONFIG_LV_USE_FS_POSIX) && defined(CONFIG_BASE_USE_FFS)
+    char path[2 + PATH_MAX_LEN] = { CONFIG_LV_FS_POSIX_LETTER, ':' };
+    snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
     lv_obj_t *img = lv_img_create(node ?: lv_disp_get_scr_act(ctx.disp));
-    lv_img_set_src(img, path);
+    lv_image_set_src(img, path);
+#   ifdef LVGL9
+    lv_point_t pivot;
+    lv_image_get_pivot(img, &pivot);
+    LOGI("Load image from %s: %dx%d", path, pivot.x, pivot.y);
+#   else
     lv_img_t *ptr = (lv_img_t *)img;
     LOGI("Load image from %s: %dx%d cf %d", path, ptr->w, ptr->h, ptr->cf);
+#   endif
     return img;
 #else
     return NULL; NOTUSED(fn);
 #endif
 }
 
-static const lv_font_t * create_font(const char *fn) {
-#ifdef PATH_FMT
-    char path[PATH_LEN + strlen(fn)];
-    snprintf(path, sizeof(path), PATH_FMT "%s", PATH_VAL, fn);
-    if (ctx.font && ctx.font->user_data) {
-        if (!memcmp(path, ctx.font->user_data, strlen(path)))
-            return ctx.font;
-    }
-    lv_font_t *font = lv_font_load(path);
-    if (font) {
-        if (ctx.font) {
-            font->fallback = ctx.font;
+static lv_font_t * create_font(const char *fn) {
+#if defined(CONFIG_LV_USE_FS_POSIX) && defined(CONFIG_BASE_USE_FFS)
+    char path[2 + PATH_MAX_LEN] = { CONFIG_LV_FS_POSIX_LETTER, ':' };
+    snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
+    if (ctx.font && ctx.font->user_data &&
+        !memcmp(path, ctx.font->user_data, strlen(path))) return ctx.font;
+    lv_font_t *font = lv_binfont_create(path);
+    if (!font || !( font->user_data = strdup(path) )) {
+        TRYNULL(font, lv_binfont_destroy);
+    } else if (ctx.font) {
+        font->fallback = ctx.font;
 #   ifdef CONFIG_LV_FONT_UNSCII_8
-        } else if (ctx.disp && MIN(ctx.width, ctx.height) < 240) {
-            font->fallback = &lv_font_unscii_8;
+    } else if (ctx.disp && MIN(ctx.width, ctx.height) < 240) {
+        font->fallback = &lv_font_unscii_8;
 #   endif
-        } else {
-            font->fallback = lv_font_default();
-        }
-        font->user_data = strdup(path);
+    } else {
+        font->fallback = lv_font_default();
     }
     LOGI("Load font from %s: %p", path, font);
     return font;
@@ -244,15 +285,21 @@ static const lv_font_t * create_font(const char *fn) {
 #endif
 }
 
+#ifdef LVGL9
+static void cb_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
+    lv_indev_type_t type = lv_indev_get_type(indev);
+#else
 static void cb_indev_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
+    lv_indev_type_t type = indev_drv->type;
+#endif
     if (!ACQUIRE(ctx.mutex)) return;
-    if (indev_drv->type == LV_INDEV_TYPE_POINTER) {
+    if (type == LV_INDEV_TYPE_POINTER) {
         data->point.x = ctx.pointer.x / ctx.pointer.scale;
         data->point.y = ctx.pointer.y / ctx.pointer.scale;
         data->state = ctx.pointer.pressed
             ? LV_INDEV_STATE_PRESSED
             : LV_INDEV_STATE_RELEASED;
-    } else if (indev_drv->type == LV_INDEV_TYPE_KEYPAD) {
+    } else if (type == LV_INDEV_TYPE_KEYPAD) {
         data->key = ctx.keypad.key;
         if (ctx.keypad.pressed) {
             data->state = LV_INDEV_STATE_PRESSED;
@@ -261,7 +308,7 @@ static void cb_indev_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
             data->state = LV_INDEV_STATE_RELEASED;
             ctx.keypad.key = 0;
         }
-    } else if (indev_drv->type == LV_INDEV_TYPE_ENCODER) {
+    } else if (type == LV_INDEV_TYPE_ENCODER) {
         // Ignore long press if using buttons with Encoder logic
         if (ctx.encoder.left) {
             data->key = ctx.encoder.last = LV_KEY_LEFT;
@@ -298,13 +345,12 @@ static void cb_screen_menu(lv_event_t *e) {
 }
 
 static int screen_menu_init(screen_t *scr) {
-    if (!( scr->root = lv_disp_get_scr_act(ctx.disp) ))
-        return ERR_INVALID_STATE;
+    if (!( scr->root = screen_active(ctx.disp) )) return ERR_INVALID_STATE;
     scr->name = "Menu";
     lv_obj_t *lbl = lv_label_create(scr->root);
     lv_label_set_text(lbl, "1.Menu\n2.Nav2D");
     lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 0, 0);
-    lv_obj_t *btn = lv_btn_create(scr->root);
+    lv_obj_t *btn = lv_button_create(scr->root);
     lv_obj_set_size(btn, 40, 20);
     lv_obj_add_event_cb(btn, cb_screen_menu, LV_EVENT_CLICKED, NULL);
     lv_obj_align(btn, LV_ALIGN_TOP_RIGHT, 0, 0);
@@ -319,33 +365,37 @@ static int screen_menu_init(screen_t *scr) {
  */
 
 static void cb_screen_label(lv_event_t *e) {
-    if (lv_event_get_code(e) != LV_EVENT_DRAW_PART_END) return;
-    lv_obj_draw_part_dsc_t *dsc = lv_event_get_draw_part_dsc(e);
-    if (dsc->part != LV_PART_INDICATOR) return;
+    static char buf[10];
     lv_obj_t *bar = lv_event_get_target(e);
     lv_draw_label_dsc_t label_dsc;
-    lv_draw_label_dsc_init(&label_dsc);
-    label_dsc.font = ctx.font;
-    char buf[8];
-    lv_snprintf(buf, sizeof(buf), "%d", (int)lv_bar_get_value(bar));
+    lv_draw_label_dsc_init(&label_dsc); // label_dsc.font = ctx.font;
+    lv_snprintf(buf, sizeof(buf), "%d%%", (int)lv_bar_get_value(bar));
+
     lv_point_t txt_size;
-    lv_area_t txt_area;
-    lv_txt_get_size(
+    lv_text_get_size(
         &txt_size, buf, label_dsc.font, label_dsc.letter_space,
         label_dsc.line_space, LV_COORD_MAX, label_dsc.flag);
-    if (lv_area_get_width(dsc->draw_area) > txt_size.x + 20) {
-        txt_area.x2 = dsc->draw_area->x2 - 5;
-        txt_area.x1 = txt_area.x2 - txt_size.x + 1;
+
+    lv_area_t bar_area, txt_area = {
+        .x1 = 0, .x2 = txt_size.x - 1, .y1 = 0, .y2 = txt_size.y - 1
+    };
+    lv_obj_get_coords(bar, &bar_area);
+    int width = lv_area_get_width(&bar_area) * lv_bar_get_value(bar) / 100;
+    lv_area_set_width(&bar_area, width);
+    if (width > txt_size.x + 10) {
+        lv_area_align(&bar_area, &txt_area, LV_ALIGN_RIGHT_MID, -5, 0);
         label_dsc.color = lv_color_white();
     } else {
-        txt_area.x1 = dsc->draw_area->x2 + 5;
-        txt_area.x2 = txt_area.x1 + txt_size.x - 1;
+        lv_area_align(&bar_area, &txt_area, LV_ALIGN_OUT_RIGHT_MID, 5, 0);
         label_dsc.color = lv_color_black();
     }
-    int height = lv_area_get_height(dsc->draw_area) - txt_size.y;
-    txt_area.y1 = dsc->draw_area->y1 + (height + 1) / 2;
-    txt_area.y2 = txt_area.y1 + txt_size.y - 1;
-    lv_draw_label(dsc->draw_ctx, &label_dsc, &txt_area, buf, NULL);
+# ifdef LVGL9
+    label_dsc.text = buf;
+    label_dsc.text_local = true;
+    lv_draw_label(lv_event_get_layer(e), &label_dsc, &txt_area);
+#else
+    lv_draw_label(lv_event_get_draw_ctx(e), &label_dsc, &txt_area, buf, NULL);
+#endif
 }
 
 // Copied from lvgl/src/font/lv_symbol_def.h
@@ -369,9 +419,9 @@ static int screen_label_init(screen_t *scr) {
     if (!( scr->root = lv_obj_create(NULL) )) return ERR_NO_MEM;
     scr->name = "Test label";
     lv_obj_t *bar = lv_bar_create(scr->root);
-    lv_obj_add_event_cb(bar, cb_screen_label, LV_EVENT_DRAW_PART_END, NULL);
     lv_obj_set_size(bar, ctx.width, 16);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
+    lv_obj_add_event_cb(bar, cb_screen_label, LV_EVENT_DRAW_MAIN_END, NULL);
     char buf[LEN(LV_SYMBOLS) * 4], *ptr = buf, *end = buf + sizeof(buf);
     LOOPN(i, LEN(LV_SYMBOLS)) {
         ptr += snprintf(ptr, end - ptr, "%s|", unicode2str(LV_SYMBOLS[i]));
@@ -419,7 +469,7 @@ static void cb_screen_anim(lv_event_t *e) {
         lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
         lv_anim_start(&a);
     } else {
-        lv_anim_del(lv_obj_get_parent(sw), screen_anim_exec);
+        lv_anim_delete(lv_obj_get_parent(sw), screen_anim_exec);
     }
 }
 
@@ -429,27 +479,27 @@ static int screen_anim_init(screen_t *scr) {
 
     lv_obj_t *arc;
     int dia = MIN(ctx.width, ctx.height);
-#   ifndef CONFIG_LV_COLOR_DEPTH_1
+#ifndef CONFIG_LV_COLOR_DEPTH_1
     const lv_color_t color[] = {
         LV_COLOR_MAKE(232, 87, 116),
         LV_COLOR_MAKE(126, 87, 162),
         LV_COLOR_MAKE(90, 202, 228),
     };
-#   endif
+#endif
     LOOPN(i, dia / 26) {
         if (!( arc = lv_arc_create(scr->root) )) return ERR_NO_MEM;
         lv_arc_set_value(arc, 0);
         lv_arc_set_bg_angles(arc, 120 * i, 10 + 120 * i);
         lv_obj_set_size(arc, dia - 26 * i, dia - 26 * i);
         lv_obj_remove_style(arc, NULL, LV_PART_KNOB);
-        lv_obj_clear_flag(arc, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_arc_width(arc, 3, 0);
         lv_obj_set_style_border_width(arc, 0, 0);
-#   ifdef CONFIG_LV_COLOR_DEPTH_1
+#ifdef CONFIG_LV_COLOR_DEPTH_1
         lv_obj_set_style_arc_color(arc, lv_color_black(), 0);
-#   else
+#else
         lv_obj_set_style_arc_color(arc, color[i % LEN(color)], 0);
-#   endif
+#endif
         lv_obj_center(arc);
     }
 
@@ -466,47 +516,34 @@ static int screen_anim_init(screen_t *scr) {
  */
 
 static int lvgl_ui_input(hid_report_t *rpt) {
-    if (rpt->id == REPORT_ID_KEYBOARD) {
+    if (rpt->id == REPORT_ID_KEYBD) {
+        hid_handle_keybd(HID_TARGET_SCN, &rpt->keybd, NULL);
+        bool shift = HAS_SHIFT(rpt->keybd.modifier);
         ITER(key, rpt->keybd.keycode) {
-            if (key <= HID_KEY_ERROR_UNDEFINED) continue;
+            if (key <= HID_KEY_ERROR_UNDEFINED || !ACQUIRE(ctx.mutex)) continue;
             const char *str = keycode2str(key, rpt->keybd.modifier);
-            if (!ACQUIRE(ctx.mutex)) continue;
             switch (key) {
-            case HID_KEY_TAB:
-                if (HAS_SHIFT(rpt->keybd.modifier)) {
-                    ctx.keypad.key = LV_KEY_PREV; // '\t'
-                } else {
-                    ctx.keypad.key = LV_KEY_NEXT; // '\x0B'
-                }
-                break;
-            case HID_KEY_ENTER:
-                if (HAS_SHIFT(rpt->keybd.modifier)) {
-                    ctx.keypad.key = LV_KEY_ENTER; // '\n'
-                } else {
-                    ctx.keypad.key = '\r';
-                }
-                break;
-            case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;    break;
-            case HID_KEY_ARROW_DOWN:  ctx.keypad.key = LV_KEY_DOWN;  break;
+            case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;   break;
+            case HID_KEY_ARROW_DOWN:  ctx.keypad.key = LV_KEY_DOWN; break;
             case HID_KEY_ARROW_RIGHT: ctx.keypad.key = LV_KEY_RIGHT; break;
-            case HID_KEY_ARROW_LEFT:  ctx.keypad.key = LV_KEY_LEFT;  break;
-            case HID_KEY_ESCAPE:      ctx.keypad.key = LV_KEY_ESC;   break;
-            case HID_KEY_DELETE:      ctx.keypad.key = LV_KEY_DEL;   break;
+            case HID_KEY_ARROW_LEFT:  ctx.keypad.key = LV_KEY_LEFT; break;
+            case HID_KEY_ESCAPE:      ctx.keypad.key = LV_KEY_ESC;  break;
+            case HID_KEY_DELETE:      ctx.keypad.key = LV_KEY_DEL;  break;
             case HID_KEY_BACKSPACE:   ctx.keypad.key = LV_KEY_BACKSPACE; break;
-            case HID_KEY_HOME:        ctx.keypad.key = LV_KEY_HOME;  break;
-            case HID_KEY_END:         ctx.keypad.key = LV_KEY_END;   break;
+            case HID_KEY_HOME:        ctx.keypad.key = LV_KEY_HOME; break;
+            case HID_KEY_END:         ctx.keypad.key = LV_KEY_END;  break;
+            case HID_KEY_TAB:   //       '\t'          '\x0B'
+                ctx.keypad.key = shift ? LV_KEY_PREV : LV_KEY_NEXT; break;
+            case HID_KEY_ENTER: //       '\n'
+                ctx.keypad.key = shift ? LV_KEY_ENTER : '\r';       break;
             default:
-                if (strlen(str) != 1) {
-                    RELEASE(ctx.mutex);
-                    return ERR_NOT_SUPPORTED;
-                }
-                ctx.keypad.key = str[0];
-                break;
+                ctx.keypad.key = strlen(str) == 1 ? str[0] : 0;     break;
             }
-            ctx.keypad.pressed = true;
+            ctx.keypad.pressed = ctx.keypad.key != 0;
             RELEASE(ctx.mutex);
         }
     } else if (rpt->id == REPORT_ID_MOUSE && ACQUIRE(ctx.mutex)) {
+        hid_handle_mouse(HID_TARGET_SCN, &rpt->mouse, NULL, NULL);
         ctx.pointer.x = MAX(0, ctx.pointer.x + rpt->mouse.x);
         ctx.pointer.y = MAX(0, ctx.pointer.y + rpt->mouse.y);
         ctx.pointer.x = MIN(ctx.pointer.x, ctx.width * ctx.pointer.scale);
@@ -538,21 +575,28 @@ static int lvgl_ui_exit() {
     }
     LOOPN(i, LEN(ctx.scr)) {
         if (ctx.scr[i].exit) ctx.scr[i].exit(ctx.scr + i);
-        if (i) TRYNULL(ctx.scr[i].root, lv_obj_del);
+        if (i) TRYNULL(ctx.scr[i].root, lv_obj_delete);
     }
     for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
         if (font->user_data) {                  // loaded by create_font
-            lv_font_free((lv_font_t *)font);
+            free(font->user_data);              // strdup
+            lv_binfont_destroy((lv_font_t *)font);
         } else {
-            ctx.font = font;
+            ctx.font = (lv_font_t *)font;
         }
     }
-    TRYNULL(ctx.group, lv_group_del);
+    TRYNULL(ctx.group, lv_group_delete);
     ctx.disp = NULL;
     return ERR_NO_ERR;
 }
 
-static void cb_scr_event(lv_event_t *e) {
+static void cb_theme_apply(lv_theme_t *theme, lv_obj_t *obj) {
+    if (lv_obj_check_type(obj, &lv_label_class))
+        lv_obj_add_style(obj, &ctx.style_font, 0);
+    LV_UNUSED(theme);
+}
+
+static void cb_screen_event(lv_event_t *e) {
     if (lv_event_get_code(e) != ctx.event) return;
     int *ptr = lv_event_get_param(e);
     if (!ptr) return;
@@ -561,81 +605,99 @@ static void cb_scr_event(lv_event_t *e) {
     if (0 <= *ptr && *ptr < LEN(ctx.scr)) {
         screen_change(ctx.scr + *ptr, 300);
     } else if (ctx.curr == 0) {
-        lv_obj_t *btn = lv_obj_get_child(ctx.scr[0].root, 1);
-        lv_event_send(btn, LV_EVENT_CLICKED, NULL);
+        send_event(lv_obj_get_child(ctx.scr[0].root, 1), LV_EVENT_CLICKED, NULL);
     }
 }
 
-static int lvgl_ui_init(lv_disp_t *disp) {
+static int lvgl_ui_init(lv_display_t *disp) {
     int err = ERR_NO_ERR;
-    if (ctx.disp) return err;
-    if (!ctx.mutex) {
-        ctx.mutex = MUTEX();
-        if (ctx.mutex) RELEASE(ctx.mutex);
-    }
+    if (!disp || ctx.disp) return err;
+    if (!ctx.mutex && ( ctx.mutex = MUTEX() )) RELEASE(ctx.mutex);
     if (!ctx.event) ctx.event = lv_event_register_id();
     if (!ctx.pointer.scale) ctx.pointer.scale = 5; // default 5x
+
+    // 1. Initialize display, input group and screen info
     ctx.curr = 0;
     ctx.disp = disp;
     ctx.group = lv_group_create();
     ctx.width = lv_disp_get_hor_res(disp);
     ctx.height = lv_disp_get_ver_res(disp);
-    lv_disp_set_default(ctx.disp);
     lv_group_set_default(ctx.group);
+    lv_display_set_default(ctx.disp);
 
-    if (!( ctx.font = create_font("lv_font_chinese_12.bin") ))
-        ctx.font = lv_font_default();
-#   if defined(CONFIG_LV_USE_THEME_DEFAULT)
-    lv_theme_t *theme = lv_theme_default_get();
-#   elif defined(CONFIG_LV_USE_THEME_BASIC)
-    lv_theme_t *theme = lv_theme_basic_init(disp);
-#   elif defined(CONFIG_LV_USE_THEME_MONO)
-    lv_theme_t *theme = lv_theme_mono_init(disp, false, ctx.font);
-#   else
-    lv_theme_t *theme = lv_disp_get_theme(disp);
-    if (!theme) {
-        static lv_theme_t empty_theme;
-        theme = &empty_theme;
-    }
-#   endif
-    theme->font_small = theme->font_normal = theme->font_large = ctx.font;
-    lv_disp_set_theme(disp, theme);
-
-    LOOPN(i, LEN(ctx.scr)) {
-        ctx.scr[i].init = inits[i];
-        if (ctx.scr[i].root) continue;
-        if (!( err = ctx.scr[i].init(ctx.scr + i) )) {
-            lv_obj_add_event_cb(ctx.scr[i].root, cb_scr_event, ctx.event, NULL);
-        } else if (err == ERR_NO_MEM) {
-            TRYNULL(ctx.scr[i].root, lv_obj_del);
-        }
-    }
-    LOOPN(i, LEN(ctx.drv)) {
+    // 2. Register input devices
+    LOOPN(i, LEN(types)) {
+#ifdef LVGL9
+        lv_indev_t *indev = lv_indev_create();
+        lv_indev_set_type(indev, types[i]);
+        lv_indev_set_mode(indev, LV_INDEV_MODE_EVENT);
+        lv_indev_set_display(indev, disp);
+        lv_indev_set_read_cb(indev, cb_indev_read);
+#else
         lv_indev_drv_init(ctx.drv + i);
         ctx.drv[i].disp = disp;
         ctx.drv[i].type = types[i];
         ctx.drv[i].read_cb = cb_indev_read;
-        ctx.drv[i].user_data = NULL;
-        ctx.indev[i] = lv_indev_drv_register(ctx.drv + i);
-        if (ctx.indev[i] && types[i] == LV_INDEV_TYPE_POINTER)
-            lv_indev_set_cursor(ctx.indev[i], create_img("cursor.png", NULL));
-        if (ctx.indev[i] && types[i] == LV_INDEV_TYPE_ENCODER)
-            lv_indev_set_group(ctx.indev[i], ctx.group);
+        lv_indev_t *indev = lv_indev_drv_register(ctx.drv + i);
+#endif
+        if (!indev) continue;
+        if (types[i] == LV_INDEV_TYPE_POINTER)
+            lv_indev_set_cursor(indev, create_img("cursor.png", NULL));
+        if (types[i] == LV_INDEV_TYPE_ENCODER)
+            lv_indev_set_group(indev, ctx.group);
+        ctx.indev[i] = indev;
+    }
+
+    // 3. Load custom font and configure theme and style
+    if (!( ctx.font = create_font("lv_font_chinese_12.bin") ))
+        ctx.font = (lv_font_t *)lv_font_default();
+    lv_theme_t *theme = lv_display_get_theme(disp);
+#if defined(CONFIG_LV_USE_THEME_DEFAULT)
+    if (!lv_theme_default_is_inited()) {
+        lv_color_t p = lv_color_black(), s = lv_color_white();
+        theme = lv_theme_default_init(ctx.disp, p, s, false, ctx.font);
+    } else {
+        theme = lv_theme_default_get();
+    }
+#elif defined(CONFIG_LV_USE_THEME_MONO)
+    theme = lv_theme_mono_init(disp, false, ctx.font);
+#endif
+    if (theme) {
+        lv_style_init(&ctx.style_font);
+        lv_style_set_text_font(&ctx.style_font, ctx.font);
+        ctx.theme_font = *theme;
+        lv_theme_set_parent(&ctx.theme_font, theme);
+        lv_theme_set_apply_cb(&ctx.theme_font, cb_theme_apply);
+        lv_display_set_theme(disp, &ctx.theme_font);
+    }
+
+    // 4. Initialize each screen
+    LOOPN(i, LEN(ctx.scr)) {
+        ctx.scr[i].init = inits[i];
+        if (ctx.scr[i].root) continue;
+        if (!( err = ctx.scr[i].init(ctx.scr + i) )) {
+            lv_obj_add_event_cb(
+                ctx.scr[i].root, cb_screen_event, ctx.event, NULL);
+        } else if (err == ERR_NO_MEM) {
+            TRYNULL(ctx.scr[i].root, lv_obj_delete);
+        }
     }
     return ERR_NO_ERR;
 }
 
 extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
-    if (cmd == SCN_INIT) return lvgl_ui_init((lv_disp_t *)data);
+    if (cmd == SCN_INIT) return lvgl_ui_init((lv_display_t *)data);
     if (cmd == SCN_EXIT) return lvgl_ui_exit();
     if (!ctx.disp) {
         LOGE("not initialized yet");
         return ERR_INVALID_STATE;
     }
     switch (cmd) {
-    case SCN_STAT:
-        printf("LVGL: %d anim, %d FPS\n",
-               lv_anim_count_running(), 1000 / lv_anim_get_timer()->period);
+    case SCN_INP: return lvgl_ui_input((hid_report_t *)data);
+    case SCN_STAT: {
+        uint32_t period = lv_timer_get_period(lv_anim_get_timer());
+        printf("LVGL: %d anim @ %d FPS\n",
+               lv_anim_count_running(), period ? 1000 / period : 0);
         dump_font(ctx.font);
         LOOPN(i, LEN(ctx.scr)) {
             if (!ctx.scr[i].root) {
@@ -644,43 +706,34 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
                 dump_obj(ctx.scr[i].root, 0);
             }
         }
-        break;
-    case SCN_FONT: {
-#ifdef PATH_FMT
-        if (!data || !strlen((const char *)data)) return ERR_INVALID_ARG;
-        lv_theme_t *theme = lv_disp_get_theme(ctx.disp);
-        if (!theme) return ERR_INVALID_STATE;
-        const lv_font_t *font = create_font(data);
-        if (!font) return ERR_NOT_FOUND;
-        ctx.font = theme->font_normal = font;
-        lv_disp_set_theme(ctx.disp, theme); // FIXME: trigger style update
-#else
-        return ERR_NOT_SUPPORTED;
-#endif
     }   break;
-    case SCN_INP: return lvgl_ui_input((hid_report_t *)data);
+    case SCN_FONT: {
+        if (!data || !strlen((const char *)data)) return ERR_INVALID_ARG;
+        if (!lv_display_get_theme(ctx.disp)) return ERR_INVALID_STATE;
+        lv_font_t *font = create_font(data);
+        if (!font) return ERR_NOT_FOUND;
+        lv_style_reset(&ctx.style_font);
+        lv_style_set_text_font(&ctx.style_font, ctx.font = font);
+    }   break;
     case SCN_DPI:
         if (!data || *(float *)data <= 0) return ERR_INVALID_ARG;
         ctx.pointer.scale = *(float *)data;
         break;
     case SCN_ROT: {
-        lv_disp_rot_t rot = lv_disp_get_rotation(ctx.disp);
+        lv_display_rotation_t rot = lv_display_get_rotation(ctx.disp);
         rot = data ? *(int *)data : (rot + 1);
-        if (rot > LV_DISP_ROT_270) rot = LV_DISP_ROT_NONE;
-        lv_disp_set_rotation(ctx.disp, rot);
+        if (rot > LV_DISPLAY_ROTATION_270) rot = LV_DISPLAY_ROTATION_0;
+        lv_display_set_rotation(ctx.disp, rot);
         printf("Set rotation to %d\n", rot);
     }   break;
     case SCN_FPS: {
         static uint32_t backup[3];
         int fps = CONS(*(int *)data, 0, 100);
-        lv_timer_t *timer[2] = {
-            lv_anim_get_timer(),
-            _lv_disp_get_refr_timer(ctx.disp),
-        };
+        lv_timer_t *timer[2] = { lv_anim_get_timer(), refresh_timer(ctx.disp) };
         LOOPN(i, LEN(timer)) {
             if (!timer[i]) continue;
             if (fps) {
-                if (!backup[2]) backup[i] = timer[i]->period;
+                if (!backup[2]) backup[i] = lv_timer_get_period(timer[i]);
                 lv_timer_set_period(timer[i], 1000 / fps);
                 LOGI("set timer#%d period to %d", i, 1000 / fps);
             } else if (backup[2]) {
@@ -691,10 +744,10 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
         backup[2] = fps > 0;
     }   break;
     case SCN_BTN:
-        lv_event_send(lv_disp_get_scr_act(ctx.disp), ctx.event, (void *)data);
+        send_event(screen_active(ctx.disp), ctx.event, (void *)data);
         break;
     case SCN_PBAR: {
-        if (!ctx.scr[1].root) return ERR_INVALID_STATE; // second screen
+        if (!ctx.scr[1].root) return ERR_INVALID_STATE; // on the second screen
         uint8_t val = MIN(*(uint8_t *)data, 100);
         lv_bar_set_value(lv_obj_get_child(ctx.scr[1].root, 0), val, LV_ANIM_ON);
         printf("Set progressbar to %d\n", val);

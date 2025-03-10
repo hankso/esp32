@@ -44,6 +44,12 @@
         ( (v = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
 #define ECALLOC(v, num, size)                                               \
         ( (v = (typeof(v)) calloc((num), (size))) ? ESP_OK : ESP_ERR_NO_MEM )
+#define EREALLOC(v, size)                                                   \
+        ({                                                                  \
+            typeof(v) ptr = (typeof(v)) realloc((v), (size));               \
+            if (ptr) (v) = ptr;                                             \
+            ptr ? ESP_OK : ESP_ERR_NO_MEM;                                  \
+        })
 #define ITERN(v, arr, n)                                                    \
         for (typeof(*(arr)) *_p = (arr), v = *_p; _p < &((arr)[n]); v = *++_p)
 #define ITER(v, arr) ITERN(v, (arr), LEN(arr))
@@ -100,9 +106,6 @@
 #if defined(BOARD_ESP32_DEVKIT)
 #   undef   CONFIG_BASE_GPIO_LED
 #   define  CONFIG_BASE_GPIO_LED 2
-#   undef   CONFIG_BASE_ADC_HALL
-#   undef   CONFIG_BASE_ADC_SINGLE
-#   define  CONFIG_BASE_ADC_JOYSTICK
 #elif defined(BOARD_ESP32_PICOKIT)
 #   undef   CONFIG_BASE_LED_MODE_GPIO
 #   undef   CONFIG_BASE_LED_MODE_LEDC

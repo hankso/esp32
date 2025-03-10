@@ -46,12 +46,18 @@ static void ble_hidh_cb(void *a, esp_event_base_t b, int32_t id, void *data) {
     if (id != ESP_HIDH_INPUT_EVENT || !param->input.length) return;
     uint16_t len = param->input.length;
     int usage = param->input.usage, rid = param->input.report_id;
-    if (usage == ESP_HID_USAGE_KEYBOARD || rid == REPORT_ID_KEYBOARD) {
-        if (len < sizeof(hid_keyboard_report_t)) return;
-        hid_handle_keyboard((hid_keyboard_report_t *)param->input.data, NULL);
+    if (usage == ESP_HID_USAGE_KEYBOARD || rid == REPORT_ID_KEYBD) {
+        hid_keybd_report_t *kbd = (hid_keybd_report_t *)param->input.data;
+        if (len < sizeof(*kbd)) return;
+        hid_report_t report = { .id = rid, .keybd = *kbd };
+        hid_report_send(HID_TARGET_SCN, &report);
+        hid_handle_keybd(HID_TARGET_BLE, kbd, NULL);
     } else if (usage == ESP_HID_USAGE_MOUSE || rid == REPORT_ID_MOUSE) {
-        if (len < sizeof(hid_mouse_report_t)) return;
-        hid_handle_mouse((hid_mouse_report_t *)param->input.data, NULL, NULL);
+        hid_mouse_report_t *mse = (hid_mouse_report_t *)param->input.data;
+        if (len < sizeof(*mse)) return;
+        hid_report_t report = { .id = rid, .mouse = *mse };
+        hid_report_send(HID_TARGET_SCN, &report);
+        hid_handle_mouse(HID_TARGET_BLE, mse, NULL, NULL);
     } else if (rid == REPORT_ID_DIAL && len == 2) {
         hid_report_dial(HID_TARGET_SCN, param->input.data[0]);
     } else {

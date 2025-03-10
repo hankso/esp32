@@ -512,11 +512,17 @@ static void hid_event_cb(
     size_t size = 0;
     hid_host_device_get_raw_input_report_data(dev, data, sizeof(data), &size);
     if (params.proto == HID_PROTOCOL_KEYBOARD) {
-        if (size < sizeof(hid_keyboard_report_t)) return;
-        hid_handle_keyboard((hid_keyboard_report_t *)data, NULL);
+        hid_keybd_report_t *kbd = (hid_keybd_report_t *)data;
+        if (size < sizeof(*kbd)) return;
+        hid_report_t report = { .id = REPORT_ID_KEYBD, .keybd = *kbd };
+        hid_report_send(HID_TARGET_SCN, &report);
+        hid_handle_keybd(HID_TARGET_USB, kdb, NULL);
     } else if (params.proto == HID_PROTOCOL_MOUSE) {
-        if (size < sizeof(hid_mouse_report_t)) return;
-        hid_handle_mouse((hid_mouse_report_t *)data, NULL, NULL);
+        hid_mouse_report_t *mse = (hid_mouse_report_t *)data;
+        if (size < sizeof(*mse)) return;
+        hid_report_t report = { .id = REPORT_ID_MOUSE, .mouse = *mse };
+        hid_report_send(HID_TARGET_SCN, &report);
+        hid_handle_mouse(HID_TARGET_USB, mse, NULL, NULL);
     } else if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
         int offset = printf("%s %s ", HID, hid_protocol_str(params.proto));
         if (offset > 0) hexdump(data, size, 80 - offset);
