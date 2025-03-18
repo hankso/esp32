@@ -5,9 +5,7 @@
  */
 
 #include "network.h"
-#include "server.h"
 #include "config.h"
-#include "update.h"
 #include "timesync.h"
 
 #ifdef CONFIG_BASE_USE_WIFI
@@ -17,6 +15,7 @@
 #include "lwip/inet.h"
 #include "lwip/netdb.h"
 #include "lwip/sockets.h"
+#include "esp_smartconfig.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
@@ -69,10 +68,10 @@ static wifi_config_t config_sta = {
 static EventBits_t waitBits(EventBits_t bits, uint32_t ms) {
     // ClearOnExit = false, WaitForAllBits = false
     return evtgrp ? xEventGroupWaitBits(
-        evtgrp, bits, pdFALSE, pdFALSE, TIMEOUT(ms)) & bits : false;
+        evtgrp, bits, pdFALSE, pdFALSE, TIMEOUT(ms)) & bits : 0;
 }
 
-static EventBits_t getBits(EventBits_t bits) {
+static bool getBits(EventBits_t bits) {
     return evtgrp ? xEventGroupGetBits(evtgrp) & bits : false;
 }
 
@@ -306,27 +305,33 @@ static esp_err_t wifi_mode_check(wifi_interface_t interface) {
     return err;
 }
 
-static void cb_ip(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    static int update = 0;
-    if (id == IP_EVENT_STA_GOT_IP) {
-        ip_event_got_ip_t *evt = data;
-        if (evt->ip_changed) wifi_print_ipaddr(evt->esp_netif, NULL);
-        if (strbool(Config.app.OTA_AUTO) && !update) {
-            ota_updation_url(NULL, false);
-            update = 0;
-        }
-    } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
-        ip_event_ap_staipassigned_t *evt = data;
-        ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
-    } else {
-        ESP_LOGD(TAG, "Unhandled %s 0x%04X %p", base, id, data);
-    }
-}
-
-static void cb_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
+static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
     static int retry = 0;
-    // For sys_evt stack overflow, try to uncomment next line:
-    // ESP_LOGD(TAG, "event stack %d", uxTaskGetStackHighWaterMark(NULL));
+    if (base == IP_EVENT) {
+        if (id == IP_EVENT_STA_GOT_IP) {
+            ip_event_got_ip_t *evt = data;
+            if (evt->ip_changed) wifi_print_ipaddr(evt->esp_netif, NULL);
+            setBits(WIFI_CONNECTED_BIT);
+            clearBits(WIFI_FAILURE_BIT | WIFI_DISCONNECT_BIT);
+            if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
+            if (strbool(Config.app.SNTP_RUN)) sntp_control("sync");
+        } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
+            ip_event_ap_staipassigned_t *evt = data;
+            ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
+        }
+        return;
+#ifdef CONFIG_BASE_USE_SMARTCONFIG
+    } else if (base == SC_EVENT) {
+        if (id == SC_EVENT_GOT_SSID_PSWD) {
+            smartconfig_event_got_ssid_pswd_t *evt = data;
+            wifi_sta_start((char *)evt->ssid, (char *)evt->password, NULL);
+        } else if (id == SC_EVENT_SEND_ACK_DONE) {
+            ESP_LOGI(TAG, "SC done");
+            esp_smartconfig_stop();
+        }
+        return;
+#endif
+    }
     if (id == WIFI_EVENT_AP_START) {
         wifi_config_t cfg;
         esp_wifi_get_config(WIFI_IF_AP, &cfg);
@@ -341,28 +346,32 @@ static void cb_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
         ESP_LOGI(TAG, "AP client " MACSTR " leave, AID=%d, Mesh=%d",
                 MAC2STR(evt->mac), evt->aid, evt->is_mesh_child);
     } else if (id == WIFI_EVENT_STA_CONNECTED) {
-        setBits(WIFI_CONNECTED_BIT);
-        clearBits(WIFI_FAILURE_BIT | WIFI_DISCONNECT_BIT);
         wifi_event_sta_connected_t *evt = data;
         ESP_LOGI(TAG, "STA connect `%s` success", evt->ssid);
         retry = 0;
-        if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
-        if (strbool(Config.app.SNTP_RUN)) sntp_control("sync");
     } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
         clearBits(WIFI_CONNECTED_BIT);
         wifi_event_sta_disconnected_t *evt = data;
         if (getBits(WIFI_DISCONNECT_BIT)) {
             ESP_LOGI(TAG, "STA disconnect from `%s`", evt->ssid);
             clearBits(WIFI_DISCONNECT_BIT);
-        } else if (evt->reason == WIFI_REASON_NO_AP_FOUND || retry > 2) {
-            ESP_LOGW(TAG, "STA connect `%s` failed: %d", evt->ssid, evt->reason);
+        } else if (evt->reason != WIFI_REASON_NO_AP_FOUND && retry < 3) {
+            ESP_LOGD(TAG, "STA connect `%s` retry %d", evt->ssid, retry);
+            retry++;
+            esp_wifi_connect();
+        } else {
+            ESP_LOGW(TAG, "STA connect `%s` failed %d", evt->ssid, evt->reason);
             retry = 0;
             setBits(WIFI_FAILURE_BIT);
             if (strbool(Config.net.AP_AUTO)) wifi_ap_start(NULL, NULL, NULL);
-        } else  {
-            retry++;
-            esp_wifi_connect();
-            ESP_LOGD(TAG, "STA connect `%s` retry %d", evt->ssid, retry);
+#ifdef CONFIG_BASE_USE_SMARTCONFIG
+            if (strbool(Config.net.SC_AUTO)) {
+                smartconfig_start_config_t
+                    cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
+                esp_smartconfig_set_type(SC_TYPE_ESPTOUCH);
+                esp_smartconfig_start(&cfg);
+            }
+#endif
         }
     } else if (id == WIFI_EVENT_SCAN_DONE) {
         clearBits(WIFI_SCANNING_BIT);
@@ -400,7 +409,7 @@ void network_initialize() {
         "wifi", "wifi_init", "iperf",
         "esp_netif_lwip", "esp_netif_handlers",
     };
-    LOOPN(i, LEN(tags)) { esp_log_level_set(tags[i], ESP_LOG_WARN); }
+    ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 
     ESP_ERROR_CHECK( esp_netif_init() );
     ESP_ERROR_CHECK( esp_event_loop_create_default() );
@@ -409,14 +418,14 @@ void network_initialize() {
     if (!if_sta) if_sta = esp_netif_create_default_wifi_sta();
     if (!evtgrp) evtgrp = xEventGroupCreate();
 
-#define REG_EVT(evt, cb) \
-    esp_event_handler_instance_register(evt, ESP_EVENT_ANY_ID, cb, NULL, NULL)
-    ESP_ERROR_CHECK( REG_EVT(WIFI_EVENT, &cb_wifi) );
-    ESP_ERROR_CHECK( REG_EVT(IP_EVENT, &cb_ip) );
-#undef REG_EVT
+    ESP_ERROR_CHECK( REGEVTS(WIFI, cb_network, NULL, NULL) );
+    ESP_ERROR_CHECK( REGEVTS(IP, cb_network, NULL, NULL) );
+    ESP_ERROR_CHECK( REGEVTS(SC, cb_network, NULL, NULL) );
 
     wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     ESP_ERROR_CHECK( esp_wifi_init(&init_config) );
+    ESP_ERROR_CHECK( esp_wifi_get_config(WIFI_IF_AP, &config_ap) );
+    ESP_ERROR_CHECK( esp_wifi_get_config(WIFI_IF_STA, &config_sta) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_NULL) );
     ESP_ERROR_CHECK( esp_wifi_start() );
 
@@ -425,12 +434,19 @@ void network_initialize() {
         ESP_LOGE(TAG, "Failed to start mDNS: %s", esp_err_to_name(err));
     if (strbool(Config.app.SNTP_RUN) && ( err = sntp_control("on") ))
         ESP_LOGE(TAG, "Failed to start SNTP: %s", esp_err_to_name(err));
-    if (!( err = wifi_sta_start(NULL, NULL, NULL) )) return;
-    if (err != ESP_ERR_INVALID_ARG) {
+
+    size_t slen = strlen((char *)config_sta.sta.ssid);
+    const char *ssid = slen ? (char *)config_sta.sta.ssid : NULL;
+    const char *pass = slen ? (char *)config_sta.sta.password : NULL;
+    if (!( err = wifi_sta_start(ssid, pass, NULL) )) return;
+    if (err != ESP_ERR_INVALID_ARG)
         ESP_LOGE(TAG, "Failed to start STA: %s", esp_err_to_name(err));
-    } else if (strbool(Config.net.AP_AUTO) && ( err = wifi_ap_start(0, 0, 0) )) {
+    if (!strbool(Config.net.AP_AUTO)) return;
+    size_t alen = strlen((char *)config_ap.ap.ssid);
+    ssid = alen ? (char *)config_ap.ap.ssid : NULL;
+    pass = alen ? (char *)config_ap.ap.password : NULL;
+    if (( err = wifi_ap_start(ssid, pass, NULL) ))
         ESP_LOGE(TAG, "Failed to start AP: %s", esp_err_to_name(err));
-    }
 }
 
 esp_err_t network_parse_addr(const char *host, void *dst) {
@@ -457,15 +473,10 @@ esp_err_t network_parse_addr(const char *host, void *dst) {
 
 esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     // Arguments validation
-    if (!ssid) {
-        if (!strlen(Config.net.STA_SSID))
-            return ESP_ERR_INVALID_ARG;
-        ssid = Config.net.STA_SSID;
-    }
-    if (!pass)
-        pass = Config.net.STA_PASS;
-    if (!ip && strlen(Config.net.STA_HOST))
-        ip = Config.net.STA_HOST;
+    if (!ssid && !strlen(Config.net.STA_SSID)) return ESP_ERR_INVALID_ARG;
+    if (!ip && strlen(Config.net.STA_HOST)) ip = Config.net.STA_HOST;
+    ssid = ssid ?: Config.net.STA_SSID;
+    pass = pass ?: Config.net.STA_PASS;
 
     // WiFi mode validation
     esp_err_t err = wifi_mode_switch(true, UNCHANGED, NULL);
@@ -480,7 +491,9 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     }
 
     // Configure static IP address
-    if (ip && !( err = wifi_dhcp_switch(false, UNCHANGED) )) {
+    if (!ip) {
+        if (( err = wifi_dhcp_switch(true, UNCHANGED) )) return err;
+    } else if (strlen(ip) && !( err = wifi_dhcp_switch(false, UNCHANGED) )) {
         esp_netif_ip_info_t ip_sta = {
             .ip.addr = inet_addr(ip),
             .gw.addr = (inet_addr(ip) & ~0xFF) | 0x01,
@@ -492,20 +505,13 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
         } else {
             ESP_LOGI(TAG, "STA static IP set to %s", ip);
         }
-    } else if (!ip && ( err = wifi_dhcp_switch(true, UNCHANGED) )) {
-        return err;
     }
 
     // Connect to the specified AP
     wifi_sta_config_t *sta = &config_sta.sta;
-    strncpy((char *)sta->ssid, ssid, sizeof(sta->ssid) - 1);
-    if (strlen(pass)) {
-        snprintf((char *)sta->password, sizeof(sta->password), pass);
-    } else {
-        sta->password[0] = 0;
-    }
-    if (( err = esp_wifi_set_config(WIFI_IF_STA, &config_sta) ))
-        return err;
+    snprintf((char *)sta->ssid, sizeof(sta->ssid), "%s", ssid);
+    snprintf((char *)sta->password, sizeof(sta->password), "%s", pass ?: "");
+    if (( err = esp_wifi_set_config(WIFI_IF_STA, &config_sta) )) return err;
     return esp_wifi_connect();
 }
 
@@ -547,25 +553,18 @@ esp_err_t wifi_sta_scan(
 esp_err_t wifi_sta_wait(uint16_t tout_ms) {
     EventBits_t bits = waitBits(
         WIFI_CONNECTED_BIT | WIFI_DISCONNECT_BIT | WIFI_FAILURE_BIT, tout_ms);
+    if (!bits) return ESP_ERR_TIMEOUT;
     if (bits & WIFI_FAILURE_BIT) return ESP_FAIL;
     if (bits & WIFI_CONNECTED_BIT) return ESP_OK;
-    if (bits & WIFI_DISCONNECT_BIT) {
-        ESP_LOGW(TAG, "STA stopped by wifi_sta_stop");
-        return ESP_OK;
-    }
-    return ESP_ERR_TIMEOUT;
+    ESP_LOGW(TAG, "STA manually stopped by wifi_sta_stop");
+    return ESP_ERR_INVALID_STATE;
 }
 
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
-    if (!ssid) {
-        if (!strlen(Config.net.AP_SSID))
-            return ESP_ERR_INVALID_ARG;
-        ssid = Config.net.AP_SSID;
-    }
-    if (!pass)
-        pass = Config.net.AP_PASS;
-    if (!ip && strlen(Config.net.AP_HOST))
-        ip = Config.net.AP_HOST;
+    if (!ssid && !strlen(Config.net.AP_SSID)) return ESP_ERR_INVALID_ARG;
+    if (!ip && strlen(Config.net.AP_HOST)) ip = Config.net.AP_HOST;
+    ssid = ssid ?: Config.net.AP_SSID;
+    pass = pass ?: Config.net.AP_PASS;
 
     esp_err_t err = wifi_mode_switch(UNCHANGED, true, NULL);
     if (err) return err;
@@ -582,18 +581,15 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     }
 
     wifi_ap_config_t *ap = &config_ap.ap;
-    snprintf((char *)ap->ssid, sizeof(ap->ssid), ssid);
     size_t slen = strlen(ssid), ulen = strlen(Config.info.UID);
-    if (ulen && sizeof(ap->ssid) > (slen + ulen + 2))
-        sprintf((char *)ap->ssid + slen, "-%s", Config.info.UID);
-    ap->ssid_len = strlen((char *)ap->ssid);
-    if (!pass || strlen(pass) < 8) {
-        ap->authmode = WIFI_AUTH_OPEN;
-        ap->password[0] = 0;
+    if (ulen && sizeof(ap->ssid) > (slen + ulen + 1)) {
+        sprintf((char *)ap->ssid, "%s-%s", ssid, Config.info.UID);
     } else {
-        ap->authmode = WIFI_AUTH_WPA_WPA2_PSK;
-        snprintf((char *)ap->password, sizeof(ap->password), "%s", pass);
+        snprintf((char *)ap->ssid, sizeof(ap->ssid), "%s", ssid);
     }
+    snprintf((char *)ap->password, sizeof(ap->password), "%s", pass ?: "");
+    ap->authmode = pass ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+    ap->ssid_len = strlen((char *)ap->ssid);
     ap->ssid_hidden = strbool(Config.net.AP_HIDE);
     return esp_wifi_set_config(WIFI_IF_AP, &config_ap);
 }
@@ -834,34 +830,30 @@ static esp_err_t mdns_initialize() {
 
 esp_err_t mdns_command(
     const char *ctrl, const char *hostname,
-    const char *service, const char *proto, uint16_t tout_ms
+    const char *serv, const char *prot, uint16_t tout_ms
 ) {
     static bool mdns_running = false;
-    esp_err_t err = ESP_OK;
     if (ctrl) {
         if (!strbool(ctrl)) {
             netbiosns_stop();
             mdns_free();
             mdns_running = false;
         } else if (!mdns_running) {
-            err = mdns_initialize();
+            esp_err_t err = mdns_initialize();
             mdns_running = !err;
+            if (err) return err;
         }
     } else if (hostname) {
-        err = mdns_query_host(hostname, tout_ms ?: 2000);
-    } else if (service || proto) {
+        return mdns_query_host(hostname, tout_ms ?: 2000);
+    } else if (serv || prot) {
         char sbuf[32] = "_http", pbuf[32] = "_tcp";
-        if (service)
-            snprintf(sbuf, sizeof(sbuf), "%s%s",
-                startswith(service, "_") ? "" : "_", service);
-        if (proto)
-            snprintf(pbuf, sizeof(pbuf), "%s%s",
-                startswith(proto, "_") ? "" : "_", proto);
-        err = mdns_query_service(sbuf, pbuf, tout_ms ?: 3000);
+        if (serv) snprintf(sbuf, 32, "%s%s", serv[0] == '_' ? "" : "_", serv);
+        if (prot) snprintf(pbuf, 32, "%s%s", prot[0] == '_' ? "" : "_", prot);
+        return mdns_query_service(sbuf, pbuf, tout_ms ?: 3000);
     } else {
         printf("mDNS: %s\n", mdns_running ? "enabled" : "disabled");
     }
-    return err;
+    return ESP_OK;
 }
 
 static void sntp_notification_cb(struct timeval *tv) {
@@ -929,35 +921,35 @@ esp_err_t sntp_command(
         } else {
             sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
         }
-    } else if (intv_ms && intv_ms != sntp_get_sync_interval()) {
-        sntp_set_sync_interval(intv_ms);
+    } else if (intv_ms) {
+        if (intv_ms != sntp_get_sync_interval())
+            sntp_set_sync_interval(intv_ms);
     } else {
         printf("SNTP: %s\n", sntp_enabled() ? "enabled" : "disabled");
-        if (sntp_enabled()) {
-            printf(
-                "Status:   %s\n"
-                "SyncMode: %s\n"
-                "OperMode: %s\n"
-                "Interval: %ds\n"
-                "Datetime: %s\n",
-                sntp_status_str(sntp_get_sync_status()),
-                sntp_get_sync_mode() ? "smooth" : "immediate",
-                sntp_getoperatingmode() ? "listen only" : "poll",
-                sntp_get_sync_interval() / 1000,
-                format_datetime_us(NULL));
-            LOOPN(i, SNTP_MAX_SERVERS) {
-                const ip_addr_t *addr = sntp_getserver(i);
-                if (ip_addr_isany(addr)) continue;
-                printf("Server#%d: %s", i, ipaddr_ntoa(addr));
+        if (!sntp_enabled()) return ESP_OK;
+        printf(
+            "Status:   %s\n"
+            "SyncMode: %s\n"
+            "OperMode: %s\n"
+            "Interval: %ds\n"
+            "Datetime: %s\n",
+            sntp_status_str(sntp_get_sync_status()),
+            sntp_get_sync_mode() ? "smooth" : "immediate",
+            sntp_getoperatingmode() ? "listen only" : "poll",
+            sntp_get_sync_interval() / 1000,
+            format_datetime_us(NULL));
+        LOOPN(i, SNTP_MAX_SERVERS) {
+            const ip_addr_t *addr = sntp_getserver(i);
+            if (ip_addr_isany(addr)) continue;
+            printf("Server#%d: %s", i, ipaddr_ntoa(addr));
 #if SNTP_SERVER_DNS
-                const char *name = sntp_getservername(i);
-                if (name) printf(" (%s)", name);
+            const char *name = sntp_getservername(i);
+            if (name) printf(" (%s)", name);
 #endif
 #if SNTP_MONITOR_SERVER_REACHABILITY
-                if (!sntp_getreachability(i)) printf(" (unreachable)");
+            if (!sntp_getreachability(i)) printf(" (unreachable)");
 #endif
-                putchar('\n');
-            }
+            putchar('\n');
         }
     }
     return ESP_OK;
@@ -1157,7 +1149,7 @@ esp_err_t tsync_command(
     timesync_param_t param = {
         .host = host,
         .port = port ?: TIMESYNC_PORT,
-        .tout = tout_ms ?: (host ? 30000 : 500),
+        .tout = tout_ms ?: (host ? 30000 : 500), // client 30s, server 0.5s
     };
     TaskHandle_t task = NULL;
     clearBits(TS_STOPPED_BIT);

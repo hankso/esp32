@@ -7,14 +7,15 @@ set(EXTRA_COMPONENT_DIRS
     $ENV{IDF_PATH}/examples/common_components/iperf
 )
 
-set(helper_py python ${CMAKE_CURRENT_LIST_DIR}/helper.py)
-
 include($ENV{IDF_PATH}/tools/cmake/version.cmake)
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
+set(helper_py python ${CMAKE_CURRENT_LIST_DIR}/helper.py)
 execute_process(COMMAND ${helper_py} prebuild)
 
 project(espbase VERSION 1.1.0)
+
+# CONFIG_BASE_XXX are defined in main/Kconfig.projbuild
 
 if(CONFIG_BASE_FFS_FAT STREQUAL "y")
     if (IDF_VERSION_MAJOR LESS 5)
@@ -23,14 +24,14 @@ if(CONFIG_BASE_FFS_FAT STREQUAL "y")
     endif()
     message(STATUS "Creating FAT File System image")
     fatfs_create_spiflash_image(
-        storage
+        ${CONFIG_BASE_FFS_PART}
         ${CMAKE_CURRENT_LIST_DIR}/files
         FLASH_IN_PROJECT
     )
 elseif(CONFIG_BASE_FFS_SPI STREQUAL "y")
     message(STATUS "Creating SPI Flash File System image")
     spiffs_create_partition_image(
-        storage
+        ${CONFIG_BASE_FFS_PART}
         ${CMAKE_CURRENT_LIST_DIR}/files
         FLASH_IN_PROJECT
     )

@@ -115,40 +115,40 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 Native GPIO 0-39
 PIN Value Usage
 0    HIGH Strapping PU
-1    HIGH UART0 TXD
+1    HIGH UART TXD0
 2     LOW Strapping PD
-3    HIGH UART0 RXD
+3    HIGH UART RXD0
 4     LOW Buzzer
 5     LOW LED
-6     LOW Flash CLK
-7    HIGH Flash SD3 (PICO-D4)
-8     LOW Flash SD1 (PICO-D4)
-9    HIGH Flash SD2 (PICO-V3-02)
-10   HIGH Flash SD3 (PICO-V3-02)
-11   HIGH Flash SD2
+6     LOW Flash SPICLK
+7     LOW Flash SPIQ (PICO-D4)
+8     LOW Flash SPID (PICO-D4)
+9     LOW Flash SPIHD (PICO-V3-02)
+10   HIGH Flash SPIWP (PICO-V3-02)
+11   HIGH Flash SPICS0
 12    LOW SPI MISO
 13    LOW SPI MOSI
 14    LOW SPI SCLK
 15   HIGH SPI CS0 (SDCard)
-16   HIGH Flash CS
-17   HIGH Flash SD0
+16   HIGH Flash D2WD
+17   HIGH Flash D2WD
 18   HIGH SPI CS1 (Screen)
 19   HIGH SPI CS2 (GPIOExp)
 20    LOW ESP32-PICO-V3
-21   HIGH I2C0 SDA
-22   HIGH I2C0 SCL
+21   HIGH I2C SDA0
+22   HIGH I2C SCL0
 23    LOW SPI Screen D/C
 25    LOW DAC
-26   HIGH I2C1 SDA
-27   HIGH I2C1 SCL
+26   HIGH I2C SDA1
+27   HIGH I2C SCL1
 32    LOW Servo Pitch
 33    LOW Servo Yaw
-34    LOW Interrupt
-35    LOW Button
-36    LOW ADC1
+34   HIGH Interrupt
+35   HIGH Button
+36    LOW HALL sensor P
 37    LOW Knob encoder A
 38    LOW Knob encoder B
-39    LOW ADC2
+39    LOW HALL sensor N
 ```
 
 ### ESP32 Pico D4 vs V3 vs V3-02
@@ -252,8 +252,8 @@ PIN Value Usage
 2     LOW ADC2
 3     LOW Buzzer
 4     LOW Button
-5    HIGH I2C0 SDA
-6    HIGH I2C0 SCL
+5    HIGH I2C SDA0
+6    HIGH I2C SCL0
 7    HIGH SPI Screen D/C
 8    HIGH SPI CS0 (SDCard)
 9    HIGH SPI CS1 (Screen)
@@ -284,8 +284,8 @@ PIN Value Usage
 38    LOW
 39    LOW
 40    LOW
-41   HIGH I2C1 SDA
-42   HIGH I2C1 SCL
+41   HIGH I2C SDA1
+42   HIGH I2C SCL1
 43   HIGH UART0 TXD
 44   HIGH UART0 RXD
 45    LOW Strapping PD

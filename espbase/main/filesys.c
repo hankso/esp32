@@ -60,15 +60,21 @@ static esp_err_t filesys_init(
     filesys_dev_t *dev, filesys_type_t type, const char *mp, const char *part
 ) {
 #ifdef CONFIG_BASE_USE_FFS
-    if (type == FILESYS_FLASH) mp = mp ?: CONFIG_BASE_FFS_MP;
+    if (type == FILESYS_FLASH) {
+        mp = mp ?: CONFIG_BASE_FFS_MP;
+        part = part ?: CONFIG_BASE_FFS_PART;
+    }
 #endif
 #ifdef CONFIG_BASE_USE_SDFS
-    if (type == FILESYS_SDCARD) mp = mp ?: CONFIG_BASE_SDFS_MP;
+    if (type == FILESYS_SDCARD) {
+        mp = mp ?: CONFIG_BASE_SDFS_MP;
+        part = NULL;
+    }
 #endif
-    if (!dev || (dev->type && dev->type != type) || !startswith(mp, "/"))
-        return ESP_ERR_INVALID_ARG;
-    if (part && !strlen(part)) part = NULL;
-    if (dev->mp == mp && dev->part == part) return ESP_OK;
+    if (!strlen(part)) part = NULL;
+    if (!dev || !startswith(mp, "/")) return ESP_ERR_INVALID_ARG;
+    if (dev->type && dev->type != type) return ESP_ERR_INVALID_STATE;
+    if (dev->type && dev->mp == mp && dev->part == part) return ESP_OK;
 #ifdef CONFIG_BASE_USE_FFS
     if (type == FILESYS_FLASH) {
         wl_handle_t wlhdl = WL_INVALID_HANDLE;
@@ -131,17 +137,14 @@ static esp_err_t filesys_init(
     return ESP_ERR_NOT_SUPPORTED;
 }
 
-static filesys_dev_t devs[2];
-static SemaphoreHandle_t lock[2];
+static void * locks[FILESYS_COUNT];
+static filesys_dev_t devs[FILESYS_COUNT];
 
 void filesys_initialize() {
-    LOOPN(i, LEN(lock)) {
-        if (!lock[i]) lock[i] = xSemaphoreCreateBinary();
-        if (lock[i]) xSemaphoreGive(lock[i]);
-    }
-    LOOPN(i, LEN(devs)) {
+    LOOPN(i, FILESYS_COUNT) {
+        if (!locks[i] && ( locks[i] = MUTEX() )) RELEASE(locks[i]);
         filesys_type_t type = i + FILESYS_FLASH;
-        esp_err_t err = filesys_init(devs, type, NULL, Config.sys.FS_PART);
+        esp_err_t err = filesys_init(devs + i, type, NULL, NULL);
         if (err) {
             ESP_LOGE(TAG, "Failed to mount: %s", esp_err_to_name(err));
         } else {
@@ -151,13 +154,11 @@ void filesys_initialize() {
 }
 
 bool filesys_acquire(filesys_type_t type, uint32_t msec) {
-    uint8_t idx = type == FILESYS_SDCARD;
-    return lock[idx] ? xSemaphoreTake(lock[idx], TIMEOUT(msec)) : false;
+    return ACQUIRE(locks[type - FILESYS_FLASH], msec);
 }
 
 bool filesys_release(filesys_type_t type) {
-    uint8_t idx = type == FILESYS_SDCARD;
-    return lock[idx] ? xSemaphoreGive(lock[idx]) : false;
+    return RELEASE(locks[type - FILESYS_FLASH]);
 }
 
 bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
@@ -341,7 +342,7 @@ const char * filesys_join(filesys_type_t type, size_t argc, ...) {
 
 bool filesys_touch(filesys_type_t type, const char *path) {
     FILE *fd = fopen(filesys_norm(type, path), "a");
-    return fd && fclose(fd) == 0;
+    return fd && fclose(fd) == 0; // try utime if not working
 }
 
 static const char * statperm(mode_t mode) {
@@ -480,12 +481,13 @@ void filesys_walk(
     // So we have to write some dirty codes to iterate folder with `readdir`
     // and sort the result by 1) dir-first and 2) strverscmp.
     // This implementation uses less memory than glibc `scandir`!
+    filesys_path_t dirname;
+    if (!strlen(filesys_norm_r(type, dirname, path))) return;
     struct stat st;
     struct dirent *ent;
-    filesys_path_t dirname;
-    char **lst[2] = {NULL, NULL}, *slash; NOTUSED(slash);
     size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 }; // for dir and non-dir
-    DIR *dir = opendir(filesys_norm_r(type, dirname, path));
+    char **lst[2] = {NULL, NULL}, *slash; NOTUSED(slash);
+    DIR *dir = opendir(dirname);
     while (( ent = readdir(dir) )) {
 #ifdef CONFIG_BASE_FFS_SPI
         if (!strcmp(ent->d_name, SPIFFS_SENTINEL)) continue;

@@ -9,6 +9,7 @@
 #include "config.h"
 
 #include "nvs.h"
+#include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
@@ -26,13 +27,20 @@ uint64_t asleep(uint32_t ms, uint64_t next) {
     } else if (curr < next) {
         vTaskDelay(next - curr);
     }
-    next += ms * portTICK_PERIOD_MS;
-    return next;
+    return next + ms * portTICK_PERIOD_MS;
 }
 
 bool strbool(const char *str) {
     if (!str) return false;
     return !strcmp(str, "1") || !strcasecmp(str, "y") || !strcasecmp(str, "on");
+}
+
+size_t strcnt(const char *str, char want, size_t num) {
+    size_t cnt = 0, idx = 0;
+    while (idx < strnlen(str, num)) {
+        if (str[idx++] == want) cnt++;
+    }
+    return cnt;
 }
 
 char * strtrim(char *str, const char *chars) {
@@ -290,7 +298,11 @@ void * setInterval(uint32_t ms, void (*func)(void *), void *arg) {
     return createTimer((int64_t)ms * +1000, func, arg);
 }
 
-void clearTimer(void *hdl) { TRYNULL(hdl, esp_timer_delete); }
+void clearTimer(void *hdl) {
+    if (!hdl) return;
+    esp_timer_stop(hdl);
+    esp_timer_delete(hdl);
+}
 
 static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
     int aid = a->xCoreID > 1 ? -1 : a->xCoreID;
@@ -505,14 +517,16 @@ static uint8_t partition_used(const esp_partition_t *part) {
         nvs_stats_t stat;
         if (!nvs_get_stats(part->label, &stat) && stat.total_entries)
             return 100 * stat.used_entries / stat.total_entries;
+#ifdef CONFIG_BASE_USE_FFS
     } else if (
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_FAT ||
         part->subtype == ESP_PARTITION_SUBTYPE_DATA_SPIFFS ||
-        !strcmp(part->label, Config.sys.FS_PART)
+        !strcmp(part->label, CONFIG_BASE_FFS_PART)
     ) {
         filesys_info_t info;
         if (filesys_get_info(FILESYS_FLASH, &info) && info.total)
             return 100 * info.used / info.total;
+#endif
     }
     return 0;
 }

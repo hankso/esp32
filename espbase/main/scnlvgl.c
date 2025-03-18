@@ -20,9 +20,6 @@
 #   define LOGI(...)            ESP_LOGI("LVGL", __VA_ARGS__)
 #   define LOGW(...)            ESP_LOGW("LVGL", __VA_ARGS__)
 #   define LOGE(...)            ESP_LOGE("LVGL", __VA_ARGS__)
-#   define MUTEX()              xSemaphoreCreateBinary()
-#   define ACQUIRE(s)           ( (s) ? xSemaphoreTake((s), TIMEOUT(50)) : 0 )
-#   define RELEASE(s)           do { if (s) xSemaphoreGive(s); } while (0)
 #   define ERR_NO_ERR           ESP_OK
 #   define ERR_NO_MEM           ESP_ERR_NO_MEM
 #   define ERR_INVALID_ARG      ESP_ERR_INVALID_ARG
@@ -35,7 +32,7 @@
 #   define LOGW(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
 #   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)
-#   define ACQUIRE(s)           ( (s) ? !WaitForSingleObject((s), 1) : 0 )
+#   define ACQUIRE(s, t)        ( (s) ? !WaitForSingleObject((s), (t)) : 0 )
 #   define RELEASE(s)           do { if (s) ReleaseMutex(s); } while (0)
 enum {
     ERR_NO_ERR,
@@ -105,6 +102,7 @@ enum {
 typedef struct screen screen_t;
 typedef int (*screen_cb_t)(screen_t *);
 struct screen {
+    int index;
     lv_obj_t *root;
     screen_cb_t init;   // reentrant setup
     screen_cb_t exit;   // cleanup extra resources other than lv_obj_t
@@ -143,7 +141,7 @@ static struct {
 #ifdef LVGL8
     lv_indev_drv_t drv[LEN(types)]; // input device drivers
 #endif
-    void * mutex;
+    void *mutex;
     struct {
         int x, y;
         float scale;
@@ -162,12 +160,11 @@ static struct {
 
 static int screen_change(screen_t *next, uint32_t anim_ms) {
     int err = ERR_NO_ERR;
-    int idx = next - ctx.scr;
     screen_t *prev = ctx.scr + ctx.curr;
     if (!ctx.disp) return ERR_INVALID_STATE;
-    if (idx < 0 || idx > LEN(ctx.scr)) return ERR_INVALID_ARG;
     if (!next || !next->root) return ERR_INVALID_ARG;
     if (!prev || !prev->root) return ERR_INVALID_STATE;
+    if (next->index != next - ctx.scr) return ERR_INVALID_ARG;
     if (next == prev) return err;
 
     if (prev->leave && ( err = prev->leave(prev) )) return err;
@@ -179,7 +176,7 @@ static int screen_change(screen_t *next, uint32_t anim_ms) {
         lv_screen_load(next->root);
     }
     if (next->enter) err = next->enter(next);
-    ctx.curr = idx;
+    ctx.curr = next->index;
     return err;
 }
 
@@ -204,15 +201,15 @@ static void dump_obj(lv_obj_t *obj, int lvl) {
            cstr, lv_obj_get_width(obj), lv_obj_get_height(obj),
            lv_obj_get_x(obj), lv_obj_get_y(obj));
     if (cls == &lv_obj_class) {
-        LOOPN(i, LEN(ctx.scr)) {
-            if (obj != ctx.scr[i].root) continue;
-            printf(" [IDX=%d]", i);
-            if (ctx.scr[i].name) {
-                printf(" [NAME=%s]", ctx.scr[i].name);
+        ITERP(scr, ctx.scr) {
+            if (obj != scr->root) continue;
+            printf(" [IDX=%d]", scr->index);
+            if (scr->name) {
+                printf(" [NAME=%s]", scr->name);
             } else {
-                printf(" [PTR=%p]", ctx.scr[i].root);
+                printf(" [PTR=%p]", scr->root);
             }
-            if (ctx.curr == i) printf(" [Current]");
+            if (ctx.curr == scr->index) printf(" [Current]");
         }
     }
     putchar('\n');
@@ -292,7 +289,7 @@ static void cb_indev_read(lv_indev_t *indev, lv_indev_data_t *data) {
 static void cb_indev_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
     lv_indev_type_t type = indev_drv->type;
 #endif
-    if (!ACQUIRE(ctx.mutex)) return;
+    if (!ACQUIRE(ctx.mutex, 50)) return;
     if (type == LV_INDEV_TYPE_POINTER) {
         data->point.x = ctx.pointer.x / ctx.pointer.scale;
         data->point.y = ctx.pointer.y / ctx.pointer.scale;
@@ -406,7 +403,7 @@ static void cb_screen_label(lv_event_t *e) {
 // ENVELOP, CHARGE, PASTE, BELL, KEYBOARD, GPS, FILE, WIFI, BATTERY_FULL,
 // BATTERY_3, BATTERY_2, BATTERY_1, BATTERY_EMPTY, USB, BLUETOOTH, TRASH,
 // EDIT, BACKSPACE, SD_CARD, NEW_LINE
-static const uint16_t LV_SYMBOLS[] = {
+static uint16_t LV_SYMBOLS[] = {
     61441, 61448, 61451, 61452, 61453, 61457, 61459, 61461, 61465, 61468,
     61473, 61478, 61479, 61480, 61502, 61507, 61512, 61515, 61516, 61517,
     61521, 61522, 61523, 61524, 61543, 61544, 61550, 61552, 61553, 61556,
@@ -423,8 +420,8 @@ static int screen_label_init(screen_t *scr) {
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_add_event_cb(bar, cb_screen_label, LV_EVENT_DRAW_MAIN_END, NULL);
     char buf[LEN(LV_SYMBOLS) * 4], *ptr = buf, *end = buf + sizeof(buf);
-    LOOPN(i, LEN(LV_SYMBOLS)) {
-        ptr += snprintf(ptr, end - ptr, "%s|", unicode2str(LV_SYMBOLS[i]));
+    ITERV(symbol, LV_SYMBOLS) {
+        ptr += snprintf(ptr, end - ptr, "%s|", unicode2str(symbol));
     }
     int lht = 8;
     for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
@@ -519,8 +516,9 @@ static int lvgl_ui_input(hid_report_t *rpt) {
     if (rpt->id == REPORT_ID_KEYBD) {
         hid_handle_keybd(HID_TARGET_SCN, &rpt->keybd, NULL);
         bool shift = HAS_SHIFT(rpt->keybd.modifier);
-        ITER(key, rpt->keybd.keycode) {
-            if (key <= HID_KEY_ERROR_UNDEFINED || !ACQUIRE(ctx.mutex)) continue;
+        ITERV(key, rpt->keybd.keycode) {
+            if (key <= HID_KEY_ERROR_UNDEFINED) continue;
+            if (!ACQUIRE(ctx.mutex, 10)) continue;
             const char *str = keycode2str(key, rpt->keybd.modifier);
             switch (key) {
             case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;   break;
@@ -542,7 +540,7 @@ static int lvgl_ui_input(hid_report_t *rpt) {
             ctx.keypad.pressed = ctx.keypad.key != 0;
             RELEASE(ctx.mutex);
         }
-    } else if (rpt->id == REPORT_ID_MOUSE && ACQUIRE(ctx.mutex)) {
+    } else if (rpt->id == REPORT_ID_MOUSE && ACQUIRE(ctx.mutex, 10)) {
         hid_handle_mouse(HID_TARGET_SCN, &rpt->mouse, NULL, NULL);
         ctx.pointer.x = MAX(0, ctx.pointer.x + rpt->mouse.x);
         ctx.pointer.y = MAX(0, ctx.pointer.y + rpt->mouse.y);
@@ -554,7 +552,7 @@ static int lvgl_ui_input(hid_report_t *rpt) {
             ctx.keypad.pressed = true;
         }
         RELEASE(ctx.mutex);
-    } else if (rpt->id == REPORT_ID_DIAL && ACQUIRE(ctx.mutex)) {
+    } else if (rpt->id == REPORT_ID_DIAL && ACQUIRE(ctx.mutex, 10)) {
         switch (rpt->dial[0]) {
         case DIAL_L:    ctx.encoder.left = true; break;
         case DIAL_R:    ctx.encoder.right = true; break;
@@ -570,13 +568,12 @@ static int lvgl_ui_input(hid_report_t *rpt) {
 
 static int lvgl_ui_exit() {
     screen_change(ctx.scr + 0, 0); // return to first screen
-    LOOPN(i, LEN(ctx.indev)) {
-        TRYNULL(ctx.indev[i], lv_indev_delete);
-    }
+    // 4. Delete each screen
     LOOPN(i, LEN(ctx.scr)) {
         if (ctx.scr[i].exit) ctx.scr[i].exit(ctx.scr + i);
         if (i) TRYNULL(ctx.scr[i].root, lv_obj_delete);
     }
+    // 3. Destroy font chain
     for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
         if (font->user_data) {                  // loaded by create_font
             free(font->user_data);              // strdup
@@ -585,6 +582,9 @@ static int lvgl_ui_exit() {
             ctx.font = (lv_font_t *)font;
         }
     }
+    // 2. Unregister input devices
+    LOOPN(i, LEN(ctx.indev)) { TRYNULL(ctx.indev[i], lv_indev_delete); }
+    // 1. Delete group and mutex
     TRYNULL(ctx.group, lv_group_delete);
     ctx.disp = NULL;
     return ERR_NO_ERR;
@@ -662,7 +662,7 @@ static int lvgl_ui_init(lv_display_t *disp) {
 #elif defined(CONFIG_LV_USE_THEME_MONO)
     theme = lv_theme_mono_init(disp, false, ctx.font);
 #endif
-    if (theme) {
+    if (theme != &ctx.theme_font) {
         lv_style_init(&ctx.style_font);
         lv_style_set_text_font(&ctx.style_font, ctx.font);
         ctx.theme_font = *theme;
@@ -674,8 +674,9 @@ static int lvgl_ui_init(lv_display_t *disp) {
     // 4. Initialize each screen
     LOOPN(i, LEN(ctx.scr)) {
         ctx.scr[i].init = inits[i];
+        ctx.scr[i].index = i;
         if (ctx.scr[i].root) continue;
-        if (!( err = ctx.scr[i].init(ctx.scr + i) )) {
+        if (!( err = inits[i](ctx.scr + i) )) {
             lv_obj_add_event_cb(
                 ctx.scr[i].root, cb_screen_event, ctx.event, NULL);
         } else if (err == ERR_NO_MEM) {
@@ -699,11 +700,11 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
         printf("LVGL: %d anim @ %d FPS\n",
                lv_anim_count_running(), period ? 1000 / period : 0);
         dump_font(ctx.font);
-        LOOPN(i, LEN(ctx.scr)) {
-            if (!ctx.scr[i].root) {
-                printf("screen %d not initialized\n", i);
+        ITERP(scr, ctx.scr) {
+            if (!scr->root) {
+                printf("screen %d not initialized\n", scr->index);
             } else {
-                dump_obj(ctx.scr[i].root, 0);
+                dump_obj(scr->root, 0);
             }
         }
     }   break;

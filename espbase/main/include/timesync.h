@@ -8,6 +8,12 @@
 
 #include "globals.h"
 
+#include <sys/time.h>
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+
 #define TIMESTAMP_MS            1000
 #define TIMESTAMP_US            1000000
 #define TIMESTAMP_NS            1000000000
@@ -55,6 +61,13 @@ const char * format_datetime_us(const struct timeval *ts);
 // Get absolute timestamp with specified timeout offset
 struct timespec * get_timeout(uint32_t ms, struct timespec *tout);
 struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout);
+
+#ifdef CONFIG_LWIP_IPV6
+#   define IPV6
+#   define ADDRSTRLEN (INET6_ADDRSTRLEN + 6) // 1 for ':' and 5 for 0-65535
+#else
+#   define ADDRSTRLEN (INET_ADDRSTRLEN + 6)
+#endif
 
 // Format ipaddress like xxx.xxx.xxx.xxx:xxxxx
 // local=true for getsockname and local=false for getpeername

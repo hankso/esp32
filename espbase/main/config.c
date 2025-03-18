@@ -27,7 +27,6 @@ config_t Config = {
         .USB_MODE  = "HID_DEVICE",
         .BT_MODE   = "BLE_HIDD",
         .BT_SCAN   = "1",
-        .FS_PART   = "storage",
     },
     .net = {
         .STA_SSID  = "",
@@ -36,8 +35,9 @@ config_t Config = {
         .AP_SSID   = "espbase",
         .AP_PASS   = "16011106",
         .AP_HOST   = "10.0.2.1",
-        .AP_AUTO   = "1",
         .AP_HIDE   = "0",
+        .AP_AUTO   = "1",
+        .SC_AUTO   = "1",
     },
     .web = {
         .WS_NAME   = "",
@@ -84,7 +84,6 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"sys.usb.mode",    &Config.sys.USB_MODE,   NULL},
     {"sys.bt.mode",     &Config.sys.BT_MODE,    NULL},
     {"sys.bt.scan",     &Config.sys.BT_SCAN,    NULL},
-    {"sys.fs.part",     &Config.sys.FS_PART,    NULL},
 
     {"net.sta.ssid",    &Config.net.STA_SSID,   NULL},
     {"net.sta.pass",    &Config.net.STA_PASS,   NULL},
@@ -92,8 +91,9 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"net.ap.ssid",     &Config.net.AP_SSID,    NULL},
     {"net.ap.pass",     &Config.net.AP_PASS,    NULL},
     {"net.ap.host",     &Config.net.AP_HOST,    NULL},
-    {"net.ap.auto",     &Config.net.AP_AUTO,    NULL},
     {"net.ap.hide",     &Config.net.AP_HIDE,    NULL},
+    {"net.ap.auto",     &Config.net.AP_AUTO,    NULL},
+    {"net.sc.auto",     &Config.net.SC_AUTO,    NULL},
 
     {"web.ws.name",     &Config.web.WS_NAME,    NULL},
     {"web.ws.pass",     &Config.web.WS_PASS,    NULL},
@@ -163,7 +163,7 @@ const char * config_get(const char *key) {
     return idx == -1 ? "Unknown" : *rwlst[idx].value;
 }
 
-void config_list() {
+void config_stats() {
 #ifdef CONFIG_BASE_AUTO_ALIGN
     size_t keylen = 0;
     LOOPN(i, rwlen) { keylen = MAX(keylen, strlen(rwlst[i].key)); }

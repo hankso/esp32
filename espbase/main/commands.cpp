@@ -18,6 +18,7 @@
 #include "timesync.h"
 
 #include "esp_sleep.h"
+#include "esp_timer.h"
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "rom/uart.h"
@@ -31,22 +32,22 @@
 #endif
 
 #ifndef CONFIG_BASE_USE_USB
-#   undef CONSOLE_DRIVER_USB
+#   undef CONSOLE_DRV_USB
 #endif
 #ifndef CONFIG_BASE_USE_LED
-#   undef CONSOLE_DRIVER_LED
+#   undef CONSOLE_DRV_LED
 #endif
 #ifndef CONFIG_BASE_USE_I2C
-#   undef CONSOLE_DRIVER_I2C
+#   undef CONSOLE_DRV_I2C
 #endif
 #ifndef CONFIG_BASE_USE_ADC
-#   undef CONSOLE_DRIVER_ADC
+#   undef CONSOLE_DRV_ADC
 #endif
 #ifndef CONFIG_BASE_USE_DAC
-#   undef CONSOLE_DRIVER_DAC
+#   undef CONSOLE_DRV_DAC
 #endif
 #if !defined(CONFIG_BASE_USE_SERVO) && !defined(CONFIG_BASE_USE_BUZZER)
-#   undef CONSOLE_DRIVER_PWM
+#   undef CONSOLE_DRV_PWM
 #endif
 
 #if !defined(CONFIG_BASE_USE_FFS) && !defined(CONFIG_BASE_USE_SDFS)
@@ -412,14 +413,14 @@ static void register_sys() {
  * Driver commands
  */
 
-#ifdef CONSOLE_DRIVER_GPIO
+#ifdef CONSOLE_DRV_GPIO
 static struct {
     arg_int_t *pin;
     arg_int_t *lvl;
     arg_lit_t *i2c;
     arg_lit_t *spi;
     arg_end_t *end;
-} driver_gpio_args = {
+} drv_gpio_args = {
     .pin = arg_int0(NULL, NULL, NULL, "gpio number"),
     .lvl = arg_int0(NULL, NULL, "0|1", "set pin to LOW / HIGH"),
     .i2c = arg_lit0(NULL, "i2c", "list pin of I2C GPIO Expander"),
@@ -427,13 +428,13 @@ static struct {
     .end = arg_end(4)
 };
 
-static int driver_gpio(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_gpio_args);
+static int drv_gpio(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_gpio_args);
     esp_err_t err = ESP_OK;
-    int pin = ARG_INT(driver_gpio_args.pin, -1);
-    int lvl = ARG_INT(driver_gpio_args.lvl, -1);
+    int pin = ARG_INT(drv_gpio_args.pin, -1);
+    int lvl = ARG_INT(drv_gpio_args.lvl, -1);
     if (pin < 0) {
-        gpio_table(driver_gpio_args.i2c->count, driver_gpio_args.spi->count);
+        gpio_table(drv_gpio_args.i2c->count, drv_gpio_args.spi->count);
         return err;
     }
     bool level = lvl;
@@ -450,25 +451,25 @@ static int driver_gpio(int argc, char **argv) {
     }
     return ESP_OK;
 }
-#endif // CONSOLE_DRIVER_GPIO
+#endif // CONSOLE_DRV_GPIO
 
-#ifdef CONSOLE_DRIVER_USB
+#ifdef CONSOLE_DRV_USB
 static struct {
     arg_str_t *mode;
     arg_lit_t *now;
     arg_end_t *end;
-} driver_usb_args = {
+} drv_usb_args = {
     .mode = arg_str0(NULL, NULL, "0-6|CMH|S", "specify USB mode"),
     .now  = arg_lit0(NULL, "now", "reboot right now if needed"),
     .end  = arg_end(2)
 };
 
-static int driver_usb(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_usb_args);
+static int drv_usb(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_usb_args);
     static const char *choices = "CcMmHhS", *c;
     esp_err_t err = ESP_OK;
-    bool reboot = driver_usb_args.now->count;
-    const char *mode = ARG_STR(driver_usb_args.mode, NULL);
+    bool reboot = drv_usb_args.now->count;
+    const char *mode = ARG_STR(drv_usb_args.mode, NULL);
     if (!mode) {
         usbmode_status();
     } else if ('0' <= mode[0] && mode[0] <= '6') {
@@ -481,16 +482,16 @@ static int driver_usb(int argc, char **argv) {
     }
     return err;
 }
-#endif // CONSOLE_DRIVER_USB
+#endif // CONSOLE_DRV_USB
 
-#ifdef CONSOLE_DRIVER_LED
+#ifdef CONSOLE_DRV_LED
 static struct {
     arg_int_t *idx;
     arg_str_t *lgt;
     arg_str_t *clr;
     arg_int_t *blk;
     arg_end_t *end;
-} driver_led_args = {
+} drv_led_args = {
     .idx = arg_int0(NULL, NULL, NULL, "LED index"),
     .lgt = arg_str0("l", NULL, "0-255|on|off", "set lightness"),
     .clr = arg_str0("c", NULL, "0xRRGGBB", "set RGB color"),
@@ -498,13 +499,13 @@ static struct {
     .end = arg_end(4)
 };
 
-static int driver_led(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_led_args);
+static int drv_led(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_led_args);
     esp_err_t err = ESP_OK;
-    int idx = ARG_INT(driver_led_args.idx, -1);
-    int blk = ARG_INT(driver_led_args.blk, LED_BLINK_RESET - 1);
-    const char *light = ARG_STR(driver_led_args.lgt, NULL);
-    const char *color = ARG_STR(driver_led_args.clr, NULL);
+    int idx = ARG_INT(drv_led_args.idx, -1);
+    int blk = ARG_INT(drv_led_args.blk, LED_BLINK_RESET - 1);
+    const char *light = ARG_STR(drv_led_args.lgt, NULL);
+    const char *color = ARG_STR(drv_led_args.clr, NULL);
     if (blk >= LED_BLINK_RESET) {
         if (!( err = led_set_blink((led_blink_t)blk) )) {
             if (blk > LED_BLINK_RESET) {
@@ -554,9 +555,9 @@ static int driver_led(int argc, char **argv) {
     }
     return err;
 }
-#endif // CONSOLE_DRIVER_LED
+#endif // CONSOLE_DRV_LED
 
-#ifdef CONSOLE_DRIVER_I2C
+#ifdef CONSOLE_DRV_I2C
 static struct {
     arg_int_t *bus;
     arg_int_t *addr;
@@ -565,7 +566,7 @@ static struct {
     arg_int_t *len;
     arg_lit_t *hex;
     arg_end_t *end;
-} driver_i2c_args = {
+} drv_i2c_args = {
 #   if defined(CONFIG_BASE_USE_I2C0) && defined(CONFIG_BASE_USE_I2C1)
     .bus = arg_int1(NULL, NULL, "0|1", "I2C bus"),
 #   else
@@ -579,10 +580,10 @@ static struct {
     .end = arg_end(6)
 };
 
-static int driver_i2c(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_i2c_args);
-    int bus = ARG_INT(driver_i2c_args.bus, CONFIG_BASE_I2C_NUM);
-    int addr = ARG_INT(driver_i2c_args.addr, -1);
+static int drv_i2c(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_i2c_args);
+    int bus = ARG_INT(drv_i2c_args.bus, CONFIG_BASE_I2C_NUM);
+    int addr = ARG_INT(drv_i2c_args.addr, -1);
     if (bus < 0 || bus >= I2C_NUM_MAX) {
         printf("Invalid I2C bus number: %d\n", bus);
         return ESP_ERR_INVALID_ARG;
@@ -595,19 +596,19 @@ static int driver_i2c(int argc, char **argv) {
         i2c_detect(bus);
         return ESP_OK;
     }
-    uint8_t reg = ARG_INT(driver_i2c_args.reg, 0);
-    uint8_t len = ARG_INT(driver_i2c_args.len, 0);
-    if (driver_i2c_args.val->count) {
-        if (driver_i2c_args.hex->count) {
-            uint16_t val = driver_i2c_args.val->ival[0];
+    uint8_t reg = ARG_INT(drv_i2c_args.reg, 0);
+    uint8_t len = ARG_INT(drv_i2c_args.len, 0);
+    if (drv_i2c_args.val->count) {
+        if (drv_i2c_args.hex->count) {
+            uint16_t val = drv_i2c_args.val->ival[0];
             return smbus_write_word(bus, addr, reg, val);
         } else {
-            uint8_t val = driver_i2c_args.val->ival[0];
+            uint8_t val = drv_i2c_args.val->ival[0];
             return smbus_write_byte(bus, addr, reg, val);
         }
     }
     esp_err_t err;
-    if (driver_i2c_args.hex->count) {
+    if (drv_i2c_args.hex->count) {
         uint16_t val;
         if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
         printf("I2C %d-%02X REG 0x%02X = 0x%04X\n", bus, addr, reg, val);
@@ -620,9 +621,9 @@ static int driver_i2c(int argc, char **argv) {
     }
     return err;
 }
-#endif // CONSOLE_DRIVER_I2C
+#endif // CONSOLE_DRV_I2C
 
-#ifdef CONSOLE_DRIVER_ADC
+#ifdef CONSOLE_DRV_ADC
 static struct {
     arg_int_t *idx;
     arg_lit_t *joy;
@@ -630,7 +631,7 @@ static struct {
     arg_int_t *intv;
     arg_int_t *tout;
     arg_end_t *end;
-} driver_adc_args = {
+} drv_adc_args = {
 #   ifdef PIN_ADC2
     .idx  = arg_int0(NULL, NULL, "0|1", "index of ADC channel"),
 #   else
@@ -643,17 +644,18 @@ static struct {
     .end  = arg_end(6)
 };
 
-static int driver_adc(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_adc_args);
+static int drv_adc(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_adc_args);
 #   ifdef PIN_ADC2
-    int idx = ARG_INT(driver_adc_args.idx, -1);
+    int idx = ARG_INT(drv_adc_args.idx, -1);
 #   else
-    int idx = ARG_INT(driver_adc_args.idx, 0);
+    int idx = ARG_INT(drv_adc_args.idx, 0);
 #   endif
-    uint16_t intv_ms = CONS(ARG_INT(driver_adc_args.intv, 500), 10, 1000);
-    uint32_t tout_ms = ARG_INT(driver_adc_args.tout, 0);
+    uint16_t intv_ms = CONS(ARG_INT(drv_adc_args.intv, 500), 10, 1000);
+    uint32_t tout_ms = ARG_INT(drv_adc_args.tout, 0);
+    uint64_t state = asleep(intv_ms, 0);
     do {
-        if (driver_adc_args.joy->count) {
+        if (drv_adc_args.joy->count) {
             int xy, dx, dy;
             if (( xy = adc_joystick(&dx, &dy) ) == -1) {
                 fprintf(stderr, "\rCould not read joystick value");
@@ -661,7 +663,7 @@ static int driver_adc(int argc, char **argv) {
             }
             fprintf(stderr, "\rJoystick: x %3d y %3d (%4d %4d)",
                     xy >> 16, xy & 0xFFFF, dx, dy);
-        } else if (driver_adc_args.hall->count) {
+        } else if (drv_adc_args.hall->count) {
             fprintf(stderr, "\rADC hall: %4d", adc_hall());
         } else if (idx < 0 || idx > 1) {
             fprintf(stderr, "\rADC: %4dmV %4dmV", adc_read(0), adc_read(1));
@@ -669,25 +671,24 @@ static int driver_adc(int argc, char **argv) {
             fprintf(stderr, "\rADC %d: %4dmV", idx, adc_read(idx));
         }
         if (tout_ms >= intv_ms) {
-            fprintf(stderr, " (remain %3ds)", tout_ms / 1000);
-            fflush(stderr);
+            fprintf(stderr, " (remain %3ds)", tout_ms / 1000); fflush(stderr);
+            state = asleep(intv_ms, state);
             tout_ms -= intv_ms;
-            msleep(intv_ms);
-        }
-    } while (tout_ms >= intv_ms);
+        } else break;
+    } while (true);
     fputc('\n', stderr);
     return ESP_OK;
 }
 #endif
 
-#ifdef CONSOLE_DRIVER_DAC
+#ifdef CONSOLE_DRV_DAC
 static struct {
     arg_int_t *val;
     arg_str_t *cos;
     arg_int_t *frq;
     arg_int_t *amp;
     arg_end_t *end;
-} driver_dac_args = {
+} drv_dac_args = {
     .val = arg_int0(NULL, NULL, "0-255", "output value / offset of wave"),
     .cos = arg_str0(NULL, "cos", "on|off", "cosine wave enable / disable"),
     .frq = arg_int0("f", NULL, "130-55000", "frequency of cosine wave"),
@@ -695,15 +696,15 @@ static struct {
     .end = arg_end(3)
 };
 
-static int driver_dac(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_dac_args);
+static int drv_dac(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_dac_args);
     static uint8_t val, amp;
     static uint16_t freq;
     static bool cwave;
-    const char * cos = ARG_STR(driver_dac_args.cos, NULL);
-    int v = ARG_INT(driver_dac_args.val, -1);
-    int f = ARG_INT(driver_dac_args.frq, -1);
-    int a = ARG_INT(driver_dac_args.amp, -1);
+    const char * cos = ARG_STR(drv_dac_args.cos, NULL);
+    int v = ARG_INT(drv_dac_args.val, -1),
+        f = ARG_INT(drv_dac_args.frq, -1),
+        a = ARG_INT(drv_dac_args.amp, -1);
     if (v != -1) val = v;
     if (a != -1) {
         if (a < 0 || a > 3) return ESP_ERR_INVALID_ARG;
@@ -733,14 +734,14 @@ static int driver_dac(int argc, char **argv) {
 }
 #endif
 
-#ifdef CONSOLE_DRIVER_PWM
+#ifdef CONSOLE_DRV_PWM
 static struct {
     arg_int_t *hdeg;
     arg_int_t *vdeg;
     arg_int_t *freq;
     arg_int_t *pcnt;
     arg_end_t *end;
-} driver_pwm_args = {
+} drv_pwm_args = {
     .hdeg = arg_int0("y", NULL, "0-180", "yaw degree"),
     .vdeg = arg_int0("p", NULL, "0-160", "pitch degree"),
     .freq = arg_int0("f", NULL, "0-5000", "tone frequency"),
@@ -748,12 +749,12 @@ static struct {
     .end  = arg_end(4)
 };
 
-static int driver_pwm(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &driver_pwm_args);
-    int hdeg = ARG_INT(driver_pwm_args.hdeg, -1),
-        vdeg = ARG_INT(driver_pwm_args.vdeg, -1),
-        pcnt = ARG_INT(driver_pwm_args.pcnt, -1),
-        freq = ARG_INT(driver_pwm_args.freq, -1);
+static int drv_pwm(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &drv_pwm_args);
+    int hdeg = ARG_INT(drv_pwm_args.hdeg, -1),
+        vdeg = ARG_INT(drv_pwm_args.vdeg, -1),
+        pcnt = ARG_INT(drv_pwm_args.pcnt, -1),
+        freq = ARG_INT(drv_pwm_args.freq, -1);
     if (hdeg >= 0 || vdeg >= 0)
         return pwm_set_degree(hdeg, vdeg);
     if (freq >= 0 || pcnt >= 0)
@@ -765,30 +766,30 @@ static int driver_pwm(int argc, char **argv) {
         printf("PWM Tone: %dHz %d%%\n", freq, pcnt);
     return err;
 }
-#endif // CONSOLE_DRIVER_PWM
+#endif // CONSOLE_DRV_PWM
 
 static void register_drv() {
     const esp_console_cmd_t cmds[] = {
-#ifdef CONSOLE_DRIVER_GPIO
-        ESP_CMD_ARG(driver, gpio, "Set / get GPIO pin level"),
+#ifdef CONSOLE_DRV_GPIO
+        ESP_CMD_ARG(drv, gpio, "Set / get GPIO pin level"),
 #endif
-#ifdef CONSOLE_DRIVER_USB
-        ESP_CMD_ARG(driver, usb, "Set / get USB working mode"),
+#ifdef CONSOLE_DRV_USB
+        ESP_CMD_ARG(drv, usb, "Set / get USB working mode"),
 #endif
-#ifdef CONSOLE_DRIVER_LED
-        ESP_CMD_ARG(driver, led, "Set / get LED color / brightness"),
+#ifdef CONSOLE_DRV_LED
+        ESP_CMD_ARG(drv, led, "Set / get LED color / brightness"),
 #endif
-#ifdef CONSOLE_DRIVER_I2C
-        ESP_CMD_ARG(driver, i2c, "Detect alive I2C slaves on the bus line"),
+#ifdef CONSOLE_DRV_I2C
+        ESP_CMD_ARG(drv, i2c, "Detect alive I2C slaves on the bus line"),
 #endif
-#ifdef CONSOLE_DRIVER_ADC
-        ESP_CMD_ARG(driver, adc, "Read ADC and calculate value in mV"),
+#ifdef CONSOLE_DRV_ADC
+        ESP_CMD_ARG(drv, adc, "Read ADC and calculate value in mV"),
 #endif
-#ifdef CONSOLE_DRIVER_DAC
-        ESP_CMD_ARG(driver, dac, "Write DAC and calculate value in mV"),
+#ifdef CONSOLE_DRV_DAC
+        ESP_CMD_ARG(drv, dac, "Write DAC and calculate value in mV"),
 #endif
-#ifdef CONSOLE_DRIVER_PWM
-        ESP_CMD_ARG(driver, pwm, "Control rotation of servo by PWM"),
+#ifdef CONSOLE_DRV_PWM
+        ESP_CMD_ARG(drv, pwm, "Control rotation of servo by PWM"),
 #endif
     };
     register_commands(cmds, LEN(cmds));
@@ -813,15 +814,21 @@ static int util_lspart(int c, char **v) { partition_info(); return ESP_OK; }
 #ifdef CONSOLE_UTIL_LSTASK
 static struct {
     arg_int_t *sort;
+    arg_lit_t *lvl;
     arg_end_t *end;
 } util_lstask_args = {
     .sort = arg_int0(NULL, NULL, "0-6", "sort by column index"),
-    .end  = arg_end(1)
+    .lvl  = arg_litn("v", NULL, 0, 2, "additive option for more output"),
+    .end  = arg_end(2)
 };
 
 static int util_lstask(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lstask_args);
-    task_info(ARG_INT(util_lstask_args.sort, 2));
+    switch (util_lstask_args.lvl->count) {
+    case 2: esp_event_dump(stdout); putchar('\n'); FALLTH;
+    case 1: esp_timer_dump(stdout); putchar('\n'); FALLTH;
+    default: task_info(ARG_INT(util_lstask_args.sort, 2)); break;
+    }
     return ESP_OK;
 }
 #endif
@@ -840,12 +847,11 @@ static struct {
 static int util_lsmem(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsmem_args);
     switch (util_lsmem_args.lvl->count) {
-    case 0: memory_info(); break;
     case 2: heap_caps_print_heap_info(MALLOC_CAP_DMA);
             heap_caps_print_heap_info(MALLOC_CAP_EXEC); FALLTH;
     case 1: heap_caps_print_heap_info(MALLOC_CAP_DEFAULT);
             heap_caps_print_heap_info(MALLOC_CAP_INTERNAL); break;
-    default: break;
+    default: memory_info(); break;
     }
     switch (util_lsmem_args.chk->count) {
     case 3: heap_caps_check_integrity_all(true); break;
@@ -862,23 +868,28 @@ static int util_lsmem(int argc, char **argv) {
 #ifdef CONSOLE_UTIL_LSFS
 static struct {
     arg_str_t *dir;
-    arg_str_t *stat;
+    arg_lit_t *stat;
+    arg_lit_t *info;
     arg_lit_t *ext;
     arg_end_t *end;
 } util_lsfs_args = {
     .dir  = arg_str0(NULL, NULL, "path", NULL),
-    .stat = arg_str0("s", "stat", NULL, "print result of stat"),
+    .stat = arg_lit0("s", "stat", "print result of stat"),
+    .info = arg_lit0("i", "info", "print file system information"),
     .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end  = arg_end(3)
 };
 
 static int util_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsfs_args);
+    const char *path = ARG_STR(util_lsfs_args.dir, "/");
     filesys_type_t type = FILESYS_TYPE(util_lsfs_args.ext->count);
-    if (util_lsfs_args.stat->count) {
-        filesys_pstat(type, util_lsfs_args.stat->sval[0]);
+    if (util_lsfs_args.info->count) {
+        filesys_print_info(type);
+    } else if (util_lsfs_args.stat->count) {
+        filesys_pstat(type, path);
     } else {
-        filesys_listdir(type, ARG_STR(util_lsfs_args.dir, "/"), stdout);
+        filesys_listdir(type, path, stdout);
     }
     return ESP_OK;
 }
@@ -928,7 +939,7 @@ static int util_config(int argc, char **argv) {
     } else if (util_config_args.lall->count) {
         config_nvs_list(true);
     } else {
-        config_list();
+        config_stats();
     }
     return ret ? ESP_OK : ESP_FAIL;
 }
@@ -1263,7 +1274,7 @@ static struct {
     .size = arg_int0("l", NULL, "LEN", "number of data bytes to be sent"),
     .npkt = arg_int0("n", NULL, "NUM", "stop after sending num packets"),
     .stop = arg_lit0(NULL, "stop", "stop currently running ping session"),
-    .dry  = arg_lit0(NULL, "dryrun", "print IP address and stop (dryrun)"),
+    .dry  = arg_lit0(NULL, "dryrun", "print IP address and stop"),
     .end  = arg_end(6)
 };
 
@@ -1332,7 +1343,7 @@ static struct {
     .serv = arg_lit0("s", NULL, "run in server mode"),
     .host = arg_str0("c", NULL, "HOST", "run in client mode"),
     .port = arg_int0("p", NULL, "PORT", "specify port number"),
-    .tout = arg_int0("t", NULL, "0-2^31", "timeout in ms"),
+    .tout = arg_int0("t", NULL, "0-2^31", "task timeout in ms"),
     .stat = arg_lit0(NULL, "stat", "print service summary"),
     .stop = arg_lit0(NULL, "stop", "stop currently running task"),
     .end  = arg_end(6)
@@ -1549,6 +1560,36 @@ static int app_als(int argc, char **argv) {
 }
 #endif // CONSOLE_APP_ALS
 
+#ifdef CONSOLE_APP_AVC
+static struct {
+    arg_str_t *tgt;
+    arg_str_t *ctrl;
+    arg_lit_t *viz;
+    arg_int_t *tout;
+    arg_end_t *end;
+} app_avc_args = {
+    .tgt  = arg_str1(NULL, NULL, "0-3", "all|audio|video|all"),
+    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .viz  = arg_lit0("v", "viz", "print audio volume"),
+    .tout = arg_int0("t", NULL, "0-2^31", "capture task timeout in ms"),
+    .end  = arg_end(4)
+};
+
+static int app_avc(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_avc_args);
+    const char *target = ARG_STR(app_avc_args.tgt, "0");
+    const char *itpl = app_avc_args.tgt->hdr.glossary;
+    const char *istr = strstr(itpl, target);
+    uint8_t index = istr ? strcnt(itpl, '|', istr - itpl) : target[0] - '0';
+    return avc_command(
+        ARG_STR(app_avc_args.ctrl, NULL),
+        MIN(index, 3),
+        ARG_INT(app_avc_args.tout, 0),
+        app_avc_args.viz->count ? stderr : NULL
+    );
+}
+#endif // CONSOLE_APP_AVC
+
 #ifdef CONSOLE_APP_SEN
 static struct {
     arg_str_t *sen;
@@ -1556,36 +1597,34 @@ static struct {
     arg_int_t *tout;
     arg_end_t *end;
 } app_sen_args = {
-    .sen = arg_str1(NULL, NULL, "0-4", "select from temp|tpad|tscn|dist|gy39"),
+    .sen  = arg_str1(NULL, NULL, "0-5", "temp|tpad|tscn|dist|gy39|pwr"),
     .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
     .tout = arg_int0("t", NULL, "0-2^31", "loop until timeout in ms"),
-    .end = arg_end(3)
+    .end  = arg_end(3)
 };
 
 static int app_sen(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_sen_args);
     const char *sensor = ARG_STR(app_sen_args.sen, "0");
+    const char *itpl = app_sen_args.sen->hdr.glossary;
+    const char *istr = strstr(itpl, sensor);
+    uint8_t index = istr ? strcnt(itpl, '|', istr - itpl) : sensor[0] - '0';
     uint16_t intv_ms = CONS(ARG_INT(app_sen_args.intv, 500), 10, 1000);
     uint32_t tout_ms = ARG_INT(app_sen_args.tout, 0);
-    uint8_t index = sensor[0] - '0';
-         if (!strcasecmp(sensor, "temp")) { index = 0; }
-    else if (!strcasecmp(sensor, "tpad")) { index = 1; }
-    else if (!strcasecmp(sensor, "tscn")) { index = 2; }
-    else if (!strcasecmp(sensor, "dist")) { index = 3; }
-    else if (!strcasecmp(sensor, "gy39")) { index = 4; }
+    uint64_t state = asleep(intv_ms, 0);
     do {
         if (index == 0) {
             float val = temp_celsius();
+            if (!val) goto error;
             fprintf(stderr, "\rTemp: %.2f degC", val);
-            if (!val) break;
         } else if (index == 1) {
             uint16_t val = tpad_read();
+            if (!val) goto error;
             fprintf(stderr, "\rTouch pad: %4d", val);
-            if (!val) break;
         } else if (index == 2) {
             tscn_data_t dat;
             if (tscn_probe(&dat)) goto error;
-            fprintf(stderr, "\rTSCN:");
+            fprintf(stderr, "\rTouch screen:");
             LOOPN(i, dat.num) {
                 fprintf(stderr, " ID %d, EVT %c, X %3d, Y %3d",
                     dat.pts[i].id, "PRC-"[dat.pts[i].evt],
@@ -1593,19 +1632,19 @@ static int app_sen(int argc, char **argv) {
             }
             const char *gstr = NULL;
             switch (dat.ges) {
-                case GES_MOVE_UP: gstr = "Move Up";     break;
-                case GES_MOVE_RT: gstr = "Move Right";  break;
-                case GES_MOVE_DN: gstr = "Move Down";   break;
-                case GES_MOVE_LT: gstr = "Move Left";   break;
-                case GES_ZOOM_IN: gstr = "Zoom In";     break;
-                case GES_ZOOM_OT: gstr = "Zoom Out";    break;
+            case GES_MOVE_UP: gstr = "Move Up";     break;
+            case GES_MOVE_RT: gstr = "Move Right";  break;
+            case GES_MOVE_DN: gstr = "Move Down";   break;
+            case GES_MOVE_LT: gstr = "Move Left";   break;
+            case GES_ZOOM_IN: gstr = "Zoom In";     break;
+            case GES_ZOOM_OT: gstr = "Zoom Out";    break;
             }
             if (gstr) fprintf(stderr, " Gesture %s", gstr);
             if (!dat.num && !dat.ges) fprintf(stderr, " not touched");
         } else if (index == 3) {
             uint16_t val = vlx_probe();
             if (val == (uint16_t)-1) goto error;
-            fprintf(stderr, "\rDIST: range %6.3fm", val / 1e3);
+            fprintf(stderr, "\rDistance: range %6.3fm", val / 1e3);
         } else if (index == 4) {
             gy39_data_t dat;
             if (gy39_measure(&dat)) goto error;
@@ -1613,19 +1652,16 @@ static int app_sen(int argc, char **argv) {
                 dat.brightness, dat.temperature,
                 dat.atmosphere, dat.humidity, dat.altitude);
         } else if (index == 5) {
-            mscn_status();
-        } else if (index == 6) {
             pwr_status();
         } else {
             fprintf(stderr, "Nothing to do"); break;
         }
         if (tout_ms >= intv_ms) {
-            fprintf(stderr, " (remain %3ds)", tout_ms / 1000);
-            fflush(stderr);
+            fprintf(stderr, " (remain %3ds)", tout_ms / 1000); fflush(stderr);
+            state = asleep(intv_ms, state);
             tout_ms -= intv_ms;
-            msleep(intv_ms);
-        }
-    } while (tout_ms >= intv_ms);
+        } else break;
+    } while (true);
     fputc('\n', stderr);
     return ESP_OK;
 error:
@@ -1645,6 +1681,9 @@ static void register_app() {
 #ifdef CONSOLE_APP_ALS
         ESP_CMD_ARG(app, als, "Get ALS brightness and run light tracking"),
 #endif
+#ifdef CONSOLE_APP_AVC
+        ESP_CMD_ARG(app, avc, "Control audio/video capturing"),
+#endif
 #ifdef CONSOLE_APP_SEN
         ESP_CMD_ARG(app, sen, "Get sensor values (TEMP, TPAD etc.)"),
 #endif
@@ -1662,14 +1701,14 @@ static void optimize_datatype() {
     snprintf(sb, sizeof(sb), "0-%d", GPIO_PIN_COUNT - 1);
     sys_sleep_args.pin->hdr.datatype = sb;
 #endif
-#ifdef CONSOLE_DRIVER_LED
+#ifdef CONSOLE_DRV_LED
     static char lb[8], bb[8];
     snprintf(lb, sizeof(lb), "0-%d", CONFIG_BASE_LED_NUM - 1);
     snprintf(bb, sizeof(bb), "-1|0-%d", LED_BLINK_MAX - 1);
-    driver_led_args.idx->hdr.datatype = lb;
-    driver_led_args.blk->hdr.datatype = bb;
+    drv_led_args.idx->hdr.datatype = lb;
+    drv_led_args.blk->hdr.datatype = bb;
 #endif
-#ifdef CONSOLE_DRIVER_GPIO
+#ifdef CONSOLE_DRV_GPIO
     static char gb[22];
     size_t gl = sizeof(gb), gs = snprintf(gb, gl, "0-%d", GPIO_PIN_COUNT - 1);
 #   ifdef CONFIG_BASE_GPIOEXP_I2C
@@ -1678,7 +1717,7 @@ static void optimize_datatype() {
 #   ifdef CONFIG_BASE_GPIOEXP_SPI
     gs += snprintf(gb + gs, gl - gs, "|%d-%d", PIN_SPI_BASE, PIN_SPI_MAX - 1);
 #   endif
-    driver_gpio_args.pin->hdr.datatype = gb; NOTUSED(gs);
+    drv_gpio_args.pin->hdr.datatype = gb; NOTUSED(gs);
 #endif
 }
 
@@ -1687,7 +1726,6 @@ RTC_DATA_ATTR static uint32_t boot_count = 0;
 
 extern "C" void console_register_commands() {
     if (boot_count++) fputs("Woken up from deep sleep mode\n", stderr);
-    esp_log_level_set(TAG, ESP_LOG_INFO);
     const esp_console_cmd_t clear = {
         .command = "clear",
         .help = "Clean screen",

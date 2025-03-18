@@ -13,21 +13,22 @@ import csv
 import ssl
 import sys
 import glob
-import gzip
 import json
 import time
 import socket
 import struct
+import fnmatch
 import argparse
 import tempfile
 import threading
 import subprocess
 from io import StringIO
 from os import path as op, environ as env
-from posixpath import join as urljoin
+from urllib.parse import urljoin
 from wsgiref.simple_server import WSGIServer
 
 # requirements.txt: bottle, requests, zeroconf
+# requirements.txt: numpy, pyturbojpeg, opencv-python
 try:
     import bottle
 except Exception:
@@ -40,6 +41,22 @@ try:
     import zeroconf
 except Exception:
     zeroconf = None
+try:
+    import numpy as np
+except Exception:
+    np = None
+try:
+    from turbojpeg import TurboJPEG
+    from turbojpeg import TJPF_GRAY, TJPF_BGR, TJPF_BGRA
+    from turbojpeg import TJSAMP_GRAY, TJSAMP_420
+    tj = TurboJPEG()
+except Exception:
+    tj = None
+try:
+    import cv2
+except Exception:
+    cv2 = None
+
 
 # these are default values
 __basedir__ = op.dirname(op.abspath(__file__))
@@ -62,6 +79,68 @@ __distdir__ = (tuple(filter(
 
 PORT = 9999
 IDF_PATH = env['IDF_PATH'] if op.isdir(env.get('IDF_PATH', '')) else ''
+
+
+def execute(cmd, **kwargs):
+    kwargs.setdefault('bufsize', 1)
+    kwargs.setdefault('encoding', 'utf8')
+    kwargs.setdefault('stdout', subprocess.PIPE)
+    kwargs.setdefault('stderr', subprocess.STDOUT)
+    kwargs.setdefault('shell', True)
+    kwargs.setdefault('text', True)
+    check = kwargs.pop('check', False)
+    timeout = kwargs.pop('timeout', 10)
+    if not kwargs.pop('quiet', False):
+        print('Executing command `%s`' % cmd)
+    with subprocess.Popen(cmd, **kwargs) as proc:
+        try:
+            output = proc.communicate(None, timeout)[0]
+        except Exception:
+            proc.kill()
+            return ''
+        if check and proc.returncode:
+            raise subprocess.CalledProcessError(proc.returncode, cmd)
+        return output.strip()
+
+
+def load_gitignore(start=__basedir__):
+    path, parent = start, op.dirname(start)
+    while path != parent:
+        ignore = op.join(path, '.gitignore')
+        if op.isfile(ignore):
+            break
+        path, parent = parent, op.dirname(parent)
+    else:
+        return []
+    with open(ignore, encoding='utf8') as f:
+        content = f.read().splitlines()
+        return sorted(set(filter(lambda v: v and v[0] != '#', content)))
+
+
+def walk_exclude(root, include_exts=[], excludes=None):
+    matches = list(map(
+        fnmatch._compile_pattern,  # lru enabled
+        set(map(str, excludes)) if excludes else load_gitignore()
+    ))
+
+    def should_exclude(path):
+        for match in matches:
+            if match(path):
+                return True
+        return False
+
+    for root, dirs, files in os.walk(root, topdown=True):
+        if matches:
+            for d in filter(should_exclude, dirs):
+                dirs.remove(d)
+            for f in filter(should_exclude, files):
+                files.remove(f)
+        if include_exts:
+            for f in files[:]:
+                if f.endswith(include_exts):
+                    continue
+                files.remove(f)
+        yield root, dirs, files
 
 
 def random_id(len=8):
@@ -134,12 +213,10 @@ def gencfg(args):
         return
     with open(args.tpl, encoding='utf8') as f:
         prefix = project_name()
-        data = f.read() \
-            .replace('{NAME}', prefix) \
-            .replace('{UID}', random_id(args.len)) \
-            .replace('{URL}', firmware_url(prefix + '.bin')) \
-            .replace('\n\n', '\n') \
-            .replace(' ', '')
+        data = f.read().format(**{
+            'NAME': prefix, 'UID': random_id(args.len),
+            'URL': firmware_url(prefix + '.bin'),
+        }).replace('\n\n', '\n').replace(' ', '')
     if args.out == sys.stdout and IDF_PATH:
         args.out = tempfile.mktemp()
     if hasattr(args.out, 'name'):
@@ -225,7 +302,7 @@ def genfont(args):
     '''
     symbols = set()
     tpl = re.compile(r'[\u4E00-\u9FA5]')  # chinese characters
-    for root, dirs, files in os.walk(__codedir__):
+    for root, dirs, files in walk_exclude(__codedir__):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp')), files):
             with open(op.join(root, fn), encoding='utf8') as f:
                 symbols.update(tpl.findall(f.read()))
@@ -242,13 +319,11 @@ def genfont(args):
         args.font, ''.join(sorted(symbols)), font_icon(args)
     )
     try:
-        if not args.quiet:
-            print('Executing command', cmd)
-        subprocess.check_call(cmd, shell=True)
-        assert not args.bin
+        execute(cmd, quiet=args.quiet)
+        if not args.bin:
+            font_postproc(args.out)
     except Exception as e:
         return print('Error', e)
-    font_postproc(args.out)
 
 
 # see ESP-IDF docs -> API Guides -> Build system -> common requirements
@@ -322,10 +397,14 @@ def update_dependencies(comps):
     tpl = re.compile(r'REQUIRES ([\w\- ]+)')
     try:
         with open(__compcmk__, encoding='utf8') as f:
-            content = f.read()
-        comps = set(comps).union(tpl.findall(content)[0].split())
+            old_content = f.read()
+        new_content = tpl.sub('REQUIRES ' + ' '.join(sorted(
+            set(comps).union(tpl.findall(old_content)[0].split())
+        )), old_content)
+        if new_content == old_content:
+            return
         with open(__compcmk__, 'w', encoding='utf8') as f:
-            f.write(tpl.sub('REQUIRES ' + ' '.join(sorted(comps)), content))
+            f.write(new_content)
     except Exception as e:
         print('Update main/CMakeLists.txt failed:', e)
 
@@ -333,7 +412,7 @@ def update_dependencies(comps):
 def gendeps(args):
     headers = set()
     tpl = re.compile(r'# *include *["<]([\w\.\-/]+)[>"]')
-    for root, dirs, files in os.walk(__codedir__):
+    for root, dirs, files in walk_exclude(__codedir__):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp', '.h')), files):
             with open(op.join(root, fn), encoding='utf8') as f:
                 headers.update(tpl.findall(f.read()))
@@ -376,10 +455,18 @@ def prebuild(args):
     try:
         srcdir = op.join(__basedir__, 'webpage')
         dstdir = op.join(__basedir__, 'files', 'www')
-        if (op.getmtime(dstdir) + 10) < op.getmtime(srcdir):
-            subprocess.check_call('pnpm run -C "%s" build' % srcdir)
-    except Exception:
+        rebuild = 'pnpm run -C "%s" build' % srcdir
+        last_build = op.getmtime(dstdir) + 10
+        for root, dirs, files in walk_exclude(srcdir):
+            for fn in files:
+                if op.getmtime(op.join(root, fn)) < last_build:
+                    continue
+                execute(rebuild, check=True, quiet=args.quiet)
+                raise StopIteration
+    except StopIteration:
         pass
+    except Exception as e:
+        print('Rebuild webpage failed', e)
     args.quiet = True
     gendeps(args)
 
@@ -421,9 +508,8 @@ def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
                 if stopflag.wait(timeout / len(services)):
                     break
     for info in sorted(devices, key=lambda i: i.name):
-        if info.name.startswith(devname):
+        if devname and info.name.startswith(devname):
             return info.parsed_addresses()[0]
-    return  # not found
 
 
 def search(args):
@@ -468,23 +554,24 @@ def relpath(p, ref='.', strip=False):
     return p
 
 
-def edit_get(root):
+def on_edit(root):
     print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
     if 'list' in bottle.request.query:
-        name = bottle.request.query.get('list').strip('/')
-        path = op.join(root, name)
+        path = op.join(root, bottle.request.query.get('path').strip('/'))
         if not op.exists(path):
             bottle.abort(404)
         elif op.isfile(path):
             bottle.abort(403)
         d = []
         for fn in os.listdir(path):
+            if fn.startswith('.'):
+                continue
             fpath = op.join(path, fn)
             d.append({
                 'name': fn,
-                'type': 'folder' if op.isdir(fpath) else 'file',
+                'type': 'dir' if op.isdir(fpath) else 'file',
                 'size': op.getsize(fpath),
                 'date': int(op.getmtime(fpath)) * 1000
             })
@@ -497,19 +584,19 @@ def edit_get(root):
     return bottle.redirect('/editor')  # vue.js router
 
 
-def edit_create():
+def on_editc():
     print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
 
 
-def edit_delete():
+def on_editd():
     print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
 
 
-def edit_upload():
+def on_editu():
     print(bottle.request.path)
     print('method', bottle.request.method)
     print('header', dict(bottle.request.headers))
@@ -519,7 +606,7 @@ def edit_upload():
     time.sleep(0.5)
 
 
-def config_load():
+def load_config():
     configs = []
     try:
         args = make_parser().parse_args(['--quiet', 'gencfg'])
@@ -539,72 +626,176 @@ def config_load():
     return dict(configs)
 
 
-def config_handler():
+def on_config():
     print(bottle.request.path)
     print('method', bottle.request.method)
     print('params', dict(bottle.request.params))
-    if not hasattr(config_handler, 'data'):
-        config_handler.data = config_load()
+    if not hasattr(on_config, 'data'):
+        on_config.data = load_config()
     if bottle.request.method == 'GET':
-        return config_handler.data
+        return on_config.data
     data = bottle.request.params.get('json', {})
     if isinstance(data, str):
         data = json.loads(data)
-    config_handler.data.update(data)
+    on_config.data.update(data)
 
 
-def update_handler():
-    if 'raw' in bottle.request.params:
+def on_update():
+    if 'raw' in bottle.request.query:
         return 'Raw updation HTML'
     return bottle.redirect('/updation')  # vue.js router
 
 
-def static_assets(filename, root, fileman=False, redirect=False):
+def audio_random(fs, fmt, sec=0.25, volume=255, **k):
+    tones = [261.6, 293.6, 329.6, 349.2, 392, 440, 493.8]  # Hz
+    time.sleep(len(tones) * sec)
+    x = np.concatenate([
+        tone * np.linspace(idx * sec, (idx + 1) * sec, int(fs * sec))
+        for idx, tone in enumerate(tones)
+    ])
+    return (volume * np.sin(2 * np.pi * x)).astype(fmt).tobytes()
+
+
+def audio_stream(**kwargs):
+    if not np:
+        raise bottle.HTTPResponse('Audio streaming not available', 500)
+    bottle.response.set_header('Cache-Control', 'no-store')
+    bottle.response.set_header('Content-Type', 'audio/wav')
+    host = bottle.request.environ.get('REMOTE_ADDR')
+    port = bottle.request.environ.get('REMOTE_PORT')
+    fs = int(kwargs.get('fs', kwargs.get('rate', 44100)))
+    nch = int(kwargs.get('nch', kwargs.get('channels', 1)))
+    fmt = kwargs.get('fmt', kwargs.get('format', 'int16'))
+    BpC = np.dtype(fmt).itemsize
+    BpS = BpC * nch
+    Bps = BpS * fs
+    bpC = BpC * 8
+    dts = kwargs.get('dt', (2 ** 32 - 36 - 1) / Bps)
+    print('audio streaming to %s:%d started' % (host, port))
+    yield struct.pack(
+        '= 4s I 4s 4s I H H I I H H 4s I',
+        b'RIFF', 36 + int(dts * Bps), b'WAVE', b'fmt ', 0x10, 0x01,
+        nch, fs, Bps, BpS, bpC, b'data', int(dts * Bps)
+    )
+    while True:
+        try:
+            yield audio_random(fs, fmt)
+        except (StopIteration, KeyboardInterrupt, GeneratorExit):
+            break
+        except Exception as e:
+            raise bottle.HTTPResponse(str(e), 500)
+    print('audio streaming to %s:%d stopped' % (host, port))
+
+
+def video_random(fs, width, height, qual=1, **k):
+    time.sleep(1 / fs)
+    img = np.random.randint(0, 255, (height, width), dtype=np.uint8)
+    if cv2 is not None:
+        return cv2.imencode(
+            '.jpg', img, (cv2.IMWRITE_JPEG_QUALITY, qual)
+        )[1].tobytes()
+    if tj is None:
+        return b''
+    depth = 1 if img.ndim == 2 else (img.shape[-1] if img.ndim == 3 else 0)
+    tjPF = [0, TJPF_GRAY, TJPF_GRAY, TJPF_BGR, TJPF_BGRA][depth]
+    tjSA = [0, TJSAMP_GRAY, TJSAMP_420, TJSAMP_420, TJSAMP_420][depth]
+    return tj.encode(img, qual, tjPF, tjSA)
+
+
+def video_stream(**kwargs):
+    if not tj and not cv2:
+        raise bottle.HTTPResponse('Video streaming not available', 500)
+    kwargs.setdefault('fs', 30)
+    kwargs.setdefault('width', 640)
+    kwargs.setdefault('height', 480)
+    bdary = kwargs.get('boundary', 'FRAME')
+    host = bottle.request.environ.get('REMOTE_ADDR')
+    port = bottle.request.environ.get('REMOTE_PORT')
+    bottle.response.set_header('Cache-Control', 'no-store')
+    bottle.response.set_header(
+        'Content-Type', 'multipart/x-mixed-replace; boundary=--' + bdary
+    )
+    print('video streaming to %s:%d started' % (host, port))
+    while True:
+        try:
+            frame = video_random(**kwargs)
+            yield '\r\n'.join([
+                '--' + bdary,
+                'Content-Type: image/jpeg',
+                'Content-Length: %d' % len(frame),
+                '\r\n'
+            ]).encode() + frame
+            if 'still' in bottle.request.query:
+                break
+        except (StopIteration, KeyboardInterrupt, GeneratorExit):
+            break
+        except Exception as e:
+            raise bottle.HTTPResponse(str(e), 500)
+    print('video streaming to %s:%d stopped' % (host, port))
+
+
+def on_media(**k):
+    if 'wav' in bottle.request.query:
+        return audio_stream(**k)
+    if 'mjpg' in bottle.request.query:
+        return video_stream(**k)
+    return bottle.HTTPResponse('''
+        <img id="vplayer" style="cursor:pointer" src="media?mjpg&still">
+        <audio id="aplayer" preload="none" src="media?wav" controls
+            controlslist="nodownload noremoteplayback noplaybackrate"></audio>
+        <script>
+            vplayer.addEventListener('click', e => {
+                let elem = e.target, tmp = elem.src;
+                if (tmp.endsWith('&still')) {
+                    elem.src = tmp.substr(0, tmp.length - 6);
+                } else {
+                    elem.src = '';
+                    elem.src = tmp + '&still';
+                }
+            });
+            aplayer.addEventListener('pause', e => {
+                let elem = e.target, tmp = elem.src;
+                elem.src = '';  // stop buffering after paused
+                elem.load();
+                elem.src = tmp; // recover streaming source
+                // alt.: window.stop();
+            });
+        </script>
+    ''')  # simple page for debugging only
+
+
+def static_factory(_root):
     '''
     1. auto append ".gz" if resolving file
     2. auto detect "index.html" if resolving directory
     3. fallback to file manager if no "index.html" under dir
     '''
-    target = op.join(root, filename.strip('/\\'))
-    index = op.join(target, 'index.html')
-    if op.isfile(target):
-        return bottle.static_file(relpath(target, root), root)
-    if op.isfile(target + '.gz'):
-        return bottle.static_file(relpath(target + '.gz', root), root)
-    if not op.exists(target):
+    def on_static(filename, root=_root):
+        target = op.join(root, filename.strip('/\\'))
+        if op.isdir(target):
+            return on_static(op.join(target, 'index.html'))
+        if op.isfile(target):
+            return bottle.static_file(relpath(target, root), root)
+        if op.isfile(target + '.gz'):
+            return bottle.static_file(
+                relpath(target + '.gz', root), root,
+                mimetype=bottle.mimetypes.guess_type(target)[0],
+                headers={'Content-Encoding': 'gzip'})
         return bottle.HTTPError(404, 'File not found')
-    if not op.isdir(target):
-        return bottle.HTTPError(404, 'Path not found')
-    if (
-        bottle.request.query.get('auto', True)
-        and any([index, index + '.gz'].map(op.isfile))
-    ):
-        if redirect:
-            fn = op.join(bottle.request.path, filename, 'index.html')
-            return bottle.redirect(fn)
-        if not op.isfile(index):
-            index += '.gz'
-        return bottle.static_file(relpath(index, root), root)
-    if not hasattr(static_assets, 'tpl'):
-        p1 = op.abspath(op.join(root, '**', 'fileman*', 'index*.html*'))
-        p2 = op.abspath(op.join(root, '**', 'fileman*.html*'))
-        tpls = glob.glob(p1, recursive=True) + glob.glob(p2, recursive=True)
-        if tpls:
-            print('Using template %s' % relpath(tpls[0], strip=True))
-            with open(tpls[0], 'rb') as f:
-                bstr = f.read()
-            if tpls[0].endswith('.gz'):
-                bstr = gzip.decompress(bstr)
-            static_assets.tpl = bstr.decode('utf8')
-        else:
-            static_assets.tpl = None
-    if not fileman or not static_assets.tpl:
-        return bottle.HTTPError(404, 'Could not serve directory')
-    return static_assets.tpl.replace('%ROOT%', bottle.request.path)
+    return on_static
+
+
+def error_factory(root):
+    def on_error(err, on_static=static_factory(root)):
+        index = on_static('index.html')
+        if isinstance(index, bottle.HTTPError):
+            return bottle.Bottle.default_error_handler(None, err)
+        return index
+    return on_error
 
 
 def test_apis(apis):
-    configs = config_load()
+    configs = load_config()
     auth = (configs.get('web.http.name'), configs.get('web.http.pass'))
     ulen, mlen = [max(map(len, i)) for i in zip(*apis)]
     for url, method in apis:
@@ -612,7 +803,7 @@ def test_apis(apis):
         try:
             kwargs = {'timeout': 1, 'allow_redirects': False}
             resp = requests.request(method, url, **kwargs)
-            if resp.status_code in [301, 303, 307, 401]:
+            if resp.status_code in [301, 302, 303, 307, 308, 401]:
                 kwargs['allow_redirects'] = True
                 kwargs['auth'] = auth
                 print(resp.status_code, end=' - ')
@@ -623,10 +814,9 @@ def test_apis(apis):
 
 
 def redirect_esp32(esphost):
-    def wrapper():
-        target = esphost + bottle.request.path
-        print('Redirect to %s %s' % (target, dict(bottle.request.params)))
-        return bottle.redirect(target)
+    def wrapper(urlbase=esphost):
+        # FIXME: Authorization may be stripped by HTTP client after redirection
+        return bottle.redirect(urljoin(urlbase, bottle.request.path), 307)
     return wrapper if esphost else lambda: ''
 
 
@@ -640,6 +830,7 @@ class SSLServer(WSGIServer):
             self.base_environ['HTTPS'] = 'yes'
         else:
             self.base_environ['HTTPS'] = 'no'
+        self.base_environ['REMOTE_PORT'] = addr[1]
         return client, addr
 
 
@@ -660,13 +851,13 @@ def webserver(args):
         [URL Query String] -> bottle.request.query
     '''
     try:
-        url = urljoin('http://', args.esphost, '/api/alive')
-        assert requests.get(url, timeout=1).ok
+        url = urljoin('http://', args.esphost + '/api/alive')
+        assert args.esphost and requests.get(url, timeout=1).ok
         args.esphost = url[:-10]
     except Exception:
         try:
             args.esphost = 'http://' + search(argparse.Namespace(
-                service='id', all=False, oneshot=True, timeout=1, quiet=True
+                service='id', all=False, oneshot=True, timeout=3, quiet=True
             ))
         except Exception:
             if args.test:
@@ -683,18 +874,20 @@ def webserver(args):
     api = bottle.Bottle()
     api.route('/alive', 'GET', redirect_esp32(args.esphost))
     api.route('/exec', 'POST', redirect_esp32(args.esphost))
-    api.route('/edit', 'GET', lambda: edit_get(args.root))
-    api.route('/editu', 'POST', edit_upload)
-    api.route('/editc', ['GET', 'POST', 'PUT'], edit_create)
-    api.route('/editd', ['GET', 'POST', 'DELETE'], edit_delete)
-    api.route('/config', ['GET', 'POST'], config_handler)
-    api.route('/update', 'GET', update_handler)
-    api.route('/update', 'POST', edit_upload)
+    api.route('/edit', 'GET', lambda: on_edit(args.root))
+    api.route('/editu', 'POST', on_editu)
+    api.route('/editc', ['GET', 'POST', 'PUT'], on_editc)
+    api.route('/editd', ['GET', 'POST', 'DELETE'], on_editd)
+    api.route('/config', ['GET', 'POST'], on_config)
+    api.route('/update', 'GET', on_update)
+    api.route('/update', 'POST', on_editu)
     api.route('/apmode', 'GET', lambda: 'AP interface only')
+    api.route('/media', 'GET', on_media)
 
     if args.test:
         return test_apis([
-            (args.esphost + '/api' + r.rule, r.method) for r in api.routes
+            (urljoin(args.esphost, '/api' + route.rule), route.method)
+            for route in api.routes
         ])
 
     if not args.quiet:
@@ -710,7 +903,8 @@ def webserver(args):
         app.mount('/api', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/auth', ['GET', 'POST'], bottle.auth_basic(check)(lambda: ''))
-    app.route('/<fn:path>', 'GET', lambda fn: static_assets(fn, args.root))
+    app.route('/<filename:path>', 'GET', static_factory(args.root))
+    app.error(404)(error_factory(args.root))
     bottle.run(app, host=args.host, port=args.port, quiet=args.quiet,
                debug=True, server='wsgiref', server_class=SSLServer)
 

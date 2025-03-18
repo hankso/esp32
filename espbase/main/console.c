@@ -32,7 +32,7 @@ static const char *TAG = "Console";
 
 static char prompt[32] = "$ ";
 
-static SemaphoreHandle_t running = NULL;
+static void *mutex = NULL;
 
 void console_register_commands(); // Implemented in commands.cpp
 
@@ -110,8 +110,8 @@ void console_initialize() {
     console_register_prompt(Config.app.PROMPT);
     console_register_commands();
 
-    if (( running = xSemaphoreCreateBinary() )) {
-        xSemaphoreGive(running);
+    if (( mutex = MUTEX() )) {
+        RELEASE(mutex);
     } else {
         ESP_LOGE(TAG, "Could not create semaphore! This is NOT thread-safe!");
     }
@@ -172,9 +172,7 @@ void console_initialize() {
  */
 
 char * console_handle_command(const char *cmd, bool pipe, bool history) {
-    // Semaphore is better than task notification
-    if (running && !xSemaphoreTake(running, TIMEOUT(100)))
-        return strdup("Console task is executing command");
+    if (!ACQUIRE(mutex, 100)) return strdup("Console task is busy");
 
     size_t size = 0;
     char *buf = NULL;
@@ -198,7 +196,7 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
         if (!size) TRYFREE(buf); // empty string means no log output
     }
     if (history) linenoiseHistoryAdd(cmd);
-    if (running) xSemaphoreGive(running);
+    RELEASE(mutex);
     return buf;
 }
 
@@ -221,24 +219,13 @@ void console_handle_loop(void *argv) {
 }
 
 void console_loop_begin(int xCoreID) {
-    const char * const pcName = "console";
-    const uint32_t usStackDepth = 8192;
-    void * const pvParameters = NULL;
-    const UBaseType_t uxPriority = 1;
-    TaskHandle_t *pvCreatedTask = NULL;
 #ifndef CONFIG_FREERTOS_UNICORE
     if (xCoreID == 0 || xCoreID == 1) {
         xTaskCreatePinnedToCore(
-            console_handle_loop, pcName, usStackDepth,
-            pvParameters, uxPriority, pvCreatedTask, xCoreID);
+            console_handle_loop, "console", 8192, NULL, 1, NULL, xCoreID);
     } else
 #endif
-    {
-        // default tskNO_AFFINITY
-        xTaskCreate(
-            console_handle_loop, pcName, usStackDepth,
-            pvParameters, uxPriority, pvCreatedTask);
-    }
+    xTaskCreate(console_handle_loop, "console", 8192, NULL, 1, NULL);
 }
 
 static char * rpc_error(double code, const char *errstr) {

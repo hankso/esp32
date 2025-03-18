@@ -117,8 +117,8 @@ enum {
     HID_USAGE_PAGE_UNICODE         = 0x10,
     HID_USAGE_PAGE_ALPHA_DISPLAY   = 0x14,
     HID_USAGE_PAGE_MEDICAL         = 0x40,
-    HID_USAGE_PAGE_MONITOR         = 0x80, //0x80 - 0x83
-    HID_USAGE_PAGE_POWER           = 0x84, // 0x084 - 0x87
+    HID_USAGE_PAGE_MONITOR         = 0x80, // 0x80 - 0x83
+    HID_USAGE_PAGE_POWER           = 0x84, // 0x84 - 0x87
     HID_USAGE_PAGE_BARCODE_SCANNER = 0x8c,
     HID_USAGE_PAGE_SCALE           = 0x8d,
     HID_USAGE_PAGE_MSR             = 0x8e,

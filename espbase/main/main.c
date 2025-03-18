@@ -5,18 +5,18 @@
  */
 
 #include "globals.h"
-#include "drivers.h"
-#include "console.h"
-#include "filesys.h"
-#include "network.h"
-#include "sensors.h"
-#include "usbmode.h"
-#include "ledmode.h"
-#include "screen.h"
-#include "btmode.h"
-#include "update.h"
 #include "config.h"
+#include "drivers.h"
+#include "filesys.h"
+#include "console.h"
+#include "network.h"
+#include "update.h"
+#include "sensors.h"
+#include "screen.h"
+#include "usbmode.h"
+#include "btmode.h"
 #include "server.h"
+#include "ledmode.h"
 
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -32,23 +32,23 @@ void app_main(void) {
     driver_initialize();
 
     // 2. necessary modules
-    update_initialize();
     filesys_initialize();
     console_initialize();
+    network_initialize();
+    update_initialize();
 
     // 3. external devices
-    screen_initialize();
     sensors_initialize();
+    screen_initialize();
 
     // 4. optional modules
-    network_initialize();
     usbmode_initialize();
     btmode_initialize();
     server_initialize();
 
     led_set_blink(0);
 #ifdef CONFIG_BASE_DEBUG
-    console_loop_begin(1);      // run REPL on Core 1 (i.e. App CPU)
+    console_loop_begin(1);      // run REPL on Core 1 and stop maintask
 #else
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
 #endif

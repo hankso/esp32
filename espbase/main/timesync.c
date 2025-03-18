@@ -6,12 +6,6 @@
 
 #include "timesync.h"
 
-#include <sys/time.h>
-#include <sys/socket.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-
 /* Time Sync timestamp helper functions */
 
 const struct timespec * get_systime() {
@@ -116,10 +110,14 @@ struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout) {
  * See more about specification at https://github.com/hankso/timesync
  */
 
-static SemaphoreHandle_t lock = NULL;
+#if defined(TIMESYNC_THREAD_SAFE) && !defined(MUTEX)
+#   include "pthread.h"
+#   define MUTEX()          PTHREAD_MUTEX_INITIALIZER
+#   define ACQUIRE(s, t)    ( (s) ? pthread_mutex_lock(&(s)) : 0 )
+#   define RELEASE(s)       ( (s) ? pthread_mutex_unlock(&(s)) : 0 )
+#endif
 
-static void lock_acquire() { if (lock) xSemaphoreTake(lock, portMAX_DELAY); }
-static void lock_release() { if (lock) xSemaphoreGive(lock); }
+static void * mutex = NULL;
 
 static void log_error(const char *tag, const int sock, const char *msg) {
     if (sock < 0) {
@@ -130,15 +128,9 @@ static void log_error(const char *tag, const int sock, const char *msg) {
     }
 }
 
-#ifdef CONFIG_LWIP_IPV6
-#   define ADDRSTRLEN (INET6_ADDRSTRLEN + 6) // 1 for ':' and 5 for 0-65535
-#else
-#   define ADDRSTRLEN (INET_ADDRSTRLEN + 6)
-#endif
-
 const char * getaddrname(int fd, bool local) {
     static char ret[ADDRSTRLEN];
-#ifdef CONFIG_LWIP_IPV6
+#ifdef IPV6
     struct sockaddr_in6 addr;
 #else
     struct sockaddr_in addr;
@@ -147,8 +139,10 @@ const char * getaddrname(int fd, bool local) {
     struct sockaddr *ptr = (struct sockaddr *)&addr;
     int rc = local ? getsockname(fd, ptr, &len) : getpeername(fd, ptr, &len);
     if (rc < 0) return "unknown";
-#ifdef CONFIG_LWIP_IPV6
-    sprintf(ret, "%s:%d", inet6_ntoa(addr.sin6_addr), ntohs(addr.sin6_port));
+#ifdef IPV6
+    const char *host = inet6_ntoa(addr.sin6_addr);
+    if (!strncmp(host, "::FFFF:", 7)) host += 7;
+    sprintf(ret, "%s:%d", host, ntohs(addr.sin6_port));
 #else
     sprintf(ret, "%s:%d", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
 #endif
@@ -220,7 +214,7 @@ static void timesync_server_add(int fd) {
     int nodelay = 1;
     struct timeval timeout = { .tv_sec = 0, .tv_usec = 500 }; // 0.5ms
     size_t tlen = sizeof(timeout), nlen = sizeof(nodelay);
-    lock_acquire();
+    ACQUIRE(mutex, -1);
     LOOPN(i, TIMESYNC_CLIENTS_NUM) {
         if (clients[i].fd == fd || clients[i].fd > 0) continue;
         if (
@@ -234,7 +228,7 @@ static void timesync_server_add(int fd) {
         fd = 0; // added
         break;
     }
-    lock_release();
+    RELEASE(mutex);
     if (fd) { // not added
         close(fd);
         ESP_LOGW(TSS, "client %s rejected", getaddrname(fd, false));
@@ -248,12 +242,12 @@ static void timesync_server_add(int fd) {
  */
 static int timesync_server_close(int *fd) {
     if (*fd < 0) return 1;
-    lock_acquire();
+    ACQUIRE(mutex, -1);
     int idx = timesync_server_find(*fd);
     if (idx != -1) pollfds[idx].fd = clients[idx].fd = -1;
     close(*fd);
     *fd = -1;
-    lock_release();
+    RELEASE(mutex);
     return 0;
 }
 
@@ -265,7 +259,7 @@ static int timesync_server_close(int *fd) {
  */
 int timesync_server_init(uint16_t port) {
 #ifdef TIMESYNC_THREAD_SAFE
-    if (!lock) lock = xSemaphoreCreateBinary();
+    if (!mutex && ( mutex = MUTEX() )) RELEASE(mutex);
 #endif
     if (server >= 0) return 0;
     ESP_LOGD(TSS, "TimeSync Server init");
@@ -306,7 +300,7 @@ static int timesync_server_handle(
     static char sndbuf[8 + sizeof(TIMESYNC_PACKTYPE)] = "timesync";
     timesync_result_t *result;
 
-    lock_acquire();
+    ACQUIRE(mutex, -1);
     // parse message according to TimeSync Protocol
     if (!strncmp("timeinit", rcvbuf, 8)) {
         double ts_send = get_timestamp(0), ts_sync = (ts_recv + ts_send) / 2;
@@ -346,7 +340,7 @@ static int timesync_server_handle(
         rcvbuf[msglen] = '\0';
         ESP_LOGI(TSS, "client %s message: `%s`", client->addr, rcvbuf);
     }
-    lock_release();
+    RELEASE(mutex);
     return 0;
 }
 
@@ -404,13 +398,13 @@ int timesync_server_loop(uint16_t ms) {
 
 int timesync_server_exit() {
     if (timesync_server_close(&server)) return 1;
-    lock_acquire();
+    ACQUIRE(mutex, -1);
     LOOPN(i, TIMESYNC_CLIENTS_NUM) {
         if (clients[i].fd < 0) continue;
         shutdown(clients[i].fd, SHUT_RDWR);
         close(clients[i].fd);
     }
-    lock_release();
+    RELEASE(mutex);
     ESP_LOGD(TSS, "TimeSync Server exit");
     return 0;
 }

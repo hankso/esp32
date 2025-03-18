@@ -612,7 +612,7 @@ esp_err_t hid_device_init(usbmode_t prev) {
 esp_err_t hid_device_exit(usbmode_t next) {
     if (!hid_enabled) return ESP_OK;
 #ifdef TARGET_IDF_4
-    TRYNULL(hid.task, vTaskDelete); // avoid memory leak and enable reentry
+    TRYNULL(hid.task, vTaskDelete);
     TRYNULL(hid.queue, vQueueDelete);
     TRYNULL(hid.semphr, vSemaphoreDelete);
 #endif

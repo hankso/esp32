@@ -60,7 +60,33 @@ static const char *UPDATE_HTML =
         "<input type='file' name='update'>"
         "<input type='submit' value='Upload'>"
     "</form>"
+"</body>"
+"</html>";
+static const char *MEDIA_HTML =
+"<!DOCTYPE html>"
+"<html>"
+"<head>"
+    "<title>Simple Media test</title>"
+"</head>"
 "<body>"
+    "<img id=\"vp\" style=\"cursor:pointer\" src=\"media?mjpg&still\">"
+    "<audio id=\"ap\" preload=\"none\" src=\"media?wav\" controls "
+        "controlslist=\"nodownload noremoteplayback noplaybackrate\"></audio>"
+    "<script>"
+        "vp.addEventListener('click', e => {"
+            "let tmp = vp.src;"
+            "if (tmp.endsWith('&still')) {"
+                "vp.src = tmp.substr(0, tmp.length - 6);"
+            "} else {"
+                "vp.src = ''; vp.src = tmp + '&still';"
+            "}"
+        "});"
+        "ap.addEventListener('pause', e => {"
+            "let tmp = ap.src;"
+            "ap.src = ''; ap.load(); ap.src = tmp;"
+        "});"
+    "</script>"
+"</body>"
 "</html>";
 
 static httpd_handle_t server;
@@ -249,7 +275,7 @@ static bool auth_validate(http_auth_t *ctx, const char *method, char *resp) {
 static const char * get_static(const char *path) {
     // 1. search default file "index.html" under folder
     // 2. try to append ".gz" if origin filename is not found
-    static char buf[PATH_MAX_LEN + 3];
+    static char buf[PATH_MAX_LEN + 3]; // 3 for ".gz"
     fnormr(buf, path);
     if (fisdir(buf)) fjoinr(buf, 2, buf, "index.html");
     return (fisfile(buf) || fisfile(strcat(buf, ".gz"))) ? buf : NULL;
@@ -317,6 +343,7 @@ static const char * guess_type(const char *filename) {
     if (startswith(ext, "ttf"))  return "font/ttf";
     if (startswith(ext, "eot"))  return "font/rot";
     if (startswith(ext, "woff")) return "font/woff";
+    if (startswith(ext, "wav"))  return "audio/wav";
     if (startswith(ext, "png"))  return "image/png";
     if (startswith(ext, "gif"))  return "image/gif";
     if (startswith(ext, "jpg"))  return "image/jpeg";
@@ -470,6 +497,14 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
 }
 
 static esp_err_t redirect(httpd_req_t *req, const char *location) {
+    // GET unchanged but others may or may not changed to GET
+    //   301: Moved Permanently
+    //   302: Found
+    // GET unchanged and others changed to GET (body lost)
+    //   303: See Other
+    // Method and body not changed
+    //   307: Temporary Redirect
+    //   308: Permanent Redirect
     httpd_resp_set_status(req, "303 See Other");
     httpd_resp_set_hdr(req, "Location", location);
     return send_str(req, "redirect");
@@ -592,9 +627,8 @@ static esp_err_t on_success(httpd_req_t *req) {
 
 static esp_err_t on_command(httpd_req_t *req) {
     CHECK_REQUEST(req);
-    if (!req->content_len || req->content_len > CHUNK_SIZE) {
+    if (!req->content_len || req->content_len > CHUNK_SIZE)
         return send_err(req, 400, "Invalid content length");
-    }
     log_param(req);
     const char *cmd = get_param(req, "cmd", FROM_ANY) ?: "";
     if (strlen(cmd)) {
@@ -773,11 +807,107 @@ static esp_err_t on_static(httpd_req_t *req) {
     } else if (flag & FLAG_DIR_HTML && strlen(Config.sys.DIR_HTML)) {
         dirname = Config.sys.DIR_HTML;
     }
-    const char *url = req->uri + (startswith(req->uri, "/api/") ? 4 : 0);
-    char basename[strcspn(url, "?#") + 1];
-    snprintf(basename, sizeof(basename), url); // truncate and pad null
+    char basename[strcspn(req->uri, "?#") + 1];
+    snprintf(basename, sizeof(basename), req->uri); // truncate and pad null
+    if (startswith(basename, dirname)) dirname = NULL;
     const char *path = get_static(fjoin(2, dirname, basename));
     return path ? send_file(req, path, 0) : on_error(req, HTTPD_404_NOT_FOUND);
+}
+
+typedef struct {
+    int fd;
+    bool stop;
+    char addr[ADDRSTRLEN];
+    esp_event_handler_instance_t inst;
+} http_media_t;
+
+#ifdef CONFIG_BASE_USE_I2S
+static http_media_t audio_ctx;
+
+static void handle_audio_streaming(void *arg) {
+    audio_evt_t *evt = arg;
+    int len = evt ? evt->len : 0, fd = audio_ctx.fd;
+    if (len && httpd_socket_send(server, fd, evt->data, len, 0) == len) return;
+    UREGEVTS(AVC, audio_ctx.inst);
+    if (audio_ctx.stop) AUDIO_STOP();
+    ESP_LOGI(TAG, "Audio stream to %s stopped", audio_ctx.addr);
+}
+#endif
+
+#ifdef CONFIG_BASE_USE_CAM
+static http_media_t video_ctx;
+
+static void handle_video_streaming(void *arg) {
+    video_evt_t *evt = arg;
+    int len = (evt && evt->mode) ? evt->len : 0, fd = video_ctx.fd;
+    if (len && fd) {
+        static char bdary[51 + 14 + 1] =
+            "--FRAME\r\n"
+            "Content-Type: image/jpeg\r\n"
+            "Content-Length: ";
+        int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", len);
+        if (httpd_socket_send(server, fd, bdary, blen, 0) == blen &&
+            httpd_socket_send(server, fd, evt->data, len, 0) == len) return;
+    }
+    UREGEVTS(AVC, video_ctx.inst);
+    if (video_ctx.stop) VIDEO_STOP();
+    ESP_LOGI(TAG, "Video stream to %s stopped", video_ctx.addr);
+}
+#endif
+
+static void on_media_data(void *func, esp_event_base_t b, int32_t i, void *p) {
+    // this function is called in sys_evt task
+    // recv data from capture task
+    // send data to httpd task
+    httpd_queue_work(server, func, p ? *(void **)p : NULL);
+    return; NOTUSED(b); NOTUSED(i);
+}
+
+static esp_err_t on_media(httpd_req_t *req) {
+    CHECK_REQUEST(req);
+    if (has_param(req, "wav", FROM_ANY)) {
+#ifndef CONFIG_BASE_USE_I2S
+        return send_err(req, 403, "Audio stream not available");
+#else
+        if (audio_ctx.inst)
+            return send_err(req, 403, "Audio stream is in using");
+        const char *resp =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: audio/wav\r\n"
+            "Cache-Control: no-store\r\n\r\n";
+        int fd = audio_ctx.fd = httpd_req_to_sockfd(req);
+        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
+        REGEVTS(AVC, on_media_data, handle_audio_streaming, &audio_ctx.inst);
+        if (!audio_ctx.inst) return ESP_FAIL;
+        audio_ctx.stop = xTaskGetHandle("audio") == NULL;
+        AUDIO_START(-1);
+        snprintf(audio_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
+        ESP_LOGI(TAG, "Audio stream to %s started", audio_ctx.addr);
+#endif
+    } else if (has_param(req, "mjpg", FROM_ANY)) {
+#ifndef CONFIG_BASE_USE_CAM
+        return send_err(req, 403, "Video stream not available");
+#else
+        if (video_ctx.inst)
+            return send_err(req, 403, "Video stream is in using");
+        const char *resp =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: multipart/x-mixed-replace;boundary=--FRAME\r\n"
+            "Cache-Control: no-store\r\n"
+            "X-Framerate: 60\r\n\r\n";
+        int fd = video_ctx.fd = httpd_req_to_sockfd(req);
+        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
+        REGEVTS(AVC, on_media_data, handle_video_streaming, &video_ctx.inst);
+        if (!video_ctx.inst) return ESP_FAIL;
+        video_ctx.stop = xTaskGetHandle("video") == NULL;
+        VIDEO_START(-1);
+        snprintf(video_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
+        ESP_LOGI(TAG, "Video stream to %s started", video_ctx.addr);
+#endif
+    } else {
+        return send_str(req, MEDIA_HTML);
+    }
+    return ESP_OK;
 }
 
 #ifdef CONFIG_HTTPD_WS_SUPPORT
@@ -805,26 +935,21 @@ static void handle_websocket_message(void *arg) {
 
 static esp_err_t on_websocket(httpd_req_t *req) {
     esp_err_t err = ESP_OK;
+    if (req->method == HTTP_GET) return err; // handshake done
     httpd_ws_frame_t *pkt = NULL;
-    if (req->method == HTTP_GET) {
-        ESP_LOGI(TAG, "Handshake done!");
-        goto exit;
-    }
     if (( err = ECALLOC(pkt, 1, sizeof(httpd_ws_frame_t)) ) ||
         ( err = httpd_ws_recv_frame(req, pkt, 0) ) ||
         ( pkt->type != HTTPD_WS_TYPE_TEXT ) ||
         ( pkt->len > (2 * CHUNK_SIZE) || !pkt->final ) ||
         ( err = ECALLOC(pkt->payload, 1, pkt->len + 1 + sizeof(int)) ) ||
         ( err = httpd_ws_recv_frame(req, pkt, pkt->len) )
-    ) goto exit;
+    ) {
+        if (pkt) TRYFREE(pkt->payload);
+        TRYFREE(pkt);
+        return err;
+    }
     *(int *)(pkt->payload + pkt->len + 1) = httpd_req_to_sockfd(req);
     return httpd_queue_work(req->handle, handle_websocket_message, pkt);
-exit:
-    if (pkt) {
-        TRYFREE(pkt->payload);
-        TRYFREE(pkt);
-    }
-    return err;
 }
 #endif
 
@@ -878,12 +1003,13 @@ void server_initialize() {
 void server_loop_begin() {
     if (server) return;
 
-    const httpd_uri_t apis[] = {
+    httpd_uri_t apis[] = {
         // WebSocket APIs
         WS_API("/ws", on_websocket, NULL),
         // STA APIs
         HTTP_API("/alive",  GET,    on_success, NULL),
         HTTP_API("/exec",   POST,   on_command, FLAG_NEED_AUTH),
+        HTTP_API("/media",  GET,    on_media,   FLAG_NEED_AUTH),
         // AP APIs
         HTTP_API("/edit",   GET,    on_editor,  FLAG_AP_ONLY),
         HTTP_API("/edit",   PUT,    on_editor,  FLAG_AP_ONLY | FLAG_NEED_AUTH),
@@ -908,15 +1034,20 @@ void server_loop_begin() {
     config.global_user_ctx = auth_init();
     config.global_user_ctx_free_fn = auth_exit;
 
+    // httpd_start => httpd_thread => httpd_server => select
+    //                                                    |
+    //                          httpd_accept_conn       <=|
+    // httpd_queue_work     =>  httpd_process_ctrl_msg  <=|
+    // uri->handler(req)    <=  httpd_process_session   <=+
     esp_err_t err = httpd_start(&server, &config);
     if (err) {
         ESP_LOGE(TAG, "Start server failed: %s", esp_err_to_name(err));
     } else {
         ESP_LOGI(TAG, "Start server on port %d", config.server_port);
-        LOOPN(i, LEN(apis)) {
-            if (( err = httpd_register_uri_handler(server, apis + i) )) {
+        ITERP(api, apis) {
+            if (( err = httpd_register_uri_handler(server, api) )) {
                 ESP_LOGE(TAG, "Register uri `%s` failed: %s",
-                         apis[i].uri, esp_err_to_name(err));
+                         api->uri, esp_err_to_name(err));
                 break;
             }
         }

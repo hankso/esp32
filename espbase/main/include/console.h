@@ -25,13 +25,13 @@
 #define CONSOLE_UTIL_LOGGING        //  596 Bytes
 #define CONSOLE_UTIL_HISTORY        //  806 Bytes
 
-#define CONSOLE_DRIVER_GPIO         //  700 Bytes
-#define CONSOLE_DRIVER_USB          //  430 Bytes
-#define CONSOLE_DRIVER_LED          //  700 Bytes
-#define CONSOLE_DRIVER_I2C          // 1436 Bytes
-#define CONSOLE_DRIVER_ADC          // 1424 Bytes
-#define CONSOLE_DRIVER_DAC          // 1244 Bytes
-#define CONSOLE_DRIVER_PWM          // 1668 Bytes
+#define CONSOLE_DRV_GPIO            //  700 Bytes
+#define CONSOLE_DRV_USB             //  430 Bytes
+#define CONSOLE_DRV_LED             //  700 Bytes
+#define CONSOLE_DRV_I2C             // 1436 Bytes
+#define CONSOLE_DRV_ADC             // 1424 Bytes
+#define CONSOLE_DRV_DAC             // 1244 Bytes
+#define CONSOLE_DRV_PWM             // 1668 Bytes
 
 #define CONSOLE_NET_BT              //  368 Bytes
 #define CONSOLE_NET_STA             //  428 Bytes
@@ -44,8 +44,9 @@
 #define CONSOLE_NET_TSYNC           // 7888 Bytes
 
 #define CONSOLE_APP_HID             // 1584 Bytes
-#define CONSOLE_APP_SCN             // 200 Bytes
+#define CONSOLE_APP_SCN             //  200 Bytes
 #define CONSOLE_APP_ALS             // 1408 Bytes
+#define CONSOLE_APP_AVC             //  800 Bytes
 #define CONSOLE_APP_SEN             // 1872 Bytes
 
 #ifdef __cplusplus

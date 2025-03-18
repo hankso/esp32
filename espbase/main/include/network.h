@@ -39,7 +39,7 @@ esp_err_t ftm_request(const char *ssid, uint8_t count);
 esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm);
 
 esp_err_t mdns_command(const char *ctrl, const char *hostname,
-                       const char *service, const char *proto,
+                       const char *service, const char *protocol,
                        uint16_t timeout_ms);
 #define   mdns_control(ctrl) mdns_command((ctrl), NULL, NULL, NULL, 0)
 

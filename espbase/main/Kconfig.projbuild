@@ -109,9 +109,9 @@ menu "ESP Base Configuration"
         config BASE_I2C_SPEED
             int "I2C Bus speed in Hz"
             range 1 400000
-            default 50000
+            default 100000
             help
-                Default value: 50KHz
+                Default value: 100KHz
 
         config BASE_USE_I2C0
             bool "Enable I2C Bus 0" if BASE_I2C_NUM = 1
@@ -133,11 +133,41 @@ menu "ESP Base Configuration"
             default 2
     endif
 
+    menuconfig BASE_USE_I2S
+        bool "Enable I2S"
+        select BASE_GPIO_NUMBER
+        default n
+        help
+            Enable snd_xxx functions (~20KB)
+    if BASE_USE_I2S
+        config BASE_I2S_NUM
+            int "I2S Port number"
+            range 0 1
+            default 0
+
+        config BASE_PDM_STEREO
+            bool "I2S PDM mono or stereo"
+            default n
+
+        config BASE_PDM_SAMPLE_RATE
+            int "I2S PDM sample rate"
+            range 1 48000
+            default 44100
+    endif
+
+    menuconfig BASE_USE_CAM
+        bool "Enable Camera" if BASE_USE_I2C
+        select BASE_GPIO_NUMBER
+        select BASE_SCREEN_I2C_ALT
+        default n
+        help
+            Enable cam_xxx functions (~40KB)
+
     menuconfig BASE_USE_SCREEN
         bool "Enable Screen" if BASE_USE_I2C || BASE_USE_SPI
         default y
         help
-            Enable scn_xxx functions (+200KB)
+            Enable scn_xxx functions (200KB+)
     if BASE_USE_SCREEN
         choice
             prompt "Select Screen interface"
@@ -330,34 +360,49 @@ menu "ESP Base Configuration"
             range 0 16
             default 3
 
-        config BASE_OTA_FETCH
-            bool "Enable OTA updation from URL"
-            default y
+        config BASE_USE_SMARTCONFIG
+            bool "Enable SmartConfig on STA interface"
+            default n
             help
-                Enable ota_updation_url function (~140KB)
+                See Config.net.SC_AUTO (~40KB)
 
         config BASE_USE_WEBSERVER
             bool "Enable web server on port 80"
             default y
             help
                 Enable server_loop_xxx functions (~40KB)
+
+        config BASE_OTA_FETCH
+            bool "Enable OTA updation from URL"
+            default n if BASE_USE_WEBSERVER
+            default y
+            help
+                Enable ota_updation_url function (~110KB)
     endif
 
     menuconfig BASE_USE_FFS
         bool "Enable Flash FileSystem"
         default y
+        help
+            Enable FILESYS_FLASH (~30KB)
     if BASE_USE_FFS
         config BASE_FFS_MP
             string "Flash FileSystem Mount Point"
             default "/flashfs"
 
+        config BASE_FFS_PART
+            string "Flash FileSystem partition label"
+            default "storage"
+            help
+                Must match the partition defined in `partitions.csv`
+
         choice
             prompt "Select Flash FileSystem Format"
             default BASE_FFS_SPI
             config BASE_FFS_FAT
-                bool "Storage partition is Fat FileSystem"
+                bool "Storage partition is FAT FileSystem (FATFS)"
             config BASE_FFS_SPI
-                bool "Storage partition is SPI Flash FileSystem"
+                bool "Storage partition is SPI Flash FileSystem (SPIFFS)"
         endchoice
     endif
 
@@ -365,6 +410,8 @@ menu "ESP Base Configuration"
         bool "Enable SDCard FileSystem"
         depends on BASE_USE_SPI
         default n
+        help
+            Enable FILESYS_SDCARD (~50KB)
     if BASE_USE_SDFS
         config BASE_SDFS_MP
             string "SDCard FileSystem Mount Point"
@@ -397,7 +444,7 @@ menu "ESP Base Configuration"
         bool "Enable REPL console service"
         default y
         help
-            Enable console_xxx and commands (+110KB)
+            Enable console_xxx and commands (~110KB)
 
     config BASE_GPIO_NUMBER
         bool "Config GPIO number"
@@ -409,27 +456,41 @@ menu "ESP Base Configuration"
             default 5
 
         if BASE_USE_UART
-            config BASE_GPIO_TXD
+            config BASE_GPIO_UART_TXD
                 int "UART TXD pin number"
                 range 0 48
                 default 43 if IDF_TARGET_ESP32S3
                 default 1
 
-            config BASE_GPIO_RXD
+            config BASE_GPIO_UART_RXD
                 int "UART RXD pin number"
                 range 0 48
                 default 44 if IDF_TARGET_ESP32S3
                 default 3
         endif
 
+        if BASE_USE_I2S
+            config BASE_GPIO_I2S_CLK
+                int "I2S CLK pin number"
+                range 0 48
+                default 39 if IDF_TARGET_ESP32S3
+                default 9
+
+            config BASE_GPIO_I2S_DAT
+                int "I2S DAT pin number"
+                range 0 48
+                default 40 if IDF_TARGET_ESP32S3
+                default 10
+        endif
+
         if BASE_USE_I2C0
-            config BASE_GPIO_SDA0
+            config BASE_GPIO_I2C_SDA0
                 int "I2C SDA0 pin number"
                 range 0 48
                 default 5 if IDF_TARGET_ESP32S3
                 default 21
 
-            config BASE_GPIO_SCL0
+            config BASE_GPIO_I2C_SCL0
                 int "I2C SCL0 pin number"
                 range 0 48
                 default 6 if IDF_TARGET_ESP32S3
@@ -437,14 +498,14 @@ menu "ESP Base Configuration"
         endif
 
         if BASE_USE_I2C1
-            config BASE_GPIO_SDA1
-                int "I2C1 SDA1 pin number"
+            config BASE_GPIO_I2C_SDA1
+                int "I2C SDA1 pin number"
                 range 0 48
                 default 41 if IDF_TARGET_ESP32S3
                 default 26
 
-            config BASE_GPIO_SCL1
-                int "I2C1 SCL1 pin number"
+            config BASE_GPIO_I2C_SCL1
+                int "I2C SCL1 pin number"
                 range 0 48
                 default 42 if IDF_TARGET_ESP32S3
                 default 27
@@ -545,13 +606,13 @@ menu "ESP Base Configuration"
 
         if BASE_USE_KNOB
             config BASE_GPIO_ENCA
-                int "Knob encoder A pin number"
+                int "Knob ENCA pin number"
                 range 0 48
                 default 15 if IDF_TARGET_ESP32S3
                 default 37
 
             config BASE_GPIO_ENCB
-                int "Knob encoder B pin number"
+                int "Knob ENCB pin number"
                 range 0 48
                 default 16 if IDF_TARGET_ESP32S3
                 default 38
@@ -559,13 +620,13 @@ menu "ESP Base Configuration"
 
         if BASE_USE_SERVO
             config BASE_GPIO_SERVOV
-                int "Servo Vertical PWM pin number"
+                int "Servo Ver PWM pin number"
                 range 0 48
                 default 17 if IDF_TARGET_ESP32S3
                 default 32
 
             config BASE_GPIO_SERVOH
-                int "Servo Horizontal PWM pin number"
+                int "Servo Hor PWM pin number"
                 range 0 48
                 default 18 if IDF_TARGET_ESP32S3
                 default 33

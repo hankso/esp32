@@ -47,10 +47,6 @@
       "type": "string",
       "pattern": "^[01yn]?$"
     },
-    "sys.fs.part": {
-      "description": "File System partition label (see partition.csv)",
-      "type": "string"
-    },
     "net.sta.ssid": {
       "description": "SSID of the AP to connect after startup",
       "type": "string",
@@ -99,13 +95,18 @@
         { "maxLength": 0 }
       ]
     },
+    "net.ap.hide": {
+      "description": "Hide AP SSID (not shown on scan)",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
     "net.ap.auto": {
       "description": "Switch to AP mode if STA connection failed",
       "type": "string",
       "pattern": "^[01yn]?$"
     },
-    "net.ap.hide": {
-      "description": "Hide AP SSID (not shown on scan)",
+    "net.sc.auto": {
+      "description": "Enable SmartConfig if STA connection failed",
       "type": "string",
       "pattern": "^[01yn]?$"
     },

@@ -1,6 +1,6 @@
 <script setup>
 import { type, rules, debounce } from '@/utils'
-import { listDir, uploadFile, createPath, deletePath } from '@/apis'
+import { listDir, readFile, uploadFile, createPath, deletePath } from '@/apis'
 
 import {
     mdiUpload,
@@ -281,6 +281,16 @@ onMounted(refresh)
             </v-scale-transition>
 
             <v-scale-transition :group="true">
+                <v-btn
+                    icon
+                    v-if="select.length==1"
+                    @click="readFile(select[0], true)"
+                >
+                    <v-icon :icon="mdiDownload"></v-icon>
+                    <v-tooltip activator="parent" location="bottom">
+                        Download as {{ basename(select[0]) }}
+                    </v-tooltip>
+                </v-btn>
                 <v-btn
                     icon
                     v-if="select.length === 1"

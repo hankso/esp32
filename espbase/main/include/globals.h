@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <time.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
@@ -18,28 +19,31 @@
 #include "sdkconfig.h"
 #include "esp_err.h"
 #include "esp_log.h"
+#include "esp_event.h"
 #include "esp_idf_version.h"
-#include "soc/soc_caps.h"
 
-#define UNUSED                  __attribute__((unused))
-#define PACKED                  __attribute__((packed))
-#define FALLTH                  __attribute__((fallthrough))
-#define NOTUSED(x)              (void)(x)
-#define _STR_IMPL_(x)           #x
-#define STR(x)                  _STR_IMPL_(x)
-#define CASESTR(x, offset)      case x: return #x + offset
-#define CASESTRV(v, x, offset)  case x: (v) = #x + offset; break
-#define LEN(arr)                ( sizeof(arr) / sizeof(*arr) )
-#define LOOP(x, low, high)      for (int x = (low); x < (high); x++)
-#define LOOPD(x, high, low)     for (int x = (high); x > (low); x--)
-#define LOOPN(x, n)             LOOP(x, 0, (n))
-#define LOOPND(x, n)            LOOPD(x, (n) - 1, -1)
-#define LPCHR(c, n)             do { LOOPN(x, (n)) putchar(c); } while (0)
-#define LPCHRN(c, n)            do { LPCHR((c), (n)); putchar('\n'); } while (0)
-#define TRYNULL(p, f)           do { if (p) f(p); (p) = NULL; } while (0)
-#define TRYFREE(p)              TRYNULL((p), free)
+// GCC tricks
 
-#define TIMEOUT(m)              ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
+#define UNUSED              __attribute__((unused))
+#define PACKED              __attribute__((packed))
+#define FALLTH              __attribute__((fallthrough))
+#define NOTUSED(x)          (void)(x)
+#define _STR_IMPL_(x)       #x
+#define STR(x)              _STR_IMPL_(x)
+#define CASESTR(x, l)       case x: return #x + l
+#define CASESTRV(v, x, l)   case x: (v) = #x + l; break
+#define LEN(arr)            ( sizeof(arr) / sizeof(*arr) )
+#define LOOP(x, l, h)       for (int x = (l); x < (h); x++)
+#define LOOPD(x, h, l)      for (int x = (h); x > (l); x--)
+#define LOOPN(x, n)         LOOP(x, 0, (n))
+#define LOOPND(x, n)        LOOPD(x, (n) - 1, -1)
+#define LPCHR(c, n)         do { LOOPN(x, (n)) putchar(c); } while (0)
+#define LPCHRN(c, n)        do { LPCHR((c), (n)); putchar('\n'); } while (0)
+#define TRYNULL(p, f)       do { if (p) f(p); (p) = (typeof(p))0; } while (0)
+#define TRYFREE(p)          TRYNULL((p), free)
+
+// ESP specific
+
 #define EMALLOC(v, size)                                                    \
         ( (v = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
 #define ECALLOC(v, num, size)                                               \
@@ -50,28 +54,49 @@
             if (ptr) (v) = ptr;                                             \
             ptr ? ESP_OK : ESP_ERR_NO_MEM;                                  \
         })
-#define ITERN(v, arr, n)                                                    \
-        for (typeof(*(arr)) *_p = (arr), v = *_p; _p < &((arr)[n]); v = *++_p)
-#define ITER(v, arr) ITERN(v, (arr), LEN(arr))
+#define ITERPN(v, a, n)                                                     \
+        for (typeof(*(a)) *v = (a), *_##v = v + (n); v < _##v; v++)
+#define ITERVN(v, a, n)                                                     \
+        for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
+#define ITERP(v, a)         ITERPN(v, (a), LEN(a))
+#define ITERV(v, a)         ITERVN(v, (a), LEN(a))
+#define TIMEOUT(m)          ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
+#define MUTEX()             xSemaphoreCreateBinary()
+#define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
+#define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
+#define RELEASE(s)          ( (s) ? xSemaphoreGive(s) : 0 )
+#define REGEVTS(base, ...)  esp_event_handler_instance_register(            \
+                                base##_EVENT, ESP_EVENT_ANY_ID, __VA_ARGS__)
+#define UREGEVTS(base, inst)                                                \
+        do {                                                                \
+            if (inst) esp_event_handler_instance_unregister(                \
+                base##_EVENT, ESP_EVENT_ANY_ID, (inst));                    \
+            (inst) = NULL;                                                  \
+        } while (0)
+
+// May be defined somewhere
 
 #ifndef BIT
-#   define BIT(n)               ( 1UL << (n) )
+#   define BIT(n)           ( 1UL << (n) )
 #endif
 #ifndef ABS
-#   define ABS(x)               ( (x) > 0 ? (x) : -(x) )
+#   define ABS(x)           ({ typeof(x) X_ = (x); X_ < 0 ? -X_ : X_; })
 #endif
 #ifndef ABSDIFF
-#   define ABSDIFF(a, b)        ( (a) > (b) ? (a) - (b) : (b) - (a) )
+#   define ABSDIFF(a, b)    ({ typeof(a) A_ = (a), B_ = (b);                \
+                                A_ > B_ ? A_ - B_ : B_ - A_; })
 #endif
 #ifndef MAX
-#   define MAX(a, b)            ( (a) > (b) ? (a) : (b) )
-#   define MIN(a, b)            ( (a) > (b) ? (b) : (a) )
+#   define MAX(a, b)        ({ typeof(a) A_ = (a), B_ = (b);                \
+                                A_ > B_ ? A_ : B_; })
+#   define MIN(a, b)        ({ typeof(a) A_ = (a), B_ = (b);                \
+                                A_ > B_ ? B_ : A_; })
 #endif
 #ifndef CONS
-#   define CONS(x, low, high)   MAX((low), MIN((x), (high)))
+#   define CONS(x, l, h)    MAX((l), MIN((x), (h)))
 #endif
 
-// Aliases
+// Version aliases
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #   define TARGET_IDF_5
@@ -93,14 +118,14 @@
 #   warning "This project has only been tested on ESP32 & ESP32-S chips"
 #endif
 
-// Board specified configs
+// Board specific
 
 #ifdef TARGET_ESP32S3
 // #   define  BOARD_ESP32S3_LUATOS
 #   define  BOARD_ESP32S3_NOLOGO
 #else
-// #   define  BOARD_ESP32_DEVKIT
-#   define  BOARD_ESP32_PICOKIT
+#   define  BOARD_ESP32_DEVKIT
+// #   define  BOARD_ESP32_PICOKIT
 #endif
 
 #if defined(BOARD_ESP32_DEVKIT)
@@ -134,6 +159,7 @@ void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
 
 bool strbool(const char *);
+size_t strcnt(const char *, char, size_t);
 char * strtrim(char *str, const char *chars);
 
 char * b64encode(char *out, const char *inp, size_t len);

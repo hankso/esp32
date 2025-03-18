@@ -1,5 +1,3 @@
-# Logs
-logs
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -11,26 +9,17 @@ lerna-debug.log*
 *.lock
 *.local
 
-dist/
-build/
-cache/
-coverage/
+dist
+build
+cache
+coverage
+__pycache__
+node_modules
+managed_components
 **/files/www/
 **/files/docs/
 
 sdkconfig
 stats.html
-node_modules
-managed_components
-
-# Editor directories and files
-.vscode/*
-!.vscode/extensions.json
-.idea
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
 
 *.tsbuildinfo

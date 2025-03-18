@@ -7,8 +7,10 @@
 #pragma once
 
 #include "globals.h"
+#include "avutils.h"
 
 #include "driver/i2c.h"         // for I2C_NUM_XXX
+#include "driver/i2s.h"         // for I2S_NUM_XXX
 #include "driver/uart.h"        // for UART_NUM_XXX
 #include "driver/gpio.h"        // for GPIO_NUM_XXX
 #include "driver/spi_master.h"  // for SPIXXX_HOST
@@ -33,6 +35,9 @@ extern "C" {
 #define _SPI_NUMBER(num) SPI##num##_HOST
 #define SPI_NUMBER(num) _SPI_NUMBER(num)
 
+#define _I2S_NUMBER(num) I2S_NUM_##num
+#define I2S_NUMBER(num) _I2S_NUMBER(num)
+
 #define _UART_NUMBER(num) UART_NUM_##num
 #define UART_NUMBER(num) _UART_NUMBER(num)
 
@@ -47,14 +52,28 @@ extern "C" {
 
 #ifdef CONFIG_BASE_USE_UART
 #   define NUM_UART     UART_NUMBER(CONFIG_BASE_UART_NUM)
-#   define PIN_TXD      GPIO_NUMBER(CONFIG_BASE_GPIO_TXD)
-#   define PIN_RXD      GPIO_NUMBER(CONFIG_BASE_GPIO_RXD)
+#   define PIN_TXD      GPIO_NUMBER(CONFIG_BASE_GPIO_UART_TXD)
+#   define PIN_RXD      GPIO_NUMBER(CONFIG_BASE_GPIO_UART_RXD)
 #   define PIN_RTS      UART_PIN_NO_CHANGE
 #   define PIN_CTS      UART_PIN_NO_CHANGE
 #endif
 
+#ifdef CONFIG_BASE_USE_I2S
+#   define NUM_I2S      I2S_NUMBER(CONFIG_BASE_I2S_NUM)
+#   define PIN_CLK      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_CLK)
+#   define PIN_DAT      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_DAT)
+#endif
+
 #ifdef CONFIG_BASE_USE_I2C
 #   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
+#   ifdef CONFIG_BASE_USE_I2C0
+#       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA0)
+#       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL0)
+#   endif
+#   ifdef CONFIG_BASE_USE_I2C1
+#       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA1)
+#       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL1)
+#   endif
 #   if CONFIG_BASE_I2C_NUM == 0
 #       define PIN_SDA  PIN_SDA0
 #       define PIN_SCL  PIN_SCL0
@@ -62,14 +81,6 @@ extern "C" {
 #       define PIN_SDA  PIN_SDA1
 #       define PIN_SCL  PIN_SCL1
 #   endif
-#endif
-#ifdef CONFIG_BASE_USE_I2C0
-#   define PIN_SDA0     GPIO_NUMBER(CONFIG_BASE_GPIO_SDA0)
-#   define PIN_SCL0     GPIO_NUMBER(CONFIG_BASE_GPIO_SCL0)
-#endif
-#ifdef CONFIG_BASE_USE_I2C1
-#   define PIN_SDA1     GPIO_NUMBER(CONFIG_BASE_GPIO_SDA1)
-#   define PIN_SCL1     GPIO_NUMBER(CONFIG_BASE_GPIO_SCL1)
 #endif
 
 #ifdef CONFIG_BASE_USE_SPI
@@ -149,6 +160,38 @@ esp_err_t pwm_set_degree(int hdeg, int vdeg);
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
 esp_err_t pwm_set_tone(int freq, int pcent);
 esp_err_t pwm_get_tone(int *freq, int *pcent);
+
+ESP_EVENT_DECLARE_BASE(AVC_EVENT);
+typedef struct {
+    size_t id;
+    size_t len;
+    void *data;
+    audio_mode_t *mode;
+} audio_evt_t;          // data passed to AUD_EVENT handler is (audio_evt_t **)
+typedef struct {
+    size_t id;
+    size_t len;
+    void *data;
+    video_mode_t *mode;
+} video_evt_t;          // data passed to VID_EVENT handler is (video_evt_t **)
+enum {
+    AUD_EVENT_START,    // evt.data is WAV header, evt.len = sizeof(wav_header_t)
+    AUD_EVENT_DATA,     // evt.data is audio data, evt.len > 0, evt.id >= 0
+    AUD_EVENT_STOP,     // evt.data is undefined,  evt.len = 0
+    VID_EVENT_START,    // evt.data is AVI header, evt.len = sizeof(avi_header_t)
+    VID_EVENT_DATA,     // evt.data is frame jpeg, evt.len > 0, evt.id >= 0
+    VID_EVENT_STOP,     // evt.data is AVI tailer, evt.len = 8 + evt.id * 16
+};
+
+esp_err_t avc_command(
+    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream);
+
+#define AUDIO_START(ms) avc_command("1", AUDIO_TARGET, (ms), NULL)
+#define VIDEO_START(ms) avc_command("1", VIDEO_TARGET, (ms), NULL)
+#define AUDIO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
+#define VIDEO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
+#define AUDIO_PRINT(s)  avc_command(NULL, AUDIO_TARGET, 0, (s))
+#define VIDEO_PRINT(s)  avc_command(NULL, VIDEO_TARGET, 0, (s))
 
 void i2c_detect(int bus);
 esp_err_t smbus_probe(int bus, uint8_t addr);

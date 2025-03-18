@@ -5,11 +5,13 @@
  */
 
 #include "drivers.h"
+#include "config.h"
 #include "ledmode.h"
 #include "hidtool.h"
-#include "config.h"
+#include "timesync.h"
 
 #include "esp_attr.h"
+#include "esp_camera.h"
 #include "esp_task_wdt.h"
 #include "esp_intr_alloc.h"
 #include "soc/soc_caps.h"
@@ -26,6 +28,39 @@
 #endif
 
 static const char *TAG = "Driver";
+
+/******************************************************************************
+ * UART with custom pin
+ */
+
+static void uart_initialize() {
+    // esp_vfs_dev_uart_register is called on startup code to use /dev/uart0
+    fflush(stdout); fsync(fileno(stdout));
+
+#ifdef CONFIG_BASE_USE_UART
+    // UART driver configuration
+    uart_config_t uart_conf = {
+#   ifdef CONFIG_BASE_USE_CONSOLE
+        .baud_rate = CONFIG_ESP_CONSOLE_UART_BAUDRATE,
+#   else
+        .baud_rate = 115200,
+#   endif
+        .data_bits = UART_DATA_8_BITS,
+        .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1,
+#   if SOC_UART_SUPPORT_REF_TICK
+        .source_clk = UART_SCLK_REF_TICK
+#   elif SOC_UART_SUPPORT_XTAL_CLK
+        .source_clk = UART_SCLK_XTAL
+#   else
+#       error "No UART clock source is aware of DFS"
+#   endif
+    };
+    uart_param_config(NUM_UART, &uart_conf);
+    uart_set_pin(NUM_UART, PIN_TXD, PIN_RXD, PIN_RTS, PIN_CTS);
+    ESP_ERROR_CHECK( uart_driver_install(NUM_UART, 256, 0, 0, NULL, 0) );
+#endif
+}
 
 /******************************************************************************
  * ADC analog in
@@ -51,7 +86,7 @@ static struct {
     esp_adc_cal_characteristics_t chars;
 #endif
     adc_channel_t chans[2];
-    const gpio_num_t pins[2];
+    gpio_num_t pins[2];
     const adc_unit_t unit;
     const adc_atten_t atten;
     const adc_bits_width_t width;
@@ -101,13 +136,13 @@ static void adc_initialize() {
     }
     esp_err_t err = ESP_OK;
 #ifdef TARGET_IDF_5
-    const adc_oneshot_unit_init_cfg_t init_conf = { .unit_id = adc.unit };
+    adc_oneshot_unit_init_cfg_t init_conf = { .unit_id = adc.unit };
     if (!( err = adc_oneshot_new_unit(&init_conf, &adc.oneshot) )) {
-        const adc_oneshot_chan_cfg_t chan_conf = {
+        adc_oneshot_chan_cfg_t chan_conf = {
             .bitwidth = adc.width,
             .atten = adc.atten,
         };
-        ITER(chan, adc.chans) {
+        ITERV(chan, adc.chans) {
             if (chan == ADC_CHANNEL_MAX) continue;
             err = adc_oneshot_config_channel(adc.oneshot, chan, &chan_conf);
             if (err) break;
@@ -115,7 +150,7 @@ static void adc_initialize() {
     }
     if (!err) err = adc_calibration_init(adc.unit, adc.atten, &adc.cali);
 #else
-    ITER(chan, adc.chans) {
+    ITERV(chan, adc.chans) {
         if (chan == ADC_CHANNEL_MAX) continue;
         if (( err = adc1_config_channel_atten(chan, adc.atten) )) break;
     }
@@ -160,7 +195,7 @@ int adc_hall() {
         raw += hall_sensor_read();
     }
     adc_power_release();
-    ITER(chan, adc.chans) {
+    ITERV(chan, adc.chans) {
         if (chan != ADC_CHANNEL_MAX) adc1_config_channel_atten(chan, adc.atten);
     }
     return raw / CONFIG_BASE_ADC_MULTISAMPLING;
@@ -266,38 +301,38 @@ esp_err_t dac_cwave(uint32_t v) { return ESP_ERR_NOT_SUPPORTED; NOTUSED(v); }
 
 #define SPEED_MODE  LEDC_LOW_SPEED_MODE
 
-#define TMR_SERVO   LEDC_TIMER_1
-#define RES_SERVO   LEDC_TIMER_10_BIT
-#define CH_SERVOH   LEDC_CHANNEL_1
-#define CH_SERVOV   LEDC_CHANNEL_2
+#define SERVO_TMR   LEDC_TIMER_1
+#define SERVO_RES   LEDC_TIMER_10_BIT
+#define SERVO_CHH   LEDC_CHANNEL_1
+#define SERVO_CHV   LEDC_CHANNEL_2
 
-#define TMR_BUZZER  LEDC_TIMER_2
-#define RES_BUZZER  LEDC_TIMER_10_BIT
-#define CH_BUZZER   LEDC_CHANNEL_3
+#define BUZZER_TMR  LEDC_TIMER_2
+#define BUZZER_RES  LEDC_TIMER_10_BIT
+#define BUZZER_CH   LEDC_CHANNEL_3
 
 static void pwm_initialize() {
 #ifdef CONFIG_BASE_USE_SERVO
-    const ledc_timer_config_t servo_conf = {
+    ledc_timer_config_t servo_conf = {
         .speed_mode         = SPEED_MODE,
-        .timer_num          = TMR_SERVO,
-        .duty_resolution    = RES_SERVO,
+        .timer_num          = SERVO_TMR,
+        .duty_resolution    = SERVO_RES,
         .freq_hz            = 50, // 20ms
         .clk_cfg            = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK( ledc_timer_config(&servo_conf) );
-    const ledc_channel_config_t channel0_conf = {
+    ledc_channel_config_t channel0_conf = {
         .gpio_num           = PIN_SVOH,
         .speed_mode         = SPEED_MODE,
-        .channel            = CH_SERVOH,
-        .timer_sel          = TMR_SERVO,
+        .channel            = SERVO_CHH,
+        .timer_sel          = SERVO_TMR,
         .hpoint             = 0,
         .duty               = 0
     };
-    const ledc_channel_config_t channel1_conf = {
+    ledc_channel_config_t channel1_conf = {
         .gpio_num           = PIN_SVOV,
         .speed_mode         = SPEED_MODE,
-        .channel            = CH_SERVOV,
-        .timer_sel          = TMR_SERVO,
+        .channel            = SERVO_CHV,
+        .timer_sel          = SERVO_TMR,
         .hpoint             = 0,
         .duty               = 0
     };
@@ -305,19 +340,19 @@ static void pwm_initialize() {
     ESP_ERROR_CHECK( ledc_channel_config(&channel1_conf) );
 #endif
 #ifdef CONFIG_BASE_USE_BUZZER
-    const ledc_timer_config_t buzzer_conf = {
+    ledc_timer_config_t buzzer_conf = {
         .speed_mode         = SPEED_MODE,
-        .timer_num          = TMR_BUZZER,
-        .duty_resolution    = RES_BUZZER,
+        .timer_num          = BUZZER_TMR,
+        .duty_resolution    = BUZZER_RES,
         .freq_hz            = 5000, // 0-5kHz is commonlly used
         .clk_cfg            = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK( ledc_timer_config(&buzzer_conf) );
-    const ledc_channel_config_t channel2_conf = {
+    ledc_channel_config_t channel2_conf = {
         .gpio_num           = PIN_BUZZ,
         .speed_mode         = SPEED_MODE,
-        .channel            = CH_BUZZER,
-        .timer_sel          = TMR_BUZZER,
+        .channel            = BUZZER_CH,
+        .timer_sel          = BUZZER_TMR,
         .hpoint             = 0,
         .duty               = 0
     };
@@ -333,25 +368,25 @@ static esp_err_t pwm_set_duty(int channel, int duty) {
 
 #ifdef CONFIG_BASE_USE_SERVO
 // mapping 0-180 deg to 0.5-2.5 ms
-static const float servo_offset = 0.5 / 20 * ((1 << RES_SERVO) - 1);
-static const float servo_scale  = 2.0 / 20 * ((1 << RES_SERVO) - 1) / 180;
+static const float servo_offset = 0.5 / 20 * ((1 << SERVO_RES) - 1);
+static const float servo_scale  = 2.0 / 20 * ((1 << SERVO_RES) - 1) / 180;
 
 esp_err_t pwm_set_degree(int hdeg, int vdeg) {
     esp_err_t err = ESP_OK;
     if (!err && hdeg >= 0) {
         hdeg = MIN(180, 166 * hdeg / 180 + 14);
-        err = pwm_set_duty(CH_SERVOH, hdeg * servo_scale + servo_offset);
+        err = pwm_set_duty(SERVO_CHH, hdeg * servo_scale + servo_offset);
     }
     if (!err && vdeg >= 0) {
         vdeg = MIN(160, vdeg);
-        err = pwm_set_duty(CH_SERVOV, vdeg * servo_scale + servo_offset);
+        err = pwm_set_duty(SERVO_CHV, vdeg * servo_scale + servo_offset);
     }
     return err;
 }
 
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg) {
-    int hduty = ledc_get_duty(SPEED_MODE, CH_SERVOH),
-        vduty = ledc_get_duty(SPEED_MODE, CH_SERVOV);
+    int hduty = ledc_get_duty(SPEED_MODE, SERVO_CHH),
+        vduty = ledc_get_duty(SPEED_MODE, SERVO_CHV);
     *hdeg = (int)((hduty - servo_offset) / servo_scale);
     *vdeg = (int)((vduty - servo_offset) / servo_scale);
     return ESP_OK;
@@ -367,19 +402,19 @@ esp_err_t pwm_get_degree(int *h, int *v) {
 
 #ifdef CONFIG_BASE_USE_BUZZER
 // mapping 0-100 percent to 0%-50% of duty
-static const float buzzer_scale = ((1 << RES_BUZZER) - 1) / 200;
+static const float buzzer_scale = ((1 << BUZZER_RES) - 1) / 200;
 
 esp_err_t pwm_set_tone(int freq, int pcnt) {
     esp_err_t err = freq > 20000 ? ESP_ERR_INVALID_ARG : ESP_OK;
     if (freq == 0) pcnt = 0;
-    if (!err && freq > 0)  err = ledc_set_freq(SPEED_MODE, TMR_BUZZER, freq);
-    if (!err && pcnt >= 0) err = pwm_set_duty(CH_BUZZER, pcnt * buzzer_scale);
+    if (!err && freq > 0)  err = ledc_set_freq(SPEED_MODE, BUZZER_TMR, freq);
+    if (!err && pcnt >= 0) err = pwm_set_duty(BUZZER_CH, pcnt * buzzer_scale);
     return err;
 }
 
 esp_err_t pwm_get_tone(int *freq, int *pcnt) {
-    *freq = ledc_get_freq(SPEED_MODE, TMR_BUZZER);
-    *pcnt = (int)(ledc_get_duty(SPEED_MODE, CH_SERVOH) / buzzer_scale);
+    *freq = ledc_get_freq(SPEED_MODE, BUZZER_TMR);
+    *pcnt = (int)(ledc_get_duty(SPEED_MODE, BUZZER_CH) / buzzer_scale);
     return ESP_OK;
 }
 #else
@@ -391,13 +426,316 @@ esp_err_t pwm_get_tone(int *f, int *p) {
 }
 #endif
 
+#undef SPEED_MODE
+#undef SERVO_TMR
+#undef SERVO_RES
+#undef SERVO_CHH
+#undef SERVO_CHV
+#undef BUZZER_TMR
+#undef BUZZER_RES
+#undef BUZZER_CH
+
+/******************************************************************************
+ * Audio/Video sensors (I2S PDM MIC and SCCB/SMBus Camera)
+ */
+
+ESP_EVENT_DEFINE_BASE(AVC_EVENT);
+
+#define AVC_POST(id, data, len, tout) \
+    esp_event_post(AVC_EVENT, id, data, len, TIMEOUT(tout))
+
+static UNUSED bool audio_run, video_run;
+static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
+
+#ifdef CONFIG_BASE_USE_I2S
+
+#ifdef TARGET_IDF_5
+static i2s_chan_handle_t i2s_handle;
+#   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
+#   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
+#   define I2S_READ(...)    i2c_channel_read(i2s_handle, __VA_ARGS__)
+#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
+#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
+#   define PDM_TYPE         int16_t
+#   ifdef CONFIG_BASE_PDM_STEREO
+#       define PDM_NCH      I2S_SLOT_MODE_STEREO
+#   else
+#       define PDM_NCH      I2S_SLOT_MODE_MONO
+#   endif
+
+static void i2s_initialize() {
+#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
+    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
+    i2s_pdm_rx_config_t pdm_conf = {
+        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
+        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
+        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
+    };
+#   undef DEFAULT
+    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
+    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
+}
+#else // TARGET_IDF_4
+#   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
+#   define I2S_RELEASE()    i2s_stop(NUM_I2S)
+#   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
+#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
+#   define PDM_BPC          ( I2S_BITS_PER_SAMPLE_16BIT / 8 )
+#   define PDM_TYPE         int16_t
+#   ifdef CONFIG_BASE_PDM_STEREO
+#       define PDM_NCH      I2S_CHANNEL_STEREO
+#       define PDM_FCH      I2S_CHANNEL_FMT_RIGHT_LEFT
+#   else
+#       define PDM_NCH      I2S_CHANNEL_MONO
+#       define PDM_FCH      I2S_CHANNEL_FMT_ONLY_RIGHT
+#   endif
+
+static void i2s_initialize() {
+    i2s_config_t i2s_conf = {
+        .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM,
+        .sample_rate            = PDM_SHZ,
+        .bits_per_sample        = PDM_BPC * 8,
+        .channel_format         = PDM_FCH,
+        .communication_format   = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL2,
+        .dma_buf_count          = 8,
+        .dma_buf_len            = 128,
+    };
+    i2s_pin_config_t pin_conf = {
+        .mck_io_num     = I2S_PIN_NO_CHANGE,
+        .bck_io_num     = I2S_PIN_NO_CHANGE,
+        .ws_io_num      = PIN_CLK,
+        .data_out_num   = I2S_PIN_NO_CHANGE,
+        .data_in_num    = PIN_DAT,
+    };
+    ESP_ERROR_CHECK( i2s_driver_install(NUM_I2S, &i2s_conf, 0, NULL) );
+    ESP_ERROR_CHECK( i2s_set_pin(NUM_I2S, &pin_conf) );
+    ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
+}
+#endif // TARGET_IDF_5
+
+static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+    static char eqls[80 - 4 - 3 - 13];
+    FILE *stream = arg;
+    audio_evt_t *evt = *(audio_evt_t **)data;
+    if (id == AUD_EVENT_START) {
+        memset(eqls, '=', sizeof(eqls) - 1);
+        eqls[sizeof(eqls) - 1] = '\0';
+    } else if (id == AUD_EVENT_STOP) {
+        fputc('\n', stream);
+        fflush(stream);
+    }
+    if (id != AUD_EVENT_DATA || evt->id % 10 || !evt->mode->nch) return;
+    size_t nch = evt->mode->nch, vmax = BIT(evt->mode->depth * 8 - 1);
+    size_t tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
+    PDM_TYPE *buf = evt->data, vol[nch], len[nch];
+    LOOPN(i, evt->len / nch / evt->mode->depth) {
+        LOOPN(j, nch) {
+            vol[j] = MAX(vol[j], ABS(buf[i * nch + j]));
+        }
+    }
+    fprintf(stream, "\r%s [", format_timestamp_us(0));
+    LOOPN(j, nch) {
+        vol[j] = vol[j] * 100 / vmax;           // 0 ~ 100
+        len[j] = vol[j] * tlen / 100;           // 0 ~ tlen
+        if (j) fputc('|', stream);
+        if (j % 2 || nch == 1) {
+            fprintf(stream, "%-3d%%%.*s%c%*s",
+                vol[j], len[j], eqls, vol[j] ? '+' : ' ', tlen - len[j], "");
+        } else {
+            fprintf(stream, "%*s%c%.*s%3d%%",
+                tlen - len[j], "", vol[j] ? '+' : ' ', len[j], eqls, vol[j]);
+        }
+    }
+    fputc(']', stream);
+    fflush(stream);
+}
+
+static void audio_capture(void *arg) {
+    audio_mode_t mode = { PDM_SHZ, PDM_NCH, PDM_BPC };
+    wav_header_t WAV = {
+        "RIFF", -1,
+        "WAVE",
+        "fmt ", WAV_HEADER_FMT_LEN,
+            0x01, mode.nch, mode.srate,
+            mode.nch * mode.depth * mode.srate,
+            mode.nch * mode.depth, mode.depth * 8,
+        "data", -1
+    };
+    size_t dlen = (uint64_t)WAV.Bps * (uint32_t)arg / 1000;
+    size_t rlen, plen = sizeof(void **), blen = WAV.Bps / 50; // 20ms buffer
+    WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;
+    audio_evt_t wav = { .len = sizeof(WAV), .data = &WAV };
+    audio_evt_t evt = { .data = malloc(blen), .mode = &mode };
+    void *dptr = &wav;
+    if (!evt.data) goto exit;
+    AVC_POST(AUD_EVENT_START, &dptr, plen, -1); msleep(10);
+    dptr = &evt;
+    I2S_ACQUIRE();
+    for (evt.id = 0; audio_run && dlen; evt.id++) {
+        if (I2S_READ(evt.data, blen, &rlen, TIMEOUT(25)) || !rlen) break;
+        dlen -= (evt.len = MIN(rlen, dlen));
+        AVC_POST(AUD_EVENT_DATA, &dptr, plen, 15);
+    }
+    I2S_RELEASE();
+    memset(dptr = &wav, 0, sizeof(wav));
+    AVC_POST(AUD_EVENT_STOP, &dptr, plen, -1); msleep(10);
+    UREGEVTS(AVC, aud_shdl);
+    TRYFREE(evt.data);
+exit:
+    vTaskDelete(NULL);
+}
+#   undef I2S_ACQUIRE
+#   undef I2S_RELEASE
+#   undef I2S_READ
+#   undef PDM_TYPE
+#   undef PDM_SHZ
+#   undef PDM_NCH
+#   undef PDM_BPC
+#endif // CONFIG_BASE_USE_I2S
+
+#ifdef CONFIG_BASE_USE_CAM
+static void cam_initialize() {
+    camera_config_t conf = {
+        // TODO
+    };
+    esp_err_t err = esp_camera_init(&conf);
+    if (!err) {
+        sensor_t *cam = esp_camera_sensor_get();
+        if (cam->id.PID == OV3660_PID) {
+            cam->set_brightness(cam, 1);
+            cam->set_saturation(cam, -2);
+        }
+        cam->set_framesize(cam, FRAMESIZE_HD);
+    } else {
+        ESP_LOGE(TAG, "Init camera failed: %s", esp_err_to_name(err));
+    }
+}
+
+static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+    FILE *stream = arg;
+    video_evt_t *evt = *(video_evt_t **)data;
+    if (id == VID_EVENT_STOP) {
+        fputc('\n', stream);
+    } else if (id == VID_EVENT_DATA && (evt->id % evt->mode->fps) == 0) {
+        fprintf(stream, "\r%08d %dx%dx%d %.4s %dBytes",
+                evt->id, evt->mode->width, evt->mode->height,
+                evt->mode->depth, evt->mode->fourcc, evt->len);
+    }
+    fflush(stream);
+}
+
+static void video_capture(void *arg) {
+    sensor_t *cam = esp_camera_sensor_get();
+    if (!cam) return;
+    const resolution_info_t *res = resolution + cam->status.framesize;
+    video_mode_t mode = { 15, res->width, res->height, 3, "MJPG" }; // FIXME fps
+    uint32_t ms = (uint32_t)arg, retry = 5;
+    uint32_t BPF = mode.width * mode.height * mode.depth * 0.6; // BytePerFrame
+    avi_header_t AVI = {
+        "RIFF", -1,
+        "AVI ",
+        "LIST", AVI_HEADER_HDLR_LEN, "hdlr",
+            "avih", AVI_HEADER_AVIH_LEN,
+                1000000 / mode.fps, mode.fps * BPF, 0, 0x910, -1, 0, 1,
+                0x100000, mode.width, mode.height, { 0, 0, 0, 0 },
+        "LIST", AVI_HEADER_STRL_LEN, "strl",
+            "strh", AVI_HEADER_STRH_LEN,
+                "vids", "MJPG", 0, 0, 0, 0, 1, mode.fps, 0, -1,
+                BPF, -1, 0, 0, 0, mode.width, mode.height,
+            "strf", AVI_HEADER_STRF_LEN,
+                AVI_HEADER_STRF_LEN, mode.width, mode.height, 1,
+                mode.depth * 8, "MJPG", BPF, 0, 0, 0, 0,
+        "LIST", -1, "movi",
+    };
+    size_t nframe = ms * (ms == -1 ? 1 : mode.fps), plen = sizeof(void **);
+    AVI.total_frames = AVI.length = nframe;
+    camera_fb_t *fb = NULL;
+    video_evt_t avi = { .len = sizeof(AVI), .data = &AVI };
+    video_evt_t evt = { .data = NULL, .mode = &mode };
+    void *dptr = &avi;
+    AVC_POST(VID_EVENT_START, &dptr, plen, -1); msleep(10);
+    dptr = &evt;
+    vTaskResume(xTaskGetHandle("cam_task"));
+    for (evt.id = 0; video_run && retry && evt.id < nframe; evt.id++) {
+        if (evt.data && fb && fb->buf != evt.data) free(evt.data);
+        TRYNULL(fb, esp_camera_fb_return);
+        if (!( fb = esp_camera_fb_get() )) break;
+        if (fb->format == PIXFORMAT_JPEG) {
+            evt.data = fb->buf;
+            evt.len = fb->len;
+        } else if (!frame2jpg(fb, 80, (uint8_t **)&evt.data, &evt.len)) {
+            ESP_LOGE(TAG, "JPEG compression failed");
+            retry--;
+        }
+        AVC_POST(VID_EVENT_DATA, &dptr, plen, 33);
+    }
+    vTaskSuspend(xTaskGetHandle("cam_task"));
+    memset(dptr = &avi, 0, sizeof(avi));
+    AVC_POST(VID_EVENT_STOP, &dptr, plen, -1); msleep(10);
+    UREGEVTS(AVC, vid_shdl);
+    if (evt.data && fb && fb->buf != evt.data) free(evt.data);
+    TRYNULL(fb, esp_camera_fb_return);
+    vTaskDelete(NULL);
+}
+#endif // CONFIG_BASE_USE_CAM
+
+#undef AVC_POST
+
+esp_err_t avc_command(
+    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream
+) {
+    if (!targets) targets = AUDIO_TARGET | VIDEO_TARGET;
+    bool atgt = targets & AUDIO_TARGET, vtgt = targets & VIDEO_TARGET;
+    TaskHandle_t atask = xTaskGetHandle("audio");
+    TaskHandle_t vtask = xTaskGetHandle("video");
+    if (ctrl) {
+        if (!strbool(ctrl)) {
+            if (atgt) audio_run = false;
+            if (vtgt) video_run = false;
+            for (int ms = 10; ms && (atgt || vtgt); ms--) {
+                if (atgt && !xTaskGetHandle("audio")) atgt = false;
+                if (vtgt && !xTaskGetHandle("video")) vtgt = false;
+                msleep(ms);
+            }
+        } else {
+            void *arg = (void *)(tout_ms ?: (uint32_t)-1);
+#ifdef CONFIG_BASE_USE_I2S
+            if (atgt && !atask) {
+                audio_run = true;
+                xTaskCreate(audio_capture, "audio", 8192, arg, 20, &atask);
+                if (!atask) return ESP_ERR_NO_MEM;
+            }
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+            if (vtgt && !vtask) {
+                video_run = true;
+                xTaskCreate(video_capture, "video", 2048, arg, 20, &vtask);
+                if (!vtask) return ESP_ERR_NO_MEM;
+            }
+#endif
+        }
+    } else if (stream) {
+#ifdef CONFIG_BASE_USE_I2S
+        if (atgt && !aud_shdl) REGEVTS(AVC, aud_visual, stream, &aud_shdl);
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+        if (vtgt && !vid_shdl) REGEVTS(AVC, vid_visual, stream, &vid_shdl);
+#endif
+    } else {
+        printf("Audio Capture: %s\n", atask ? "enabled" : "disabled");
+        printf("Video Capture: %s\n", vtask ? "enabled" : "disabled");
+    }
+    return ESP_OK;
+}
+
 /******************************************************************************
  * SPI Master interface
  */
 
 #ifdef CONFIG_BASE_USE_SPI
 static void spi_initialize() {
-    const spi_bus_config_t buf_conf = {
+    spi_bus_config_t buf_conf = {
         .mosi_io_num = PIN_MOSI,
         .miso_io_num = PIN_MISO,
         .sclk_io_num = PIN_SCLK,
@@ -417,7 +755,7 @@ static void spi_initialize() {
 
 #ifdef CONFIG_BASE_USE_I2C
 static void i2c_initialize() {
-    const i2c_config_t i2c_conf = {
+    i2c_config_t i2c_conf = {
         .mode               = I2C_MODE_MASTER,
         .sda_io_num         = PIN_SDA,
         .sda_pullup_en      = GPIO_PULLUP_ENABLE,
@@ -427,7 +765,6 @@ static void i2c_initialize() {
     };
     ESP_ERROR_CHECK( i2c_param_config(NUM_I2C, &i2c_conf) );
     ESP_ERROR_CHECK( i2c_driver_install(NUM_I2C, i2c_conf.mode, 0, 0, 0) );
-    
 }
 
 esp_err_t smbus_probe(int bus, uint8_t addr) {
@@ -480,12 +817,12 @@ esp_err_t smbus_probe(int b, uint8_t a) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(b); NOTUSED(a);
 }
 esp_err_t smbus_wregs(int b, uint8_t a, uint8_t r, uint8_t *v, size_t l) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(b); NOTUSED(a);
-    NOTUSED(r); NOTUSED(v); NOTUSED(l);
+    return ESP_ERR_NOT_SUPPORTED;
+    NOTUSED(b); NOTUSED(a); NOTUSED(r); NOTUSED(v); NOTUSED(l);
 }
 esp_err_t smbus_rregs(int b, uint8_t a, uint8_t r, uint8_t *v, size_t l) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(b); NOTUSED(a);
-    NOTUSED(r); NOTUSED(v); NOTUSED(l);
+    return ESP_ERR_NOT_SUPPORTED;
+    NOTUSED(b); NOTUSED(a); NOTUSED(r); NOTUSED(v); NOTUSED(l);
 }
 #endif // CONFIG_BASE_USE_I2C
 
@@ -528,25 +865,23 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num) {
     }
     TRYFREE(buf);
     return err;
+#undef LENGTH
 }
 
 esp_err_t smbus_toggle(int bus, uint8_t addr, uint8_t reg, uint8_t bit) {
-    uint8_t val, mask = BIT(bit);
+    uint8_t val = 0, mask = BIT(bit);
     esp_err_t err = smbus_read_byte(bus, addr, reg, &val);
-    if (!err) return err;
     if (val & mask) {
         val &= ~mask;
     } else {
         val |= mask;
     }
-    return smbus_write_byte(bus, addr, reg, val);
+    return err ?: smbus_write_byte(bus, addr, reg, val);
 }
 
 static bool i2c_master_inited(int bus) {
     esp_err_t err = smbus_probe(bus, 0);
-    if (err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_STATE)
-        return false;
-    return true;
+    return err != ESP_ERR_INVALID_ARG && err != ESP_ERR_INVALID_STATE;
 }
 
 void i2c_detect(int bus) {
@@ -663,7 +998,7 @@ static void gexp_initialize() {
         spi_pin_trans.length = PIN_SPI_COUNT;
         spi_pin_trans.tx_buffer = spi_pin_data;
     }
-    const spi_device_interface_config_t dev_conf = {
+    spi_device_interface_config_t dev_conf = {
         .command_bits = 0,
         .address_bits = 0,
         .dummy_bits = 0,
@@ -695,10 +1030,10 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [2]         = "Strapping PD",
     [5]         = "Strapping PU",
     [6]         = "Flash SPICLK",
-    [7]         = "Flash SPIQ",
-    [8]         = "Flash SPID",
-    [9]         = "Flash SPIHD",
-    [10]        = "Flash SPIWP",
+    [7]         = "Flash SPIQ (PICO-D4)",
+    [8]         = "Flash SPID (PICO-D4)",
+    [9]         = "Flash SPIHD (PICO-V3-02)",
+    [10]        = "Flash SPIWP (PICO-V3-02)",
     [11]        = "Flash SPICS0",
     [16]        = "Flash D2WD",
     [17]        = "Flash D2WD",
@@ -722,16 +1057,20 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_LED]   = "LED",
 #endif
 #ifdef CONFIG_BASE_USE_UART
-    [PIN_TXD]   = "UART" STR(CONFIG_BASE_UART_NUM) " TXD",
-    [PIN_RXD]   = "UART" STR(CONFIG_BASE_UART_NUM) " RXD",
+    [PIN_TXD]   = "UART TXD" STR(CONFIG_BASE_UART_NUM),
+    [PIN_RXD]   = "UART RXD" STR(CONFIG_BASE_UART_NUM),
+#endif
+#ifdef CONFIG_BASE_USE_I2S
+    [PIN_CLK]   = "I2S CLK",
+    [PIN_DAT]   = "I2S DAT",
 #endif
 #ifdef CONFIG_BASE_USE_I2C0
-    [PIN_SDA0]  = "I2C0 SDA",
-    [PIN_SCL0]  = "I2C0 SCL",
+    [PIN_SDA0]  = "I2C SDA0",
+    [PIN_SCL0]  = "I2C SCL0",
 #endif
 #ifdef CONFIG_BASE_USE_I2C1
-    [PIN_SDA1]  = "I2C1 SDA",
-    [PIN_SCL1]  = "I2C1 SCL",
+    [PIN_SDA1]  = "I2C SDA1",
+    [PIN_SCL1]  = "I2C SCL1",
 #endif
 #ifdef CONFIG_BASE_USE_SPI
     [PIN_MISO]  = "SPI MISO",
@@ -757,8 +1096,8 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_INT]   = "Interrupt",
 #endif
 #if defined(CONFIG_BASE_ADC_HALL_SENSOR)
-    [PIN_ADC1]  = "HALL Sensor P",
-    [PIN_ADC2]  = "HALL Sensor N",
+    [PIN_ADC1]  = "HALL sensor P",
+    [PIN_ADC2]  = "HALL sensor N",
 #elif defined(CONFIG_BASE_ADC_JOYSTICK)
     [PIN_ADC1]  = "Joystick X",
     [PIN_ADC2]  = "Joystick Y",
@@ -796,7 +1135,7 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
 static button_handle_t btn[2];
 
 static void cb_button(void *arg, void *data) {
-    static const char *BTAG = "Button";
+    static const char *BTAG = "button";
     int pin = (int)data;
     switch (iot_button_get_event(arg)) {
     case BUTTON_PRESS_DOWN:
@@ -832,9 +1171,9 @@ static void cb_joystick(void *arg, void *data) {
     if (event != BUTTON_PRESS_DOWN && event != BUTTON_LONG_PRESS_HOLD) return;
     int x = adc_read(0), y = adc_read(1);
     if (x == -1 || y == -1) return;
-    x = x > 1900 ? (x - 1900) : x < 1400 ? (1400 - x) : 0;
-    y = y > 1900 ? (y - 1900) : y < 1400 ? (1400 - y) : 0;
-    hid_report_mouse_move(HID_TARGET_ALL, x / 28, y / 28); // -50 ~ +50
+    x = x > 1900 ? (x - 1900) : x < 1400 ? (x - 1400) : 0;
+    y = y > 1900 ? (y - 1900) : y < 1400 ? (y - 1400) : 0;
+    if (x && y) hid_report_mouse_move(HID_TARGET_ALL, x / 28, y / 28); // ±50
 }
 #   endif
 
@@ -898,7 +1237,7 @@ static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
 
 static void gpio_initialize() {
 #ifdef CONFIG_BASE_USE_INT
-    const gpio_config_t int_conf = {
+    gpio_config_t int_conf = {
         .pin_bit_mask = BIT64(PIN_INT),
         .mode         = GPIO_MODE_INPUT,
 #   if defined(CONFIG_BASE_INT_POSEDGE) || defined(CONFIG_BASE_INT_HIGH)
@@ -925,16 +1264,16 @@ static void gpio_initialize() {
     ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
 #endif
 #ifdef CONFIG_BASE_USE_KNOB
-    const knob_event_t events[] = { KNOB_LEFT, KNOB_RIGHT };
-    const knob_config_t knob_conf = {
+    knob_event_t events[] = { KNOB_LEFT, KNOB_RIGHT };
+    knob_config_t knob_conf = {
         .default_direction = 0,     // 0:positive; 1:negative
         .gpio_encoder_a = PIN_ENCA,
         .gpio_encoder_b = PIN_ENCB
     };
     if (!( knob = iot_knob_create(&knob_conf) )) {
         ESP_LOGE(KTAG, "bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
-    } else LOOPN(i, LEN(events)) {
-        iot_knob_register_cb(knob, events[i], cb_knob, NULL);
+    } else ITERV(event, events) {
+        iot_knob_register_cb(knob, event, cb_knob, NULL);
     }
 #endif
 #ifdef CONFIG_BASE_USE_BTN
@@ -1045,35 +1384,6 @@ void gpio_table(bool i2c, bool spi) {
 }
 
 /******************************************************************************
- * UART with custom pin
- */
-
-static void uart_initialize() {
-    // esp_vfs_dev_uart_register is called on startup code to use /dev/uart0
-    fflush(stdout); fsync(fileno(stdout));
-
-#ifdef CONFIG_BASE_USE_UART
-    // UART driver configuration
-    const uart_config_t uart_conf = {
-        .baud_rate = 115200,
-        .data_bits = UART_DATA_8_BITS,
-        .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1,
-#   if SOC_UART_SUPPORT_REF_TICK
-        .source_clk = UART_SCLK_REF_TICK
-#   elif SOC_UART_SUPPORT_XTAL_CLK
-        .source_clk = UART_SCLK_XTAL
-#   else
-#       error "No UART clock source is aware of DFS"
-#   endif
-    };
-    uart_param_config(NUM_UART, &uart_conf);
-    uart_set_pin(NUM_UART, PIN_TXD, PIN_RXD, PIN_RTS, PIN_CTS);
-    ESP_ERROR_CHECK( uart_driver_install(NUM_UART, 256, 0, 0, NULL, 0) );
-#endif
-}
-
-/******************************************************************************
  * Task Watchdog
  */
 
@@ -1107,19 +1417,17 @@ esp_err_t twdt_feed() {
 
 void driver_initialize() {
     const char * tags[] = {
-        "gpio", "adc button", "led_indicator", "Knob", "Button",
+        "gpio", "button", "adc button", "led_indicator", "Knob"
     };
-    LOOPN(i, LEN(tags)) { esp_log_level_set(tags[i], ESP_LOG_WARN); }
+    ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 
+    uart_initialize();
     pwm_initialize();
 #ifdef CONFIG_BASE_USE_ADC
     adc_initialize();
 #endif
 #ifdef CONFIG_BASE_USE_DAC
     dac_initialize();
-#endif
-#ifdef CONFIG_BASE_USE_LED
-    led_initialize();
 #endif
 #ifdef CONFIG_BASE_USE_SPI
     spi_initialize();
@@ -1131,6 +1439,14 @@ void driver_initialize() {
     gexp_initialize();
 #endif
     gpio_initialize();
-    uart_initialize();
+#ifdef CONFIG_BASE_USE_LED
+    led_initialize();
+#endif
+#ifdef CONFIG_BASE_USE_I2S
+    i2s_initialize();
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+    cam_initialize();
+#endif
     twdt_initialize();
 }

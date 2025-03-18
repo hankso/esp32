@@ -7,6 +7,7 @@
 #include "update.h"
 #include "config.h"
 #include "filesys.h"
+#include "network.h"
 
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -14,6 +15,12 @@
 #include "esp_image_format.h"
 
 static const char *TAG = "Update";
+
+static void UNUSED ota_fetch_task(void *arg) {
+    if (wifi_sta_wait(arg ? *(uint16_t *)arg : 30000) == ESP_OK)
+        ota_updation_url(NULL, false);
+    vTaskDelete(NULL);
+}
 
 static struct {
     const esp_partition_t *target, *running;
@@ -57,7 +64,11 @@ void update_initialize() {
     } else {
         ESP_LOGE(TAG, "App validation failed!");
     }
-#endif // CONFIG_APP_ROLLBACK_ENABLE
+#endif
+#ifdef CONFIG_BASE_OTA_FETCH
+    if (strbool(Config.app.OTA_AUTO))
+        xTaskCreate(ota_fetch_task, "ota_fetch", 4096, NULL, 1, NULL);
+#endif
 }
 
 void ota_updation_reset() {
@@ -164,7 +175,10 @@ bool ota_updation_url(const char *url, bool force) {
     const char *fullpath = fjoin(2, Config.sys.DIR_DATA, "server.pem");
     config.cert_len = 4096; // skip files larger than 4KB
     config.cert_pem = cert = (char *)fload(fullpath, &config.cert_len);
-    config.skip_cert_common_name_check = config.cert_pem != NULL;
+    if (( config.skip_cert_common_name_check = (cert != NULL) )) {
+        char *keypart = strstr(cert, "----BEGIN PRIVATE KEY");
+        if (keypart) *keypart = '\0'; // certfile and keyfile are combined
+    }
 #   endif
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
