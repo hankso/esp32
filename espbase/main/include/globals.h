@@ -58,9 +58,9 @@
         for (typeof(*(a)) *v = (a), *_##v = v + (n); v < _##v; v++)
 #define ITERVN(v, a, n)                                                     \
         for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
-#define ITERP(v, a)         ITERPN(v, (a), LEN(a))
-#define ITERV(v, a)         ITERVN(v, (a), LEN(a))
-#define TIMEOUT(m)          ( (m) > 0 ? pdMS_TO_TICKS(m) : portMAX_DELAY )
+#define ITERP(v, a)         ITERPN(v, (a), LEN((a)))
+#define ITERV(v, a)         ITERVN(v, (a), LEN((a)))
+#define TIMEOUT(m)          ( (m) > 0 ? pdMS_TO_TICKS((m)) : portMAX_DELAY )
 #define MUTEX()             xSemaphoreCreateBinary()
 #define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
 #define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
@@ -104,50 +104,6 @@
 #   define TARGET_IDF_4
 #else
 #   warning "This project has only been tested on ESP-IDF v4.4 & v5.x"
-#endif
-
-#if defined(CONFIG_IDF_TARGET_ESP32)
-#   define TARGET_ESP32
-#elif defined(CONFIG_IDF_TARGET_ESP32S2)
-#   define TARGET_ESP32S
-#   define TARGET_ESP32S2
-#elif defined(CONFIG_IDF_TARGET_ESP32S3)
-#   define TARGET_ESP32S
-#   define TARGET_ESP32S3
-#else
-#   warning "This project has only been tested on ESP32 & ESP32-S chips"
-#endif
-
-// Board specific
-
-#ifdef TARGET_ESP32S3
-// #   define  BOARD_ESP32S3_LUATOS
-#   define  BOARD_ESP32S3_NOLOGO
-#else
-#   define  BOARD_ESP32_DEVKIT
-// #   define  BOARD_ESP32_PICOKIT
-#endif
-
-#if defined(BOARD_ESP32_DEVKIT)
-#   undef   CONFIG_BASE_GPIO_LED
-#   define  CONFIG_BASE_GPIO_LED 2
-#elif defined(BOARD_ESP32_PICOKIT)
-#   undef   CONFIG_BASE_LED_MODE_GPIO
-#   undef   CONFIG_BASE_LED_MODE_LEDC
-#   define  CONFIG_BASE_LED_MODE_RMT
-#   undef   CONFIG_BASE_LED_NUM
-#   define  CONFIG_BASE_LED_NUM 8
-#elif defined(BOARD_ESP32S3_LUATOS)
-#   undef   CONFIG_BASE_GPIO_LED
-#   define  CONFIG_BASE_GPIO_LED 10
-// #   undef   CONFIG_BASE_GPIO_TXD
-// #   define  CONFIG_BASE_GPIO_TXD 3
-// #   undef   CONFIG_BASE_GPIO_RXD
-// #   define  CONFIG_BASE_GPIO_RXD 4
-#elif defined(BOARD_ESP32S3_NOLOGO)
-#   undef   CONFIG_BASE_LED_MODE_GPIO
-#   undef   CONFIG_BASE_LED_MODE_LEDC
-#   define  CONFIG_BASE_LED_MODE_RMT
 #endif
 
 #ifdef __cplusplus

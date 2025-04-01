@@ -1157,8 +1157,7 @@ static int net_bt(int argc, char **argv) {
     } else if (bat != -1) {
         err = btmode_battery(CONS(bat, 0, 100));
     } else if (name) {
-        scan_rst_t *dev = btmode_find_device(name, NULL);
-        return dev ? btmode_connect(dev) : ESP_ERR_NOT_FOUND;
+        err = btmode_connect(name, NULL);
     } else if (!mode) {
         btmode_status();
     } else if ('0' <= mode[0] && mode[0] <= '2') {

@@ -15,6 +15,7 @@
 #include "cJSON.h"
 #include "esp_console.h"
 #include "esp_vfs_dev.h"
+#include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -214,7 +215,9 @@ void console_handle_one() {
 void console_handle_loop(void *argv) {
     for (;;) {
         console_handle_one();
-        twdt_feed();
+#ifdef CONFIG_TASK_WDT
+        esp_task_wdt_reset();
+#endif
     }
 }
 

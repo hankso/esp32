@@ -12,7 +12,6 @@
 
 #include "esp_attr.h"
 #include "esp_camera.h"
-#include "esp_task_wdt.h"
 #include "esp_intr_alloc.h"
 #include "soc/soc_caps.h"
 #include "driver/ledc.h"
@@ -155,14 +154,14 @@ static void adc_initialize() {
         if (( err = adc1_config_channel_atten(chan, adc.atten) )) break;
     }
     if (!err) err = adc1_config_width(adc.width);
-#   ifdef TARGET_ESP32
+#   ifdef CONFIG_IDF_TARGET_ESP32
     if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_VREF)) {
         ESP_LOGI(TAG, "ADC: eFuse VRef not supported");
     } else {
         ESP_LOGD(TAG, "ADC: eFuse VRef supported");
     }
 #   endif
-#   if defined(TARGET_ESP32) || defined(TARGET_ESP32S3)
+#   if defined(CONFIG_IDF_TARGET_ESP32) || defined(CONIFG_IDF_TARGET_ESP32S3)
     if (esp_adc_cal_check_efuse(ESP_ADC_CAL_VAL_EFUSE_TP)) {
         ESP_LOGI(TAG, "ADC: eFuse Two Point not supported");
     } else {
@@ -296,19 +295,23 @@ esp_err_t dac_cwave(uint32_t v) { return ESP_ERR_NOT_SUPPORTED; NOTUSED(v); }
 #endif
 
 /******************************************************************************
- * PWM by LEDC
+ * PWM by hardware LEDC
  */
+
+// LEDC_TIMER_0 and LEDC_CHANNEL_0 is for LED
 
 #define SPEED_MODE  LEDC_LOW_SPEED_MODE
 
-#define SERVO_TMR   LEDC_TIMER_1
-#define SERVO_RES   LEDC_TIMER_10_BIT
-#define SERVO_CHH   LEDC_CHANNEL_1
-#define SERVO_CHV   LEDC_CHANNEL_2
-
-#define BUZZER_TMR  LEDC_TIMER_2
+#define BUZZER_TMR  LEDC_TIMER_1
 #define BUZZER_RES  LEDC_TIMER_10_BIT
-#define BUZZER_CH   LEDC_CHANNEL_3
+#define BUZZER_CH   LEDC_CHANNEL_1
+
+#define SERVO_TMR   LEDC_TIMER_2
+#define SERVO_RES   LEDC_TIMER_10_BIT
+#define SERVO_CHH   LEDC_CHANNEL_2
+#define SERVO_CHV   LEDC_CHANNEL_3
+
+// LEDC_TIMER_3 and LEDC_CHANNEL_4 is for Camera XCLK
 
 static void pwm_initialize() {
 #ifdef CONFIG_BASE_USE_SERVO
@@ -320,24 +323,24 @@ static void pwm_initialize() {
         .clk_cfg            = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK( ledc_timer_config(&servo_conf) );
-    ledc_channel_config_t channel0_conf = {
+    ledc_channel_config_t hor_conf = {
         .gpio_num           = PIN_SVOH,
-        .speed_mode         = SPEED_MODE,
+        .speed_mode         = servo_conf.speed_mode,
         .channel            = SERVO_CHH,
-        .timer_sel          = SERVO_TMR,
+        .timer_sel          = servo_conf.timer_num,
         .hpoint             = 0,
         .duty               = 0
     };
-    ledc_channel_config_t channel1_conf = {
+    ledc_channel_config_t ver_conf = {
         .gpio_num           = PIN_SVOV,
-        .speed_mode         = SPEED_MODE,
+        .speed_mode         = servo_conf.speed_mode,
         .channel            = SERVO_CHV,
-        .timer_sel          = SERVO_TMR,
+        .timer_sel          = servo_conf.timer_num,
         .hpoint             = 0,
         .duty               = 0
     };
-    ESP_ERROR_CHECK( ledc_channel_config(&channel0_conf) );
-    ESP_ERROR_CHECK( ledc_channel_config(&channel1_conf) );
+    ESP_ERROR_CHECK( ledc_channel_config(&hor_conf) );
+    ESP_ERROR_CHECK( ledc_channel_config(&ver_conf) );
 #endif
 #ifdef CONFIG_BASE_USE_BUZZER
     ledc_timer_config_t buzzer_conf = {
@@ -348,19 +351,19 @@ static void pwm_initialize() {
         .clk_cfg            = LEDC_AUTO_CLK
     };
     ESP_ERROR_CHECK( ledc_timer_config(&buzzer_conf) );
-    ledc_channel_config_t channel2_conf = {
+    ledc_channel_config_t chan_conf = {
         .gpio_num           = PIN_BUZZ,
-        .speed_mode         = SPEED_MODE,
+        .speed_mode         = buzzer_conf.speed_mode,
         .channel            = BUZZER_CH,
-        .timer_sel          = BUZZER_TMR,
+        .timer_sel          = buzzer_conf.timer_num,
         .hpoint             = 0,
         .duty               = 0
     };
-    ESP_ERROR_CHECK( ledc_channel_config(&channel2_conf) );
+    ESP_ERROR_CHECK( ledc_channel_config(&chan_conf) );
 #endif
 }
 
-static esp_err_t pwm_set_duty(int channel, int duty) {
+static esp_err_t UNUSED pwm_set_duty(int channel, int duty) {
     esp_err_t err = ledc_set_duty(SPEED_MODE, channel, duty);
     if (!err) err = ledc_update_duty(SPEED_MODE, channel);
     return err;
@@ -436,300 +439,6 @@ esp_err_t pwm_get_tone(int *f, int *p) {
 #undef BUZZER_CH
 
 /******************************************************************************
- * Audio/Video sensors (I2S PDM MIC and SCCB/SMBus Camera)
- */
-
-ESP_EVENT_DEFINE_BASE(AVC_EVENT);
-
-#define AVC_POST(id, data, len, tout) \
-    esp_event_post(AVC_EVENT, id, data, len, TIMEOUT(tout))
-
-static UNUSED bool audio_run, video_run;
-static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
-
-#ifdef CONFIG_BASE_USE_I2S
-
-#ifdef TARGET_IDF_5
-static i2s_chan_handle_t i2s_handle;
-#   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
-#   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
-#   define I2S_READ(...)    i2c_channel_read(i2s_handle, __VA_ARGS__)
-#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
-#   define PDM_TYPE         int16_t
-#   ifdef CONFIG_BASE_PDM_STEREO
-#       define PDM_NCH      I2S_SLOT_MODE_STEREO
-#   else
-#       define PDM_NCH      I2S_SLOT_MODE_MONO
-#   endif
-
-static void i2s_initialize() {
-#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
-    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
-    i2s_pdm_rx_config_t pdm_conf = {
-        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
-        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
-        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
-    };
-#   undef DEFAULT
-    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
-    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
-}
-#else // TARGET_IDF_4
-#   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
-#   define I2S_RELEASE()    i2s_stop(NUM_I2S)
-#   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
-#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_BITS_PER_SAMPLE_16BIT / 8 )
-#   define PDM_TYPE         int16_t
-#   ifdef CONFIG_BASE_PDM_STEREO
-#       define PDM_NCH      I2S_CHANNEL_STEREO
-#       define PDM_FCH      I2S_CHANNEL_FMT_RIGHT_LEFT
-#   else
-#       define PDM_NCH      I2S_CHANNEL_MONO
-#       define PDM_FCH      I2S_CHANNEL_FMT_ONLY_RIGHT
-#   endif
-
-static void i2s_initialize() {
-    i2s_config_t i2s_conf = {
-        .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM,
-        .sample_rate            = PDM_SHZ,
-        .bits_per_sample        = PDM_BPC * 8,
-        .channel_format         = PDM_FCH,
-        .communication_format   = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL2,
-        .dma_buf_count          = 8,
-        .dma_buf_len            = 128,
-    };
-    i2s_pin_config_t pin_conf = {
-        .mck_io_num     = I2S_PIN_NO_CHANGE,
-        .bck_io_num     = I2S_PIN_NO_CHANGE,
-        .ws_io_num      = PIN_CLK,
-        .data_out_num   = I2S_PIN_NO_CHANGE,
-        .data_in_num    = PIN_DAT,
-    };
-    ESP_ERROR_CHECK( i2s_driver_install(NUM_I2S, &i2s_conf, 0, NULL) );
-    ESP_ERROR_CHECK( i2s_set_pin(NUM_I2S, &pin_conf) );
-    ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
-}
-#endif // TARGET_IDF_5
-
-static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
-    static char eqls[80 - 4 - 3 - 13];
-    FILE *stream = arg;
-    audio_evt_t *evt = *(audio_evt_t **)data;
-    if (id == AUD_EVENT_START) {
-        memset(eqls, '=', sizeof(eqls) - 1);
-        eqls[sizeof(eqls) - 1] = '\0';
-    } else if (id == AUD_EVENT_STOP) {
-        fputc('\n', stream);
-        fflush(stream);
-    }
-    if (id != AUD_EVENT_DATA || evt->id % 10 || !evt->mode->nch) return;
-    size_t nch = evt->mode->nch, vmax = BIT(evt->mode->depth * 8 - 1);
-    size_t tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
-    PDM_TYPE *buf = evt->data, vol[nch], len[nch];
-    LOOPN(i, evt->len / nch / evt->mode->depth) {
-        LOOPN(j, nch) {
-            vol[j] = MAX(vol[j], ABS(buf[i * nch + j]));
-        }
-    }
-    fprintf(stream, "\r%s [", format_timestamp_us(0));
-    LOOPN(j, nch) {
-        vol[j] = vol[j] * 100 / vmax;           // 0 ~ 100
-        len[j] = vol[j] * tlen / 100;           // 0 ~ tlen
-        if (j) fputc('|', stream);
-        if (j % 2 || nch == 1) {
-            fprintf(stream, "%-3d%%%.*s%c%*s",
-                vol[j], len[j], eqls, vol[j] ? '+' : ' ', tlen - len[j], "");
-        } else {
-            fprintf(stream, "%*s%c%.*s%3d%%",
-                tlen - len[j], "", vol[j] ? '+' : ' ', len[j], eqls, vol[j]);
-        }
-    }
-    fputc(']', stream);
-    fflush(stream);
-}
-
-static void audio_capture(void *arg) {
-    audio_mode_t mode = { PDM_SHZ, PDM_NCH, PDM_BPC };
-    wav_header_t WAV = {
-        "RIFF", -1,
-        "WAVE",
-        "fmt ", WAV_HEADER_FMT_LEN,
-            0x01, mode.nch, mode.srate,
-            mode.nch * mode.depth * mode.srate,
-            mode.nch * mode.depth, mode.depth * 8,
-        "data", -1
-    };
-    size_t dlen = (uint64_t)WAV.Bps * (uint32_t)arg / 1000;
-    size_t rlen, plen = sizeof(void **), blen = WAV.Bps / 50; // 20ms buffer
-    WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;
-    audio_evt_t wav = { .len = sizeof(WAV), .data = &WAV };
-    audio_evt_t evt = { .data = malloc(blen), .mode = &mode };
-    void *dptr = &wav;
-    if (!evt.data) goto exit;
-    AVC_POST(AUD_EVENT_START, &dptr, plen, -1); msleep(10);
-    dptr = &evt;
-    I2S_ACQUIRE();
-    for (evt.id = 0; audio_run && dlen; evt.id++) {
-        if (I2S_READ(evt.data, blen, &rlen, TIMEOUT(25)) || !rlen) break;
-        dlen -= (evt.len = MIN(rlen, dlen));
-        AVC_POST(AUD_EVENT_DATA, &dptr, plen, 15);
-    }
-    I2S_RELEASE();
-    memset(dptr = &wav, 0, sizeof(wav));
-    AVC_POST(AUD_EVENT_STOP, &dptr, plen, -1); msleep(10);
-    UREGEVTS(AVC, aud_shdl);
-    TRYFREE(evt.data);
-exit:
-    vTaskDelete(NULL);
-}
-#   undef I2S_ACQUIRE
-#   undef I2S_RELEASE
-#   undef I2S_READ
-#   undef PDM_TYPE
-#   undef PDM_SHZ
-#   undef PDM_NCH
-#   undef PDM_BPC
-#endif // CONFIG_BASE_USE_I2S
-
-#ifdef CONFIG_BASE_USE_CAM
-static void cam_initialize() {
-    camera_config_t conf = {
-        // TODO
-    };
-    esp_err_t err = esp_camera_init(&conf);
-    if (!err) {
-        sensor_t *cam = esp_camera_sensor_get();
-        if (cam->id.PID == OV3660_PID) {
-            cam->set_brightness(cam, 1);
-            cam->set_saturation(cam, -2);
-        }
-        cam->set_framesize(cam, FRAMESIZE_HD);
-    } else {
-        ESP_LOGE(TAG, "Init camera failed: %s", esp_err_to_name(err));
-    }
-}
-
-static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
-    FILE *stream = arg;
-    video_evt_t *evt = *(video_evt_t **)data;
-    if (id == VID_EVENT_STOP) {
-        fputc('\n', stream);
-    } else if (id == VID_EVENT_DATA && (evt->id % evt->mode->fps) == 0) {
-        fprintf(stream, "\r%08d %dx%dx%d %.4s %dBytes",
-                evt->id, evt->mode->width, evt->mode->height,
-                evt->mode->depth, evt->mode->fourcc, evt->len);
-    }
-    fflush(stream);
-}
-
-static void video_capture(void *arg) {
-    sensor_t *cam = esp_camera_sensor_get();
-    if (!cam) return;
-    const resolution_info_t *res = resolution + cam->status.framesize;
-    video_mode_t mode = { 15, res->width, res->height, 3, "MJPG" }; // FIXME fps
-    uint32_t ms = (uint32_t)arg, retry = 5;
-    uint32_t BPF = mode.width * mode.height * mode.depth * 0.6; // BytePerFrame
-    avi_header_t AVI = {
-        "RIFF", -1,
-        "AVI ",
-        "LIST", AVI_HEADER_HDLR_LEN, "hdlr",
-            "avih", AVI_HEADER_AVIH_LEN,
-                1000000 / mode.fps, mode.fps * BPF, 0, 0x910, -1, 0, 1,
-                0x100000, mode.width, mode.height, { 0, 0, 0, 0 },
-        "LIST", AVI_HEADER_STRL_LEN, "strl",
-            "strh", AVI_HEADER_STRH_LEN,
-                "vids", "MJPG", 0, 0, 0, 0, 1, mode.fps, 0, -1,
-                BPF, -1, 0, 0, 0, mode.width, mode.height,
-            "strf", AVI_HEADER_STRF_LEN,
-                AVI_HEADER_STRF_LEN, mode.width, mode.height, 1,
-                mode.depth * 8, "MJPG", BPF, 0, 0, 0, 0,
-        "LIST", -1, "movi",
-    };
-    size_t nframe = ms * (ms == -1 ? 1 : mode.fps), plen = sizeof(void **);
-    AVI.total_frames = AVI.length = nframe;
-    camera_fb_t *fb = NULL;
-    video_evt_t avi = { .len = sizeof(AVI), .data = &AVI };
-    video_evt_t evt = { .data = NULL, .mode = &mode };
-    void *dptr = &avi;
-    AVC_POST(VID_EVENT_START, &dptr, plen, -1); msleep(10);
-    dptr = &evt;
-    vTaskResume(xTaskGetHandle("cam_task"));
-    for (evt.id = 0; video_run && retry && evt.id < nframe; evt.id++) {
-        if (evt.data && fb && fb->buf != evt.data) free(evt.data);
-        TRYNULL(fb, esp_camera_fb_return);
-        if (!( fb = esp_camera_fb_get() )) break;
-        if (fb->format == PIXFORMAT_JPEG) {
-            evt.data = fb->buf;
-            evt.len = fb->len;
-        } else if (!frame2jpg(fb, 80, (uint8_t **)&evt.data, &evt.len)) {
-            ESP_LOGE(TAG, "JPEG compression failed");
-            retry--;
-        }
-        AVC_POST(VID_EVENT_DATA, &dptr, plen, 33);
-    }
-    vTaskSuspend(xTaskGetHandle("cam_task"));
-    memset(dptr = &avi, 0, sizeof(avi));
-    AVC_POST(VID_EVENT_STOP, &dptr, plen, -1); msleep(10);
-    UREGEVTS(AVC, vid_shdl);
-    if (evt.data && fb && fb->buf != evt.data) free(evt.data);
-    TRYNULL(fb, esp_camera_fb_return);
-    vTaskDelete(NULL);
-}
-#endif // CONFIG_BASE_USE_CAM
-
-#undef AVC_POST
-
-esp_err_t avc_command(
-    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream
-) {
-    if (!targets) targets = AUDIO_TARGET | VIDEO_TARGET;
-    bool atgt = targets & AUDIO_TARGET, vtgt = targets & VIDEO_TARGET;
-    TaskHandle_t atask = xTaskGetHandle("audio");
-    TaskHandle_t vtask = xTaskGetHandle("video");
-    if (ctrl) {
-        if (!strbool(ctrl)) {
-            if (atgt) audio_run = false;
-            if (vtgt) video_run = false;
-            for (int ms = 10; ms && (atgt || vtgt); ms--) {
-                if (atgt && !xTaskGetHandle("audio")) atgt = false;
-                if (vtgt && !xTaskGetHandle("video")) vtgt = false;
-                msleep(ms);
-            }
-        } else {
-            void *arg = (void *)(tout_ms ?: (uint32_t)-1);
-#ifdef CONFIG_BASE_USE_I2S
-            if (atgt && !atask) {
-                audio_run = true;
-                xTaskCreate(audio_capture, "audio", 8192, arg, 20, &atask);
-                if (!atask) return ESP_ERR_NO_MEM;
-            }
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-            if (vtgt && !vtask) {
-                video_run = true;
-                xTaskCreate(video_capture, "video", 2048, arg, 20, &vtask);
-                if (!vtask) return ESP_ERR_NO_MEM;
-            }
-#endif
-        }
-    } else if (stream) {
-#ifdef CONFIG_BASE_USE_I2S
-        if (atgt && !aud_shdl) REGEVTS(AVC, aud_visual, stream, &aud_shdl);
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-        if (vtgt && !vid_shdl) REGEVTS(AVC, vid_visual, stream, &vid_shdl);
-#endif
-    } else {
-        printf("Audio Capture: %s\n", atask ? "enabled" : "disabled");
-        printf("Video Capture: %s\n", vtask ? "enabled" : "disabled");
-    }
-    return ESP_OK;
-}
-
-/******************************************************************************
  * SPI Master interface
  */
 
@@ -739,9 +448,10 @@ static void spi_initialize() {
         .mosi_io_num = PIN_MOSI,
         .miso_io_num = PIN_MISO,
         .sclk_io_num = PIN_SCLK,
-        .max_transfer_sz = 81920,
+        .quadwp_io_num = GPIO_NUM_NC,
+        .quadhd_io_num = GPIO_NUM_NC,
+        // FIXME: .max_transfer_sz = 81960,
         .flags = SPICOMMON_BUSFLAG_MASTER,
-        .intr_flags = 0
     };
     esp_err_t err = spi_bus_initialize(NUM_SPI, &buf_conf, SPI_DMA_CH_AUTO);
     if (err && err != ESP_ERR_INVALID_STATE)
@@ -962,6 +672,24 @@ static esp_err_t spi_gexp_get_level(gexp_num_t pin, bool *level, bool sync) {
 #endif
 
 #ifdef CONFIG_BASE_USE_GPIOEXP
+static void IRAM_ATTR UNUSED gexp_isr(void *arg) {
+#   ifdef CONFIG_BASE_GPIOEXP_INT
+    ets_printf("PIN_INT %s\n", gpio_get_level(PIN_INT) ? "RISE" : "FALL");
+#   endif
+#   ifdef CONFIG_BASE_GPIOEXP_I2C
+    LOOPN(i, LEN(i2c_pin_data)) {
+        if (i2c_gexp_get_level(PIN_I2C_BASE + i * 8, NULL, true)) continue;
+        ets_printf("I2C GPIOExp: %s\n", format_binary(i2c_pin_data[i], 1));
+    }
+#   endif
+#   ifdef CONFIG_BASE_GPIOEXP_SPI
+    if (spi_gexp_get_level(PIN_SPI_BASE, NULL, true)) return;
+    LOOPN(i, PIN_SPI_COUNT / 8) {
+        ets_printf("SPI GPIOExp: %s\n", format_binary(spi_pin_data[i], 1));
+    }
+#   endif
+}
+
 static void gexp_initialize() {
     esp_err_t err;
 #   ifdef CONFIG_BASE_GPIOEXP_I2C
@@ -1017,6 +745,29 @@ static void gexp_initialize() {
     err = spi_bus_add_device(NUM_SPI, &dev_conf, &spi_pin_hdl);
     if (err) ESP_LOGE(TAG, "SPI GPIOExp init error: %s", esp_err_to_name(err));
 #   endif
+#   ifdef CONFIG_BASE_GPIOEXP_INT
+    gpio_config_t int_conf = {
+        .pin_bit_mask = BIT64(PIN_INT),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_ANYEDGE,
+    };
+    if (!strcasecmp(Config.sys.INT_EDGE, "HIGH")) {
+        int_conf.intr_type = GPIO_INTR_HIGH_LEVEL;
+        int_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    } else if (!strcasecmp(Config.sys.INT_EDGE, "LOW")) {
+        int_conf.intr_type = GPIO_INTR_LOW_LEVEL;
+    } else if (!strcasecmp(Config.sys.INT_EDGE, "POS")) {
+        int_conf.intr_type = GPIO_INTR_POSEDGE;
+        int_conf.pull_down_en = GPIO_PULLDOWN_ENABLE;
+    } else if (!strcasecmp(Config.sys.INT_EDGE, "NEG")) {
+        int_conf.intr_type = GPIO_INTR_NEGEDGE;
+    }
+    ESP_ERROR_CHECK( gpio_config(&int_conf) );
+    ESP_ERROR_CHECK( gpio_install_isr_service(0) );
+    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gexp_isr, NULL) );
+#   endif
 }
 #endif
 
@@ -1024,8 +775,8 @@ static void gexp_initialize() {
  * GPIO Interrupt (inc. button & knob)
  */
 
-static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
-#if defined(TARGET_ESP32)
+static const char * gpio_default_usage[GPIO_PIN_COUNT] = {
+#if defined(CONFIG_IDF_TARGET_ESP32)
     [0]         = "Strapping PU",
     [2]         = "Strapping PD",
     [5]         = "Strapping PU",
@@ -1038,7 +789,7 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [16]        = "Flash D2WD",
     [17]        = "Flash D2WD",
     [20]        = "ESP32-PICO-V3",
-#elif defined(TARGET_ESP32S3)
+#elif defined(CONFIG_IDF_TARGET_ESP32S3)
     [0]         = "Strapping PU",
     [3]         = "Strapping Float",
     [19]        = "USB DN",
@@ -1077,27 +828,25 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_MOSI]  = "SPI MOSI",
     [PIN_SCLK]  = "SPI SCLK",
 #endif
-#ifdef PIN_CS0
+#ifdef CONFIG_BASE_USE_SDFS
     [PIN_CS0]   = "SPI CS0 (SDCard)",
 #endif
-#ifdef PIN_CS1
+#ifdef CONFIG_BASE_SCREEN_SPI
     [PIN_CS1]   = "SPI CS1 (Screen)",
+    [PIN_SDC]   = "SPI Screen D/C",
+#   if PIN_SRST != GPIO_NUM_NC
+    [PIN_SRST]  = "SPI Screen RESET",
+#   endif
 #endif
-#ifdef PIN_CS2
+#ifdef CONFIG_BASE_GPIOEXP_SPI
     [PIN_CS2]   = "SPI CS2 (GPIOExp)",
 #endif
-#ifdef CONFIG_BASE_SCREEN_SPI
-    [PIN_SDC]   = "SPI Screen D/C",
-#endif
-#ifdef CONFIG_BASE_GPIO_SCN_RST
-    [PIN_SRST]  = "SPI Screen RESET",
-#endif
-#ifdef CONFIG_BASE_USE_INT
-    [PIN_INT]   = "Interrupt",
+#ifdef CONFIG_BASE_GPIOEXP_INT
+    [PIN_INT]   = "GEXP INT",
 #endif
 #if defined(CONFIG_BASE_ADC_HALL_SENSOR)
-    [PIN_ADC1]  = "HALL sensor P",
-    [PIN_ADC2]  = "HALL sensor N",
+    [PIN_ADC1]  = "HALL Sensor P",
+    [PIN_ADC2]  = "HALL Sensor N",
 #elif defined(CONFIG_BASE_ADC_JOYSTICK)
     [PIN_ADC1]  = "Joystick X",
     [PIN_ADC2]  = "Joystick Y",
@@ -1115,12 +864,12 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
 #ifdef CONFIG_BASE_USE_TPAD
     [PIN_TPAD]  = "Touch",
 #endif
-#ifdef CONFIG_BASE_USE_BTN
+#ifdef CONFIG_BASE_BTN_INPUT
     [PIN_BTN]   = "Button",
 #endif
 #ifdef CONFIG_BASE_USE_KNOB
-    [PIN_ENCA]  = "Knob encoder A",
-    [PIN_ENCB]  = "Knob encoder B",
+    [PIN_ENCA]  = "Knob Encoder A",
+    [PIN_ENCB]  = "Knob Encoder B",
 #endif
 #ifdef CONFIG_BASE_USE_SERVO
     [PIN_SVOH]  = "Servo Yaw",
@@ -1130,6 +879,12 @@ static const char * const gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_BUZZ]  = "Buzzer",
 #endif
 };
+
+static bool gpio_usable(gpio_num_t pin) {
+    if (pin > GPIO_PIN_COUNT) return false;
+    if (!gpio_default_usage[pin]) return true;
+    return startswith(gpio_default_usage[pin], "Strapping");
+}
 
 #ifdef CONFIG_BASE_USE_BTN
 static button_handle_t btn[2];
@@ -1217,52 +972,7 @@ static void cb_knob(void *arg, void *data) {
 }
 #endif
 
-static void IRAM_ATTR UNUSED gpio_isr_endstop(void *arg) {
-#ifdef CONFIG_BASE_USE_INT
-    ets_printf("PIN_INT %s\n", gpio_get_level(PIN_INT) ? "RISE" : "FALL");
-#endif
-#ifdef CONFIG_BASE_GPIOEXP_I2C
-    LOOPN(i, LEN(i2c_pin_data)) {
-        if (i2c_gexp_get_level(PIN_I2C_BASE + i * 8, NULL, true)) continue;
-        ets_printf("I2C GPIOExp: %s\n", format_binary(i2c_pin_data[i], 1));
-    }
-#endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
-    if (spi_gexp_get_level(PIN_SPI_BASE, NULL, true)) return;
-    LOOPN(i, PIN_SPI_COUNT / 8) {
-        ets_printf("SPI GPIOExp: %s\n", format_binary(spi_pin_data[i], 1));
-    }
-#endif
-}
-
 static void gpio_initialize() {
-#ifdef CONFIG_BASE_USE_INT
-    gpio_config_t int_conf = {
-        .pin_bit_mask = BIT64(PIN_INT),
-        .mode         = GPIO_MODE_INPUT,
-#   if defined(CONFIG_BASE_INT_POSEDGE) || defined(CONFIG_BASE_INT_HIGH)
-        .pull_up_en   = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_ENABLE,
-#   else
-        .pull_up_en   = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-#   endif
-#   if defined(CONFIG_BASE_INT_NEGEDGE)
-        .intr_type    = GPIO_INTR_NEGEDGE,
-#   elif defined(CONFIG_BASE_INT_POSEDGE)
-        .intr_type    = GPIO_INTR_POSEDGE,
-#   elif defined(CONFIG_BASE_INT_ANYEDGE)
-        .intr_type    = GPIO_INTR_ANYEDGE,
-#   elif defined(CONFIG_BASE_INT_LOW)
-        .intr_type    = GPIO_INTR_LOW_LEVEL,
-#   elif defined(CONFIG_BASE_INT_HIGH)
-        .intr_type    = GPIO_INTR_HIGH_LEVEL,
-#   endif
-    };
-    ESP_ERROR_CHECK( gpio_config(&int_conf) );
-    ESP_ERROR_CHECK( gpio_install_isr_service(0) );
-    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr_endstop, NULL) );
-#endif
 #ifdef CONFIG_BASE_USE_KNOB
     knob_event_t events[] = { KNOB_LEFT, KNOB_RIGHT };
     knob_config_t knob_conf = {
@@ -1277,6 +987,7 @@ static void gpio_initialize() {
     }
 #endif
 #ifdef CONFIG_BASE_USE_BTN
+#   ifdef CONFIG_BASE_BTN_INPUT
     button_config_t btn_conf = {
         .type = BUTTON_TYPE_GPIO,
         .gpio_button_config = {
@@ -1285,17 +996,22 @@ static void gpio_initialize() {
         }
     };
     btn[0] = button_init(&btn_conf, PIN_BTN, cb_button);
-    if (startswith(gpio_default_usage[GPIO_NUM_0] ?: "", "Strapping")) {
-        btn_conf.gpio_button_config.gpio_num = GPIO_NUM_0;
-        btn_conf.gpio_button_config.active_level = 0;
-        btn[1] = button_init(&btn_conf, GPIO_NUM_0, cb_button);
+#   endif
+#   ifdef CONFIG_BASE_BTN_GPIO0
+    if (gpio_usable(GPIO_NUM_0)) {
+        button_config_t io0_conf = {
+            .type = BUTTON_TYPE_GPIO,
+            .gpio_button_config = { .gpio_num = GPIO_NUM_0 }
+        };
+        btn[1] = button_init(&io0_conf, GPIO_NUM_0, cb_button);
     }
+#   endif
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
     btn_conf.type = BUTTON_TYPE_ADC;
     btn_conf.long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20;
-#       ifdef TARGET_IDF_5
+#   ifdef TARGET_IDF_5
     btn_conf.adc_button_config.adc_handle = adc.oneshot;
-#       endif
+#   endif
     LOOPN(i, LEN(adc.chans)) {
         if (adc.chans[i] == ADC_CHANNEL_MAX) continue;
         btn_conf.adc_button_config.adc_channel = adc.chans[i];
@@ -1384,6 +1100,346 @@ void gpio_table(bool i2c, bool spi) {
 }
 
 /******************************************************************************
+ * Audio/Video sensors (I2S PDM MIC and SCCB/SMBus Camera)
+ */
+
+ESP_EVENT_DEFINE_BASE(AVC_EVENT);
+
+#define AVC_POST(id, data, len, tout) \
+    esp_event_post(AVC_EVENT, id, data, len, TIMEOUT(tout))
+
+static UNUSED bool audio_run, video_run;
+static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
+
+#ifdef CONFIG_BASE_USE_I2S
+
+#ifdef TARGET_IDF_5
+static i2s_chan_handle_t i2s_handle;
+#   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
+#   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
+#   define I2S_READ(...)    i2c_channel_read(i2s_handle, __VA_ARGS__)
+#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
+#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
+#   define PDM_TYPE         int16_t
+#   ifdef CONFIG_BASE_PDM_STEREO
+#       define PDM_NCH      I2S_SLOT_MODE_STEREO
+#   else
+#       define PDM_NCH      I2S_SLOT_MODE_MONO
+#   endif
+
+static void i2s_initialize() {
+#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
+    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
+    i2s_pdm_rx_config_t pdm_conf = {
+        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
+        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
+        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
+    };
+#   undef DEFAULT
+    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
+    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
+}
+#else // TARGET_IDF_4
+#   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
+#   define I2S_RELEASE()    i2s_stop(NUM_I2S)
+#   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
+#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
+#   define PDM_BPC          ( I2S_BITS_PER_SAMPLE_16BIT / 8 )
+#   define PDM_TYPE         int16_t
+#   ifdef CONFIG_BASE_PDM_STEREO
+#       define PDM_NCH      I2S_CHANNEL_STEREO
+#       define PDM_FCH      I2S_CHANNEL_FMT_RIGHT_LEFT
+#   else
+#       define PDM_NCH      I2S_CHANNEL_MONO
+#       define PDM_FCH      I2S_CHANNEL_FMT_ONLY_RIGHT
+#   endif
+
+static void i2s_initialize() {
+    i2s_config_t i2s_conf = {
+        .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM,
+        .sample_rate            = PDM_SHZ,
+        .bits_per_sample        = PDM_BPC * 8,
+        .channel_format         = PDM_FCH,
+        .communication_format   = I2S_COMM_FORMAT_STAND_I2S,
+        .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL2,
+        .dma_buf_count          = 8,
+        .dma_buf_len            = 128,
+    };
+    i2s_pin_config_t pin_conf = {
+        .mck_io_num     = I2S_PIN_NO_CHANGE,
+        .bck_io_num     = I2S_PIN_NO_CHANGE,
+        .ws_io_num      = PIN_CLK,
+        .data_out_num   = I2S_PIN_NO_CHANGE,
+        .data_in_num    = PIN_DAT,
+    };
+    ESP_ERROR_CHECK( i2s_driver_install(NUM_I2S, &i2s_conf, 0, NULL) );
+    ESP_ERROR_CHECK( i2s_set_pin(NUM_I2S, &pin_conf) );
+    ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
+}
+#endif // TARGET_IDF_5
+
+static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+    static char eqls[80 - 4 - 3 - 13];
+    FILE *stream = arg;
+    audio_evt_t *evt = *(audio_evt_t **)data;
+    if (id == AUD_EVENT_START) {
+        memset(eqls, '=', sizeof(eqls) - 1);
+        eqls[sizeof(eqls) - 1] = '\0';
+    } else if (id == AUD_EVENT_STOP) {
+        fputc('\n', stream);
+        fflush(stream);
+    }
+    if (id != AUD_EVENT_DATA || evt->id % 10 || !evt->mode->nch) return;
+    size_t nch = evt->mode->nch, vmax = BIT(evt->mode->depth * 8 - 1);
+    size_t tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
+    PDM_TYPE *buf = evt->data, vol[nch], len[nch];
+    LOOPN(i, evt->len / nch / evt->mode->depth) {
+        LOOPN(j, nch) {
+            vol[j] = MAX(vol[j], ABS(buf[i * nch + j]));
+        }
+    }
+    fprintf(stream, "\r%s [", format_timestamp_us(0));
+    LOOPN(j, nch) {
+        vol[j] = vol[j] * 100 / vmax;           // 0 ~ 100
+        len[j] = vol[j] * tlen / 100;           // 0 ~ tlen
+        if (j) fputc('|', stream);
+        if (j % 2 || nch == 1) {
+            fprintf(stream, "%-3d%%%.*s%c%*s",
+                vol[j], len[j], eqls, vol[j] ? '+' : ' ', tlen - len[j], "");
+        } else {
+            fprintf(stream, "%*s%c%.*s%3d%%",
+                tlen - len[j], "", vol[j] ? '+' : ' ', len[j], eqls, vol[j]);
+        }
+    }
+    fputc(']', stream);
+    fflush(stream);
+}
+
+static void audio_capture(void *arg) {
+    audio_mode_t mode = { PDM_SHZ, PDM_NCH, PDM_BPC };
+    wav_header_t WAV = {
+        "RIFF", -1,
+        "WAVE",
+        "fmt ", WAV_HEADER_FMT_LEN,
+            0x01, mode.nch, mode.srate,
+            mode.nch * mode.depth * mode.srate,
+            mode.nch * mode.depth, mode.depth * 8,
+        "data", -1
+    };
+    size_t dlen = (uint64_t)WAV.Bps * (uint32_t)arg / 1000;
+    size_t rlen, plen = sizeof(void **), blen = WAV.Bps / 50; // 20ms buffer
+    WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;
+    audio_evt_t wav = { .len = sizeof(WAV), .data = &WAV };
+    audio_evt_t evt = { .data = malloc(blen), .mode = &mode };
+    void *dptr = &wav;
+    if (!evt.data) goto exit;
+    AVC_POST(AUD_EVENT_START, &dptr, plen, -1); msleep(10);
+    dptr = &evt;
+    I2S_ACQUIRE();
+    for (evt.id = 0; audio_run && dlen; evt.id++) {
+        if (I2S_READ(evt.data, blen, &rlen, TIMEOUT(25)) || !rlen) break;
+        dlen -= (evt.len = MIN(rlen, dlen));
+        AVC_POST(AUD_EVENT_DATA, &dptr, plen, 15);
+    }
+    I2S_RELEASE();
+    memset(dptr = &wav, 0, sizeof(wav));
+    AVC_POST(AUD_EVENT_STOP, &dptr, plen, -1); msleep(10);
+    UREGEVTS(AVC, aud_shdl);
+    TRYFREE(evt.data);
+exit:
+    vTaskDelete(NULL);
+}
+#   undef I2S_ACQUIRE
+#   undef I2S_RELEASE
+#   undef I2S_READ
+#   undef PDM_TYPE
+#   undef PDM_SHZ
+#   undef PDM_NCH
+#   undef PDM_BPC
+#endif // CONFIG_BASE_USE_I2S
+
+#ifdef CONFIG_BASE_USE_CAM
+static void cam_initialize() {
+    esp_err_t err = ESP_OK;
+    static const char *pin_names[14] = {
+        "CAM PWDN", "CAM RESET", "CAM XCLK",
+        "CAM VSYNC", "CAM HREF", "CAM PCLK",
+        "CAM D7", "CAM D6", "CAM D5", "CAM D4",
+        "CAM D3", "CAM D2", "CAM D1", "CAM D0",
+    };
+#   ifdef CONFIG_BASE_CAM_CUSTOM
+#       define P(name) CONFIG_BASE_GPIO_CAM_##NAME
+    int pins[LEN(pin_names)] = {
+        P(PWDN), P(RESET), P(XCLK), P(VSYNC), P(HREF), P(PCLK),
+        P(D7), P(D6), P(D5), P(D4), P(D3), P(D2), P(D1), P(D0)
+    };
+#       undef P
+#   else
+    int pins[LEN(pin_names)];
+    if (parse_all(CONFIG_BASE_CAM_PINS, pins, LEN(pins)) != LEN(pins)) {
+        ESP_LOGE(TAG, "Could not parse CAM pins: %s", CONFIG_BASE_CAM_PINS);
+        err = ESP_ERR_INVALID_ARG;
+    }
+#   endif
+    LOOPN(i, LEN(pins)) {
+        if (pins[i] == -1) {
+            if (i >= 2) err = ESP_ERR_INVALID_ARG;
+        } else if (gpio_usable(pins[i])) {
+            gpio_default_usage[pins[i]] = pin_names[i];
+        } else {
+            ESP_LOGE(TAG, "Invalid %s pin: %d", pin_names[i], pins[i]);
+            err = ESP_ERR_INVALID_ARG;
+        }
+    }
+    if (err) return;
+    camera_config_t conf = {
+        .pin_pwdn = pins[0], .pin_reset = pins[1], .pin_xclk = pins[2],
+        .pin_sccb_sda = -1, .pin_sccb_scl = -1, .sccb_i2c_port = NUM_I2C,
+        .pin_vsync = pins[3], .pin_href = pins[4], .pin_pclk = pins[5],
+        .pin_d7 = pins[6],  .pin_d6 = pins[7],
+        .pin_d5 = pins[8],  .pin_d4 = pins[9],
+        .pin_d3 = pins[10], .pin_d2 = pins[11],
+        .pin_d1 = pins[12], .pin_d0 = pins[13],
+        .xclk_freq_hz = 20000000, // 20MHz
+        .ledc_timer = LEDC_TIMER_3,
+        .ledc_channel = LEDC_CHANNEL_4,
+        .pixel_format = PIXFORMAT_JPEG,
+        .frame_size = FRAMESIZE_QSXGA, // init as large buffer as possible
+        .jpeg_quality = 10,
+        .fb_count = 2,
+        .fb_location = CAMERA_FB_IN_PSRAM,
+        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
+    };
+    if (( err = esp_camera_init(&conf) )) {
+        ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(err));
+    } else {
+        sensor_t *cam = esp_camera_sensor_get();
+        if (cam->id.PID == OV3660_PID) {
+            cam->set_brightness(cam, 1);
+            cam->set_saturation(cam, -2);
+        }
+        cam->set_framesize(cam, FRAMESIZE_HD);
+    }
+}
+
+static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+    FILE *stream = arg;
+    video_evt_t *evt = *(video_evt_t **)data;
+    if (id == VID_EVENT_STOP) {
+        fputc('\n', stream);
+    } else if (id == VID_EVENT_DATA && (evt->id % evt->mode->fps) == 0) {
+        fprintf(stream, "\r%08d %dx%dx%d %.4s %dBytes",
+                evt->id, evt->mode->width, evt->mode->height,
+                evt->mode->depth, evt->mode->fourcc, evt->len);
+    }
+    fflush(stream);
+}
+
+static void video_capture(void *arg) {
+    sensor_t *cam = esp_camera_sensor_get();
+    if (!cam) return;
+    const resolution_info_t *res = resolution + cam->status.framesize;
+    video_mode_t mode = { 15, res->width, res->height, 3, "MJPG" }; // FIXME fps
+    uint32_t ms = (uint32_t)arg, retry = 5;
+    uint32_t BPF = mode.width * mode.height * mode.depth * 0.6; // BytePerFrame
+    avi_header_t AVI = {
+        "RIFF", -1,
+        "AVI ",
+        "LIST", AVI_HEADER_HDLR_LEN, "hdlr",
+            "avih", AVI_HEADER_AVIH_LEN,
+                1000000 / mode.fps, mode.fps * BPF, 0, 0x910, -1, 0, 1,
+                0x100000, mode.width, mode.height, { 0, 0, 0, 0 },
+        "LIST", AVI_HEADER_STRL_LEN, "strl",
+            "strh", AVI_HEADER_STRH_LEN,
+                "vids", "MJPG", 0, 0, 0, 0, 1, mode.fps, 0, -1,
+                BPF, -1, 0, 0, 0, mode.width, mode.height,
+            "strf", AVI_HEADER_STRF_LEN,
+                AVI_HEADER_STRF_LEN, mode.width, mode.height, 1,
+                mode.depth * 8, "MJPG", BPF, 0, 0, 0, 0,
+        "LIST", -1, "movi",
+    };
+    size_t nframe = ms * (ms == -1 ? 1 : mode.fps), plen = sizeof(void **);
+    AVI.total_frames = AVI.length = nframe;
+    camera_fb_t *fb = NULL;
+    video_evt_t avi = { .len = sizeof(AVI), .data = &AVI };
+    video_evt_t evt = { .data = NULL, .mode = &mode };
+    void *dptr = &avi;
+    AVC_POST(VID_EVENT_START, &dptr, plen, -1); msleep(10);
+    dptr = &evt;
+    vTaskResume(xTaskGetHandle("cam_task"));
+    for (evt.id = 0; video_run && retry && evt.id < nframe; evt.id++) {
+        if (evt.data && fb && fb->buf != evt.data) free(evt.data);
+        TRYNULL(fb, esp_camera_fb_return);
+        if (!( fb = esp_camera_fb_get() )) break;
+        if (fb->format == PIXFORMAT_JPEG) {
+            evt.data = fb->buf;
+            evt.len = fb->len;
+        } else if (!frame2jpg(fb, 80, (uint8_t **)&evt.data, &evt.len)) {
+            ESP_LOGE(TAG, "JPEG compression failed");
+            retry--;
+        }
+        AVC_POST(VID_EVENT_DATA, &dptr, plen, 33);
+    }
+    vTaskSuspend(xTaskGetHandle("cam_task"));
+    memset(dptr = &avi, 0, sizeof(avi));
+    AVC_POST(VID_EVENT_STOP, &dptr, plen, -1); msleep(10);
+    UREGEVTS(AVC, vid_shdl);
+    if (evt.data && fb && fb->buf != evt.data) free(evt.data);
+    TRYNULL(fb, esp_camera_fb_return);
+    vTaskDelete(NULL);
+}
+#endif // CONFIG_BASE_USE_CAM
+
+#undef AVC_POST
+
+esp_err_t avc_command(
+    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream
+) {
+    if (!targets) targets = AUDIO_TARGET | VIDEO_TARGET;
+    bool atgt = targets & AUDIO_TARGET, vtgt = targets & VIDEO_TARGET;
+    TaskHandle_t atask = xTaskGetHandle("audio");
+    TaskHandle_t vtask = xTaskGetHandle("video");
+    if (ctrl) {
+        if (!strbool(ctrl)) {
+            if (atgt) audio_run = false;
+            if (vtgt) video_run = false;
+            for (int ms = 10; ms && (atgt || vtgt); ms--) {
+                if (atgt && !xTaskGetHandle("audio")) atgt = false;
+                if (vtgt && !xTaskGetHandle("video")) vtgt = false;
+                msleep(ms);
+            }
+        } else {
+            void *arg = (void *)(tout_ms ?: (uint32_t)-1);
+#ifdef CONFIG_BASE_USE_I2S
+            if (atgt && !atask) {
+                audio_run = true;
+                xTaskCreate(audio_capture, "audio", 8192, arg, 20, &atask);
+                if (!atask) return ESP_ERR_NO_MEM;
+            }
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+            if (vtgt && !vtask) {
+                video_run = true;
+                xTaskCreate(video_capture, "video", 2048, arg, 20, &vtask);
+                if (!vtask) return ESP_ERR_NO_MEM;
+            }
+#endif
+        }
+    } else if (stream) {
+#ifdef CONFIG_BASE_USE_I2S
+        if (atgt && !aud_shdl) REGEVTS(AVC, aud_visual, stream, &aud_shdl);
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+        if (vtgt && !vid_shdl) REGEVTS(AVC, vid_visual, stream, &vid_shdl);
+#endif
+    } else {
+        printf("Audio Capture: %s\n", atask ? "enabled" : "disabled");
+        printf("Video Capture: %s\n", vtask ? "enabled" : "disabled");
+    }
+    return ESP_OK;
+}
+
+/******************************************************************************
  * Task Watchdog
  */
 
@@ -1407,14 +1463,6 @@ static void twdt_initialize() {
 #endif // CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPUx
 }
 
-esp_err_t twdt_feed() {
-#ifdef CONFIG_TASK_WDT
-    return esp_task_wdt_reset();
-#else
-    return ESP_OK;
-#endif
-}
-
 void driver_initialize() {
     const char * tags[] = {
         "gpio", "button", "adc button", "led_indicator", "Knob"
@@ -1422,6 +1470,7 @@ void driver_initialize() {
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 
     uart_initialize();
+    twdt_initialize();
     pwm_initialize();
 #ifdef CONFIG_BASE_USE_ADC
     adc_initialize();
@@ -1448,5 +1497,4 @@ void driver_initialize() {
 #ifdef CONFIG_BASE_USE_CAM
     cam_initialize();
 #endif
-    twdt_initialize();
 }

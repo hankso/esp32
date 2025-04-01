@@ -22,6 +22,16 @@
       "type": "string",
       "pattern": "^[01yn]?$"
     },
+    "sys.int.edge": {
+      "description": "Select interrupt type",
+      "enum": [
+        "NEG",
+        "POS",
+        "ANY",
+        "LOW",
+        "HIGH"
+      ]
+    },
     "sys.usb.mode": {
       "description": "Select USB work mode",
       "enum": [

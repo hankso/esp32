@@ -57,28 +57,12 @@ try:
 except Exception:
     cv2 = None
 
-
-# these are default values
-__basedir__ = op.dirname(op.abspath(__file__))
-__codedir__ = op.join(__basedir__, 'main')
-__nvsfile__ = op.join(__basedir__, 'nvs_flash.csv')
-__partcsv__ = op.join(__basedir__, 'partitions.csv')
-__projcmk__ = op.join(__basedir__, 'CMakeLists.txt')
-__compcmk__ = op.join(__codedir__, 'CMakeLists.txt')
-__nvsdist__ = op.join(__basedir__, 'build', 'nvs.bin')
-__certpem__ = op.join(__basedir__, 'files', 'data', 'server.pem')
-__distdir__ = (tuple(filter(
-    lambda p: op.isdir(p) and os.listdir(p),
-    [
-        op.join(__basedir__, 'webpage', 'dist'),
-        op.join(__basedir__, 'files', 'www'),
-        op.join(__basedir__, 'files'),
-    ]
-)) or [__basedir__])[0]
-
-
 PORT = 9999
+ROOT_DIR = op.dirname(op.abspath(__file__))
 IDF_PATH = env['IDF_PATH'] if op.isdir(env.get('IDF_PATH', '')) else ''
+
+
+def fromroot(*a): return op.join(ROOT_DIR, *a)
 
 
 def execute(cmd, **kwargs):
@@ -103,7 +87,7 @@ def execute(cmd, **kwargs):
         return output.strip()
 
 
-def load_gitignore(start=__basedir__):
+def load_gitignore(start=ROOT_DIR):
     path, parent = start, op.dirname(start)
     while path != parent:
         ignore = op.join(path, '.gitignore')
@@ -153,7 +137,7 @@ def random_id(len=8):
 
 def project_name():
     try:
-        with open(__projcmk__, encoding='utf8') as f:
+        with open(fromroot('CMakeLists.txt'), encoding='utf8') as f:
             content = f.read()
         return re.findall(r'project\((\w+)[ \)]', content)[0]
     except Exception:
@@ -166,10 +150,11 @@ def firmware_url(filename='app.bin', port=PORT):
 
 
 def process_nvs(args):
+    partcsv = fromroot('partitions.csv')
     try:
         assert not args.offset or not args.size
         args.offset, args.size = '0xB000', '0x4000'
-        with open(__partcsv__, encoding='utf8') as f:
+        with open(partcsv, encoding='utf8') as f:
             for line in f.readlines():
                 if line.startswith('#') or not line.strip():
                     continue
@@ -181,7 +166,7 @@ def process_nvs(args):
     except AssertionError:
         pass
     except Exception as e:
-        print('Parse', __partcsv__, 'failed:', e)
+        print('Parse', partcsv, 'failed:', e)
     argv_backup, stdout_backup = sys.argv[:], sys.stdout
     if args.quiet:
         sys.stdout = None
@@ -240,9 +225,9 @@ def font_output(args):
     if args.out:
         out = args.out
     elif args.bin:
-        out = op.join(__basedir__, 'files', 'data', 'chinese')
+        out = fromroot('files', 'data', 'chinese')
     else:
-        out = op.join(__basedir__, 'main', 'scnfont.c')
+        out = fromroot('main', 'scnfont.c')
     dirname, basename = op.split(out)
     if args.bin and not basename.startswith('lv_font'):
         basename = 'lv_font_' + basename
@@ -252,7 +237,7 @@ def font_output(args):
 
 
 def font_icon(args):
-    lvgldir = op.join(__basedir__, 'managed_components', 'lvgl__lvgl')
+    lvgldir = fromroot('managed_components', 'lvgl__lvgl')
     if not op.exists(lvgldir):
         return ''
     fontdir = op.join(lvgldir, 'scripts', 'built_in_font')
@@ -302,7 +287,7 @@ def genfont(args):
     '''
     symbols = set()
     tpl = re.compile(r'[\u4E00-\u9FA5]')  # chinese characters
-    for root, dirs, files in walk_exclude(__codedir__):
+    for root, dirs, files in walk_exclude(fromroot('main')):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp')), files):
             with open(op.join(root, fn), encoding='utf8') as f:
                 symbols.update(tpl.findall(f.read()))
@@ -392,18 +377,19 @@ def find_includes(components, headers):
 
 def update_dependencies(comps):
     '''overwrite main/CMakeLists.txt REQUIRES field'''
-    if not op.isfile(__compcmk__):
+    compcmk = fromroot('main', 'CMakeLists.txt')
+    if not op.isfile(compcmk):
         return
     tpl = re.compile(r'REQUIRES ([\w\- ]+)')
     try:
-        with open(__compcmk__, encoding='utf8') as f:
+        with open(compcmk, encoding='utf8') as f:
             old_content = f.read()
         new_content = tpl.sub('REQUIRES ' + ' '.join(sorted(
             set(comps).union(tpl.findall(old_content)[0].split())
         )), old_content)
         if new_content == old_content:
             return
-        with open(__compcmk__, 'w', encoding='utf8') as f:
+        with open(compcmk, 'w', encoding='utf8') as f:
             f.write(new_content)
     except Exception as e:
         print('Update main/CMakeLists.txt failed:', e)
@@ -412,12 +398,12 @@ def update_dependencies(comps):
 def gendeps(args):
     headers = set()
     tpl = re.compile(r'# *include *["<]([\w\.\-/]+)[>"]')
-    for root, dirs, files in walk_exclude(__codedir__):
+    for root, dirs, files in walk_exclude(fromroot('main')):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp', '.h')), files):
             with open(op.join(root, fn), encoding='utf8') as f:
                 headers.update(tpl.findall(f.read()))
     try:
-        headers.difference_update(os.listdir(op.join(__codedir__, 'include')))
+        headers.difference_update(os.listdir(fromroot('main', 'include')))
     except Exception as e:
         print('Skip local headers failed:', e)
     if not op.isdir(IDF_PATH):
@@ -434,7 +420,7 @@ def gendeps(args):
                 headers.remove(header)
     except Exception as e:
         print('Skip libc headers failed:', e)
-    find_includes(op.join(__basedir__, 'managed_components'), headers)  # skip
+    find_includes(fromroot('managed_components'), headers)  # skip
     comps = find_includes(op.join(IDF_PATH, 'components'), headers)
     comps.update(find_includes(op.join(IDF_PATH, '..', 'components'), headers))
     comps = sorted(comps, key=lambda v: len(v))
@@ -446,15 +432,13 @@ def gendeps(args):
 def prebuild(args):
     print('-- Running prebuild scripts (%s) ...' % __file__)
     try:
-        os.unlink(op.join(
-            __basedir__, 'managed_components',
-            'espressif__elf_loader', '.component_hash'
-        ))
+        os.unlink(fromroot(
+            'managed_components', 'espressif__elf_loader', '.component_hash'))
     except Exception:
         pass
     try:
-        srcdir = op.join(__basedir__, 'webpage')
-        dstdir = op.join(__basedir__, 'files', 'www')
+        srcdir = fromroot('webpage')
+        dstdir = fromroot('files', 'www')
         rebuild = 'pnpm run -C "%s" build' % srcdir
         last_build = op.getmtime(dstdir) + 10
         for root, dirs, files in walk_exclude(srcdir):
@@ -469,6 +453,117 @@ def prebuild(args):
         print('Rebuild webpage failed', e)
     args.quiet = True
     gendeps(args)
+
+
+def sdkconfig(args):
+    try:
+        with open(fromroot('sdkconfig')) as f:
+            configs = f.read().splitlines()
+        with open(fromroot('sdkconfig.defaults')) as f:
+            defaults = f.read().splitlines()
+    except Exception:
+        pass
+    tpl = re.compile(r'(.*)=n')
+    for line in defaults:
+        if not line.strip() or line.startswith('#') or tpl.sub(
+            lambda m: '# ' + m.groups()[0] + ' is not set', line
+        ) in configs:
+            continue
+        print(line, 'is set but has no effect')
+
+
+def size_components(quiet=False, files=False, **k):
+    idfsize = op.join(IDF_PATH, 'tools', 'idf_size.py')
+    mapfile = fromroot('build', project_name() + '.map')
+    if not op.isfile(idfsize):
+        return print('idf_size.py not found. Did you run esp-idf/export?')
+    if not op.isfile(mapfile):
+        return print(op.basename(mapfile) + ' not found. Did you build?')
+    tpl = [re.compile(i) for i in (r'lib(.*)\.a', r'lib_a-(.*)', r'(.*)\.obj')]
+    try:
+        comps = json.loads(execute([
+            sys.executable, idfsize, mapfile, '--json',
+            '--files' if files else '--archives'
+        ], quiet=quiet))
+        for comp in list(comps):
+            if not any(comps[comp].values()):
+                comps.pop(comp)
+                continue
+            chunks = comp.replace('espressif__', 'esp-').split(':')
+            for i, c in enumerate(chunks):
+                for r in tpl:
+                    c = r.sub(lambda m: m.groups()[0], c)
+                chunks[i] = c
+            comps[':'.join(chunks)] = comps.pop(comp)
+    except Exception as e:
+        return print('Parse sizes failed:', e)
+    return comps
+
+
+def sort_components(comps, sort='flash_total', **k):
+    FIELDS = {
+        '.dram0.bss': 'DRAM bss',
+        '.dram0.data': 'DRAM data',
+        '.iram0.text': 'IRAM text',
+        #  '.iram0.vectors': 'IRAM vectors',
+        'ram_st_total': 'RAM total',
+        #  '.rtc.text': 'RTC text',
+        #  '.rtc.data': 'RTC data',
+        #  '.rtc_noinit': 'RTC noinit',
+        '.flash.text': 'FLASH text',
+        '.flash.rodata': 'FLASH rodata',
+        #  '.flash.rodata_noload': 'FLASH rodata_noload',
+        #  '.flash.appdesc': 'FLASH app desc',
+        'flash_total': 'FLASH total',
+    }
+    try:
+        sort = sort.lower()
+        keys = [i.lower() for i in FIELDS.keys()]
+        vals = [i.lower() for i in FIELDS.values()]
+        if sort.isdigit():
+            field = list(FIELDS)[int(sort)]
+        elif sort in keys:
+            field = list(FIELDS)[keys.index(sort)]
+        elif sort in vals:
+            field = list(FIELDS)[vals.index(sort)]
+        else:
+            raise
+        names = sorted(comps, key=lambda c: comps[c].get(field, 0), reverse=1)
+    except Exception:
+        names = sorted(comps)
+    order, last = [], ''
+    for field, printable in list(FIELDS.items()):
+        vsum = sum(comps[comp].get(field, 0) for comp in comps)
+        if not vsum:
+            continue
+        vlen = len(str(vsum))
+        chunks = printable.split()
+        if len(chunks) > 1:
+            chunks[1] = '& ' + chunks[1]
+        if chunks[0] == last:
+            order.append([field, chunks[1], vsum, max(vlen, len(chunks[1]))])
+        else:
+            last = chunks[0]
+            order.append([field, printable, vsum, max(vlen, len(printable))])
+    return order, {i: comps[i] for i in names}
+
+
+def blame(args):
+    try:
+        comps = size_components(quiet=args.quiet, files=args.files)
+        order, comps = sort_components(comps, sort=args.sort)
+    except Exception:
+        return
+    nlen = max(map(len, comps))
+    print('%-*.*s ' % (nlen, nlen, 'Archive') + ' '.join(
+        '%*s' % (vlen, printable) for f, printable, v, vlen in order))
+    print('%-*.*s ' % (nlen, nlen, 'Total') + ' '.join(
+        '%*d' % (vlen, vsum) for f, p, vsum, vlen in order))
+    for comp in comps:
+        print('%-*s ' % (nlen, comp) + ' '.join(
+            '%*d' % (vlen, comps[comp].get(field, 0))
+            for field, p, v, vlen in order
+        ))
 
 
 def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
@@ -917,6 +1012,15 @@ def make_parser():
     subparsers = parser.add_subparsers(
         prog='', title='Supported Commands are', metavar='')
 
+    certpem = fromroot('files', 'data', 'server.pem')
+    distdir = [
+        p for p in [
+            fromroot('webpage', 'dist'),
+            fromroot('files', 'www'),
+            fromroot('files'),
+            fromroot()
+        ] if op.isdir(p) and os.listdir(p)
+    ][0]
     sparser = subparsers.add_parser(
         'serve', help='Python implemented WebServer to debug (see server.h)')
     sparser.add_argument(
@@ -924,7 +1028,7 @@ def make_parser():
     sparser.add_argument(
         '-P', '--port', type=int, default=PORT, help='default %d' % PORT)
     sparser.add_argument(
-        '--certfile', default=__certpem__, help='cert file for HTTPS server')
+        '--certfile', default=certpem, help='cert file for HTTPS server')
     sparser.add_argument(
         '--esphost', type=str, help='IP address of ESP chip')
     sparser.add_argument(
@@ -932,8 +1036,16 @@ def make_parser():
     sparser.add_argument(
         '--static', action='count', help='disable ESP32 API, only statics')
     sparser.add_argument(
-        'root', nargs='?', default=__distdir__, help='path to static files')
+        'root', nargs='?', default=distdir, help='path to static files')
     sparser.set_defaults(func=webserver)
+
+    sparser = subparsers.add_parser(
+        'blame', help='Call idf_size.py to analyze memory and flash usage')
+    sparser.add_argument(
+        '-s', '--sort', default='', help='sort result by field name or index')
+    sparser.add_argument(
+        '--files', action='store_true', help='list files instead of archives')
+    sparser.set_defaults(func=blame)
 
     sparser = subparsers.add_parser(
         'search', help='Query mDNS (UDP multicast) to find alive ESP32 chip')
@@ -947,12 +1059,14 @@ def make_parser():
         '--timeout', type=float, default=3, help='search duration in sec')
     sparser.set_defaults(func=search)
 
+    nvsfile = fromroot('nvs_flash.csv')
+    nvsdist = fromroot('build', 'nvs.bin')
     sparser = subparsers.add_parser(
         'gencfg', help='Generate unique ID with NVS flash template')
     sparser.add_argument(
-        '--tpl', default=__nvsfile__, help='render nvs from template')
+        '--tpl', default=nvsfile, help='render nvs from template')
     sparser.add_argument(
-        '--pack', default=__nvsdist__, help='package into nvs binary file')
+        '--pack', default=nvsdist, help='package into nvs binary file')
     sparser.add_argument(
         '--flash', metavar='COM', help='flash NVS binary to specified port')
     sparser.add_argument(
@@ -980,14 +1094,19 @@ def make_parser():
     sparser.set_defaults(func=gendeps)
 
     sparser = subparsers.add_parser(
-        'prebuild', help='Automatically executed by CMakeLists.txt')
+        'prebuild', help='Automatically called by CMakeLists.txt')
     sparser.set_defaults(func=prebuild)
+
+    sparser = subparsers.add_parser(
+        'sdkconfig', help='Fix sdkconfig.defaults files')
+    sparser.set_defaults(func=sdkconfig)
 
     return parser
 
 
 def main(args=sys.argv[1:]):
-    args = make_parser().parse_args(args)
+    args, argv = make_parser().parse_known_args(args)
+    args.unknown_args = argv
     return args.func(args)
 
 

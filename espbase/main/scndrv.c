@@ -59,19 +59,19 @@ static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
             .pull_down_en   = GPIO_PULLDOWN_ENABLE,
             .intr_type      = GPIO_INTR_DISABLE,
         };
-        if (ctx.cs != PIN_UNUSED)   conf.pin_bit_mask |= BIT(ctx.cs);
-        if (ctx.dc != PIN_UNUSED)   conf.pin_bit_mask |= BIT(ctx.dc);
-        if (ctx.rst != PIN_UNUSED)  conf.pin_bit_mask |= BIT(ctx.rst);
+        if (ctx.cs != GPIO_NUM_NC)  conf.pin_bit_mask |= BIT(ctx.cs);
+        if (ctx.dc != GPIO_NUM_NC)  conf.pin_bit_mask |= BIT(ctx.dc);
+        if (ctx.rst != GPIO_NUM_NC) conf.pin_bit_mask |= BIT(ctx.rst);
         if (conf.pin_bit_mask) return gpio_config(&conf);
     }   break;
     case U8X8_MSG_GPIO_CS:
-        if (ctx.cs != PIN_UNUSED)  { gpio_set_level(ctx.cs, arg); } break;
+        if (ctx.cs != GPIO_NUM_NC)  { gpio_set_level(ctx.cs, arg); } break;
     case U8X8_MSG_GPIO_RESET:
-        if (ctx.rst != PIN_UNUSED) { gpio_set_level(ctx.rst, arg); } break;
+        if (ctx.rst != GPIO_NUM_NC) { gpio_set_level(ctx.rst, arg); } break;
     case U8X8_MSG_GPIO_I2C_CLOCK:
-        if (ctx.scl != PIN_UNUSED) { gpio_set_level(ctx.scl, arg); } break;
+        if (ctx.scl != GPIO_NUM_NC) { gpio_set_level(ctx.scl, arg); } break;
     case U8X8_MSG_GPIO_I2C_DATA:
-        if (ctx.sda != PIN_UNUSED) { gpio_set_level(ctx.sda, arg); } break;
+        if (ctx.sda != GPIO_NUM_NC) { gpio_set_level(ctx.sda, arg); } break;
     case U8X8_MSG_DELAY_MILLI: msleep(arg); break;
     }
     return 0;
@@ -82,7 +82,7 @@ static uint8_t u8g2_i2c_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     static i2c_cmd_handle_t cmd;
     switch (msg) {
     case U8X8_MSG_BYTE_SET_DC:
-        if (ctx.dc != PIN_UNUSED)  { gpio_set_level(ctx.dc, arg); } break;
+        if (ctx.dc != GPIO_NUM_NC) { gpio_set_level(ctx.dc, arg); } break;
     case U8X8_MSG_BYTE_START_TRANSFER: {
         esp_err_t err = i2c_master_start(cmd = i2c_cmd_link_create());
         if (err) return err;
@@ -103,7 +103,7 @@ static uint8_t u8g2_spi_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     static spi_device_handle_t spi_hdl;
     switch (msg) {
     case U8X8_MSG_BYTE_SET_DC:
-        if (ctx.dc != PIN_UNUSED) { gpio_set_level(ctx.dc, arg); } break;
+        if (ctx.dc != GPIO_NUM_NC) { gpio_set_level(ctx.dc, arg); } break;
     case U8X8_MSG_BYTE_INIT: {
         const spi_device_interface_config_t conf = {
             .mode           = ctx.mode,
@@ -276,7 +276,7 @@ int lvgl_ui_cmd(scn_cmd_t cmd, const char *arg); // defined in scnlvgl.c
 
 void screen_initialize() {
     if (ctx.probed) return;
-    ctx.sda = ctx.scl = ctx.cs = ctx.dc = ctx.rst = PIN_UNUSED;
+    ctx.sda = ctx.scl = ctx.cs = ctx.dc = ctx.rst = GPIO_NUM_NC;
 #if defined(CONFIG_BASE_SCREEN_SPI)             // SPI Screen
     ctx.speed = CONFIG_BASE_SCREEN_SPI_SPEED;
     ctx.mode = CONFIG_BASE_SCREEN_SPI_MODE;

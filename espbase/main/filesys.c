@@ -39,8 +39,8 @@ static void filesys_exit(filesys_dev_t *dev) {
         if (!esp_vfs_spiffs_unregister(dev->part))
 #   endif
         {
-            dev->type = 0;
-            dev->mp = dev->part = NULL;
+            dev->type  = 0;
+            dev->mp    = dev->part = NULL;
             dev->wlhdl = WL_INVALID_HANDLE;
         }
     }
@@ -49,7 +49,7 @@ static void filesys_exit(filesys_dev_t *dev) {
     if (dev->type == FILESYS_SDCARD) {
         if (!esp_vfs_fat_sdcard_unmount(dev->mp, dev->card)) {
             dev->type = 0;
-            dev->mp = NULL;
+            dev->mp   = NULL;
             dev->card = NULL;
         }
     }
@@ -68,7 +68,7 @@ static esp_err_t filesys_init(
 #ifdef CONFIG_BASE_USE_SDFS
     if (type == FILESYS_SDCARD) {
         mp = mp ?: CONFIG_BASE_SDFS_MP;
-        part = NULL;
+        part = "";
     }
 #endif
     if (!strlen(part)) part = NULL;
@@ -81,25 +81,25 @@ static esp_err_t filesys_init(
 #   ifdef CONFIG_BASE_FFS_FAT
         esp_vfs_fat_mount_config_t conf = {
             .format_if_mount_failed = false,
-            .max_files = 10,
-            .allocation_unit_size = CONFIG_WL_SECTOR_SIZE
+            .max_files              = 10,
+            .allocation_unit_size   = CONFIG_WL_SECTOR_SIZE
         };
         esp_err_t err = esp_vfs_fat_spiflash_mount(mp, part, &conf, &wlhdl);
 #   else
         esp_vfs_spiffs_conf_t conf = {
-            .base_path = mp,
-            .partition_label = part,
-            .max_files = 10,
+            .base_path              = mp,
+            .partition_label        = part,
+            .max_files              = 10,
             .format_if_mount_failed = false
         };
         esp_err_t err = esp_vfs_spiffs_register(&conf);
 #   endif
         if (!err) {
             filesys_exit(dev);
-            dev->mp = mp;
-            dev->part = part;
+            dev->mp    = mp;
+            dev->part  = part;
             dev->wlhdl = wlhdl;
-            dev->type = type;
+            dev->type  = type;
             ESP_LOGI(TAG, "FlashFS mounted %s to %s", dev->part, dev->mp);
         }
         return err;
@@ -110,19 +110,37 @@ static esp_err_t filesys_init(
         esp_log_level_set("sdspi_transaction", ESP_LOG_WARN);
         sdmmc_card_t *card = NULL;
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
-        sdspi_device_config_t spi = {
-            .host_id   = host.slot = NUM_SPI,
-            .gpio_cs   = PIN_CS0,
-            .gpio_cd   = SDSPI_SLOT_NO_CD,
-            .gpio_wp   = SDSPI_SLOT_NO_WP,
-            .gpio_int  = SDSPI_SLOT_NO_INT,
-        };
         esp_vfs_fat_mount_config_t mount = {
             .format_if_mount_failed = false,
             .max_files = 10,
             .allocation_unit_size = 16 * 1024,
         };
+#   ifdef CONFIG_BASE_SDFS_SPI
+        sdspi_device_config_t spi = {
+            .host_id  = host.slot = NUM_SPI,
+            .gpio_cs  = PIN_CS0,
+            .gpio_cd  = SDSPI_SLOT_NO_CD,
+            .gpio_wp  = SDSPI_SLOT_NO_WP,
+            .gpio_int = SDSPI_SLOT_NO_INT,
+        };
         esp_err_t err = esp_vfs_fat_sdspi_mount(mp, &host, &spi, &mount, &card);
+#   else
+        sdmmc_device_config_t mmc = {
+            .clk   = CONFIG_BASE_GPIO_MMC_CLK,
+            .cmd   = CONFIG_BASE_GPIO_MMC_CMD,
+            .d0    = CONFIG_BASE_GPIO_MMC_D0,
+#       ifdef CONFIG_BASE_SDFS_MMC_4LINE
+            .d1    = CONFIG_BASE_GPIO_MMC_D1,
+            .d2    = CONFIG_BASE_GPIO_MMC_D2,
+            .d3    = CONFIG_BASE_GPIO_MMC_D3,
+            .width = 4,
+#       else
+            .width = 1,
+#       endif
+            .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
+        };
+        esp_err_t err = esp_vfs_fat_sdmmc_mount(mp, &host, &mmc, &mount, &card);
+#   endif
         if (!err) {
             filesys_exit(dev);
             dev->mp = mp;

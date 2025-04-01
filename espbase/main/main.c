@@ -47,9 +47,5 @@ void app_main(void) {
     server_initialize();
 
     led_set_blink(0);
-#ifdef CONFIG_BASE_DEBUG
-    console_loop_begin(1);      // run REPL on Core 1 and stop maintask
-#else
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
-#endif
 }

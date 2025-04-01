@@ -28,9 +28,9 @@
 #   define ERR_NOT_SUPPORTED    ESP_ERR_NOT_SUPPORTED
 #elif __has_include("lvgl.h") && _WIN32
 #   define WITH_LVGL
-#   define LOGI(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
-#   define LOGW(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
-#   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", __VA_ARGS__)
+#   define LOGI(fmt, ...)       fprintf(stderr, fmt "\n", ##__VA_ARGS__)
+#   define LOGW(fmt, ...)       fprintf(stderr, fmt "\n", ##__VA_ARGS__)
+#   define LOGE(fmt, ...)       fprintf(stderr, fmt "\n", ##__VA_ARGS__)
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)
 #   define ACQUIRE(s, t)        ( (s) ? !WaitForSingleObject((s), (t)) : 0 )
 #   define RELEASE(s)           do { if (s) ReleaseMutex(s); } while (0)

@@ -12,6 +12,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+#include "esp_bt.h"
+#include "esp_bt_defs.h"
 #include "esp_bt_main.h"
 #include "esp_bt_device.h"
 #include "esp_hidd.h"
@@ -19,16 +21,14 @@
 #include "esp_gap_bt_api.h"
 #include "esp_gap_ble_api.h"
 
-#if !defined(CONFIG_BASE_BT_HID_DEVICE) && defined(CONFIG_BT_CLASSIC_ENABLED)
-#   undef CONFIG_BT_CLASSIC_ENABLED
-#endif
-#if !defined(CONFIG_BASE_BLE_HID_DEVICE) && defined(CONFIG_BT_BLE_ENABLED)
-#   undef CONFIG_BT_BLE_ENABLED
-#endif
-
 /******************************************************************************
  * Utilities
  */
+
+#define BDASTR              ESP_BD_ADDR_STR
+#define BDA2STR             ESP_BD_ADDR_HEX
+#define HAS_BT(m)           ( (m) & ESP_BT_MODE_CLASSIC_BT )
+#define HAS_BLE(m)          ( (m) & ESP_BT_MODE_BLE )
 
 #define BT_SCAN_DONE_BIT    BIT0
 #define BT_SCAN_BLOCK_BIT   BIT1
@@ -41,6 +41,9 @@
     ( esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_INITED )
 #define BT_ENABLED() \
     ( esp_bt_controller_get_status() == ESP_BT_CONTROLLER_STATUS_ENABLED )
+
+// defined in bthost.c
+esp_err_t bthost_connect(esp_bd_addr_t, esp_bt_dev_type_t, uint8_t);
 
 static struct {
     bool enabled;
@@ -59,11 +62,11 @@ static struct {
 static EventBits_t waitBits(EventBits_t bits, uint32_t ms) {
     // ClearOnExit = true, WaitForAllBits = false
     return ctx.evtgrp ? xEventGroupWaitBits(
-        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits : false;
+        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits : 0;
 }
 
 static EventBits_t getBits(EventBits_t bits) {
-    return ctx.evtgrp ? xEventGroupGetBits(ctx.evtgrp) & bits : false;
+    return ctx.evtgrp ? xEventGroupGetBits(ctx.evtgrp) & bits : 0;
 }
 
 static bool setBits(EventBits_t bits) {
@@ -154,6 +157,25 @@ static const char * uuid_str(esp_bt_uuid_t *uuid) {
  * BT & BLE scan
  */
 
+typedef struct scan_rst {
+    struct scan_rst *next;
+    char name[64];
+    int8_t rssi;
+    esp_bd_addr_t addr;
+    esp_bt_dev_type_t dev_type;
+    union {
+        struct {
+            uint32_t cod;
+            esp_bt_uuid_t uuid;
+        } bt;
+        struct {
+            uint16_t gatts_uuid;
+            uint16_t appearance;
+            esp_ble_addr_type_t addr_type;
+        } ble;
+    };
+} scan_rst_t;
+
 static scan_rst_t *s_devs;
 
 scan_rst_t *btmode_find_device(const char *name, uint8_t *bda) {
@@ -179,14 +201,13 @@ scan_rst_t *btmode_find_device(const char *name, uint8_t *bda) {
     return ptr;
 }
 
-static size_t scan_rst_num(scan_rst_t *ptr) {
+static size_t UNUSED scan_rst_num(scan_rst_t *ptr) {
     size_t num = 0;
-    ptr = ptr ?: s_devs;
-    while (ptr) { num++; ptr = ptr->next; }
+    for (ptr = ptr ?: s_devs; ptr; ptr = ptr->next) { num++; }
     return num;
 }
 
-static void scan_print_devinfo(scan_rst_t *devs, int count) {
+static void UNUSED scan_print_devinfo(scan_rst_t *devs, int count) {
     size_t maxlen = 16, num = 0, uuidlen = 2;
     scan_rst_t *ptr = devs;
     while (ptr && (count < 0 || num < count)) {
@@ -266,6 +287,7 @@ static void scan_print_devinfo(scan_rst_t *devs, int count) {
     }
 }
 
+#ifdef CONFIG_BT_CLASSIC_ENABLED
 static void bt_scan_done(bool verbose) {
     if (getBits(BT_SCAN_BLOCK_BIT)) {
         clearBits(BT_SCAN_BLOCK_BIT);
@@ -299,7 +321,9 @@ static esp_err_t bt_scan_entry(uint32_t tout_ms, bool verbose) {
     }
     return err;
 }
+#endif
 
+#ifdef CONFIG_BT_BLE_ENABLED
 static void ble_scan_done(bool verbose) {
     if (getBits(BLE_SCAN_BLOCK_BIT)) {
         clearBits(BLE_SCAN_BLOCK_BIT);
@@ -342,11 +366,13 @@ static esp_err_t ble_scan_entry(uint32_t tout_ms, bool verbose) {
     }
     return err;
 }
+#endif
 
 /******************************************************************************
  * BT & BLE GAP callback
  */
 
+#ifdef CONFIG_BT_CLASSIC_ENABLED
 static void bt_gap_cb(
     esp_bt_gap_cb_event_t event, esp_bt_gap_cb_param_t *param
 ) {
@@ -379,7 +405,7 @@ static void bt_gap_cb(
             } else if (prop->type == ESP_BT_GAP_DEV_PROP_EIR && prop->len) {
                 esp_bt_uuid_t *uuid = &dev->bt.uuid;
                 uint8_t len, *data;
-#define         EIR_DATA(type, size)                                        \
+#   define EIR_DATA(type, size)                                             \
                 ({                                                          \
                     data = esp_bt_gap_resolve_eir_data(                     \
                         prop->val, ESP_BT_EIR_TYPE_CMPL_##type, &len);      \
@@ -399,7 +425,7 @@ static void bt_gap_cb(
                 } else if (EIR_DATA(128BITS_UUID, ESP_UUID_LEN_128)) {
                     memcpy(uuid->uuid.uuid128, data, uuid->len = len);
                 }
-#undef          EIR_DATA
+#   undef EIR_DATA
             }
         }
         if (ptr != dev) {
@@ -439,7 +465,7 @@ static void bt_gap_cb(
             esp_bt_pin_code_t pin_code = { '1', '2', '3', '4' };
             esp_bt_gap_pin_reply(param->pin_req.bda, true, 4, pin_code);
         }
-#ifdef CONFIG_BT_SSP_ENABLED
+#   ifdef CONFIG_BT_SSP_ENABLED
     } else if (event == ESP_BT_GAP_CFM_REQ_EVT) {           // ESP_IO_CAP_IO
         ESP_LOGI(T, BDASTR " confirm request: %d",
                  BDA2STR(param->cfm_req.bda), param->cfm_req.num_val);
@@ -450,7 +476,7 @@ static void bt_gap_cb(
     } else if (event == ESP_BT_GAP_KEY_REQ_EVT) {           // ESP_IO_CAP_IN
         ESP_LOGI(T, BDASTR " enter passkey", BDA2STR(param->key_req.bda));
         // esp_bt_gap_ssp_passkey_rely(param->key_req.bda, true, 123456);
-#endif
+#   endif
     } else if (event == ESP_BT_GAP_READ_REMOTE_NAME_EVT) {
         if (param->read_rmt_name.stat != ESP_BT_STATUS_SUCCESS) {
             ESP_LOGE(T, BDASTR " read remote name failed",
@@ -469,7 +495,7 @@ static void bt_gap_cb(
                      param->read_rmt_name.rmt_name);
         }
     } else if (event == ESP_BT_GAP_MODE_CHG_EVT) {
-#ifdef CONFIG_BASE_DEBUG
+#   ifdef CONFIG_BASE_DEBUG
         const char * str;
         switch (param->mode_chg.mode) {
         case ESP_BT_PM_MD_ACTIVE:   str = "Active"; break;
@@ -479,11 +505,11 @@ static void bt_gap_cb(
         default:                    str = "Unknown"; break;
         }
         ESP_LOGI(T, "Mode changed to %s", str);
-#else
+#   else
         ESP_LOGI(T, "Mode changed to %d", param->mode_chg.mode);
-#endif
+#   endif
     } else {
-#ifdef CONFIG_BASE_DEBUG
+#   ifdef CONFIG_BASE_DEBUG
         const char * str;
         switch (event) {
         case ESP_BT_GAP_RMT_SRVC_REC_EVT:       str = "RMT_SRVC_REC"; break;
@@ -495,12 +521,14 @@ static void bt_gap_cb(
         default:                                str = "Unknown"; break;
         }
         ESP_LOGI(T, "Unhandled event %s", str);
-#else
+#   else
         ESP_LOGD(T, "Unhandled event %d", event);
-#endif
+#   endif
     }
 }
+#endif // CONFIG_BT_CLASSIC_ENABLED
 
+#ifdef CONFIG_BT_BLE_ENABLED
 static void ble_gap_cb(
     esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param
 ) {
@@ -520,13 +548,13 @@ static void ble_gap_cb(
             ESP_LOGD(T, "Scan timeout");
             ble_scan_done(true);
             break;
-#ifdef CONFIG_BASE_DEBUG
+#   ifdef CONFIG_BASE_DEBUG
         case ESP_GAP_SEARCH_DISC_RES_EVT:       ESP_LOGD(T, "DISC_RES"); break;
         case ESP_GAP_SEARCH_DISC_BLE_RES_EVT:   ESP_LOGD(T, "DISC_BLE"); break;
         case ESP_GAP_SEARCH_DISC_CMPL_EVT:      ESP_LOGD(T, "DISC_CMPL"); break;
         case ESP_GAP_SEARCH_DI_DISC_CMPL_EVT:   ESP_LOGD(T, "DI_CMPL"); break;
         case ESP_GAP_SEARCH_INQ_DISCARD_NUM_EVT: ESP_LOGD(T, "INQ_DIS"); break;
-#endif
+#   endif
         default: break;
         }
         if (param->scan_rst.search_evt != ESP_GAP_SEARCH_INQ_RES_EVT) return;
@@ -540,7 +568,7 @@ static void ble_gap_cb(
         dev->dev_type = param->scan_rst.dev_type;
         dev->ble.addr_type = param->scan_rst.ble_addr_type;
         uint8_t len, *data;
-#define ADV_DATA(type, size)                                                \
+#   define ADV_DATA(type, size)                                             \
         ({                                                                  \
             data = esp_ble_resolve_adv_data(                                \
                 param->scan_rst.ble_adv, ESP_BLE_AD_TYPE_##type, &len);     \
@@ -557,7 +585,7 @@ static void ble_gap_cb(
             memcpy(&dev->ble.gatts_uuid, data, len);
         if (ADV_DATA(APPEARANCE, sizeof(dev->ble.appearance)))
             memcpy(&dev->ble.appearance, data, len);
-#undef ADV_DATA
+#   undef ADV_DATA
         if (ptr != dev) {
             if (!( ptr = s_devs )) {
                 s_devs = dev;
@@ -581,7 +609,7 @@ static void ble_gap_cb(
         }
     } else if (event == ESP_GAP_BLE_KEY_EVT) {
         esp_ble_key_t *key = &param->ble_security.ble_key;
-#ifdef CONFIG_BASE_DEBUG
+#   ifdef CONFIG_BASE_DEBUG
         const char *kstr;
         switch (key->key_type) {
         case ESP_LE_KEY_NONE:   kstr = "NONE"; break;
@@ -596,10 +624,10 @@ static void ble_gap_cb(
         default:                kstr = "Unknown"; break;
         }
         ESP_LOGI(T, BDASTR " key type %s", BDA2STR(key->bd_addr), kstr);
-#else
+#   else
         ESP_LOGI(T, BDASTR " key type 0b%s",
                  BDA2STR(key->bd_addr), format_binary(key->key_type, 1));
-#endif
+#   endif
     } else if (event == ESP_GAP_BLE_NC_REQ_EVT) {           // ESP_IO_CAP_IO
         esp_ble_sec_key_notif_t *key = &param->ble_security.key_notif;
         ESP_LOGI(T, BDASTR " confirm passkey: %d",
@@ -621,6 +649,7 @@ static void ble_gap_cb(
         ESP_LOGD(T, "Unhandled event %d", event);
     }
 }
+#endif // CONFIG_BT_BLE_ENABLED
 
 esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     esp_err_t err = ESP_OK;
@@ -644,10 +673,10 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     }
 
     esp_bt_controller_config_t conf = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-#ifdef TARGET_ESP32
+#ifdef CONFIG_IDF_TARGET_ESP32
     conf.mode = mode;               // ignore CONFIG_BTDM_CTRL_MODE_XXX
 #endif
-#ifdef CONFIG_BASE_BT_HID_DEVICE
+#ifdef CONFIG_BT_CLASSIC_ENABLED
     if (HAS_BT(mode)) {
         conf.bt_max_acl_conn = 3;   // ignore CONFIG_BTDM_CTRL_MODE_XXX
         conf.bt_max_sync_conn = 3;
@@ -661,7 +690,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     char name[32] = { 0 };
     snprintf(name, sizeof(name), "%s-%s", Config.info.NAME, Config.info.UID);
 
-#ifdef CONFIG_BASE_BT_HID_DEVICE
+#ifdef CONFIG_BT_CLASSIC_ENABLED
     if (HAS_BT(mode)) {
         if (!err) err = esp_bt_dev_set_device_name(name);
         if (!err) err = esp_bt_gap_register_callback(bt_gap_cb);
@@ -673,7 +702,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 #   endif
     }
 #endif
-#ifdef CONFIG_BASE_BLE_HID_DEVICE
+#ifdef CONFIG_BT_BLE_ENABLED
     if (HAS_BLE(mode)) {
         if (!err) err = esp_ble_gap_set_device_name(name);
         if (!err) err = esp_ble_gap_register_callback(ble_gap_cb);
@@ -1034,10 +1063,10 @@ bool hidb_send_report(const hid_report_t *rpt) {
 
 esp_err_t btmode_scan(uint32_t timeout_ms) {
     esp_err_t err = ESP_OK;
-#   ifdef CONFIG_BASE_BT_HID_DEVICE
+#   ifdef CONFIG_BT_CLASSIC_ENABLED
     if (!err && HAS_BT(ctx.mode)) err = bt_scan_entry(timeout_ms, true);
 #   endif
-#   ifdef CONFIG_BASE_BLE_HID_DEVICE
+#   ifdef CONFIG_BT_BLE_ENABLED
     if (!err && HAS_BLE(ctx.mode)) err = ble_scan_entry(timeout_ms, true);
 #   endif
     return err;
@@ -1053,10 +1082,10 @@ esp_err_t btmode_config(bool c, bool d) {
     ctx.cmode = cmode;
     ctx.dmode = dmode;
     config_set("sys.bt.scan", d ? "1" : "0");
-#   ifdef CONFIG_BASE_BT_HID_DEVICE
+#   ifdef CONFIG_BT_CLASSIC_ENABLED
     if (HAS_BT(ctx.mode)) err = esp_bt_gap_set_scan_mode(cmode, dmode);
 #   endif
-#   ifdef CONFIG_BASE_BLE_HID_DEVICE
+#   ifdef CONFIG_BT_BLE_ENABLED
     if (HAS_BLE(ctx.mode)) {
         if (d) {
             ADV_ENABLE();
@@ -1069,13 +1098,22 @@ esp_err_t btmode_config(bool c, bool d) {
 }
 
 esp_err_t btmode_battery(uint8_t pcent) {
-#   ifdef CONFIG_BASE_BLE_HID_DEVICE
+#   ifdef CONFIG_BT_BLE_ENABLED
     if (!HAS_BLE(ctx.mode) || !ctx.enabled || !ctx.connected)
         return ESP_ERR_INVALID_STATE;
     return esp_hidd_dev_battery_set(ctx.hiddev, pcent);
 #   else
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(pcent);
 #   endif
+}
+
+esp_err_t btmode_connect(const char *name, uint8_t *bda) {
+    scan_rst_t *dev = btmode_find_device(name, bda);
+    if (!dev) return ESP_ERR_NOT_FOUND;
+    if (dev->dev_type == ESP_BT_DEVICE_TYPE_BLE &&
+        dev->ble.gatts_uuid && dev->ble.gatts_uuid != ESP_GATT_UUID_HID_SVC)
+        return ESP_ERR_INVALID_ARG;
+    return bthost_connect(dev->addr, dev->dev_type, dev->ble.addr_type);
 }
 
 #else
@@ -1088,6 +1126,9 @@ esp_err_t btmode_config(bool c, bool d) {
 }
 esp_err_t btmode_battery(uint8_t p) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(p);
+}
+esp_err_t btmode_connect(const char *n, uint8_t *b) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(n); NOTUSED(b);
 }
 
 #endif // CONFIG_BASE_USE_BT

@@ -8,11 +8,6 @@
 
 #include "globals.h"
 
-#if defined(CONFIG_BASE_VLX_SENSOR) && !__has_include("vl53l0x.h")
-#   warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
-#   undef CONFIG_BASE_VLX_SENSOR
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif

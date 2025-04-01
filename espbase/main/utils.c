@@ -342,11 +342,11 @@ void task_info(uint8_t sort_attr) {
 #   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
     LOOPN(i, num) { ulTotalRunTime += tasks[i].ulRunTimeCounter; }
 #   endif
-    printf("TID State Name            Pri CPU Used StackHW\n");
+    printf("TID State Name           Pri CPU Used StackHW\n");
     LOOPN(i, num) {
         if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
             taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
-        printf("%3d  (%c)  %-15s %2d  %3d %3d%% %7s\n",
+        printf("%3d  (%c)  %-15s %2d %3d %3d%% %7s\n",
                tasks[i].xTaskNumber, states[tasks[i].eCurrentState],
                taskname, tasks[i].uxCurrentPriority,
                tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
@@ -425,10 +425,11 @@ void hardware_info() {
         "Chip UID: %s-%s\n"
         "   Model: %s\n"
         "   Cores: %d\n"
-        "Revision: %d\n"
+        "Revision: %d.%d\n"
         "Features: %s %s flash%s%s%s%s\n",
         Config.info.NAME, Config.info.UID,
-        chip_model_str(info.model), info.cores, info.revision,
+        chip_model_str(info.model), info.cores,
+        info.revision, info.full_revision % 100, // full = major * 100 + minor
         format_size(spi_flash_get_chip_size(), false),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
         info.features & CHIP_FEATURE_EMB_PSRAM ? " | Embedded PSRAM" : "",

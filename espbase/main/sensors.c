@@ -393,6 +393,12 @@ static void mscn_initialize() {
  * Distance Measurement
  */
 
+// TODO: rewrite with SMBus APIs and remove dependency on revk/ESP32-VL53L0X
+#if defined(CONFIG_BASE_VLX_SENSOR) && !__has_include("vl53l0x.h")
+#   warning "Run `git clone git@github.com:revk/ESP32-VL53L0X`"
+#   undef CONFIG_BASE_VLX_SENSOR
+#endif
+
 #ifdef CONFIG_BASE_VLX_SENSOR
 #   include "vl53l0x.h"
 

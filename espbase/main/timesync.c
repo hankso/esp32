@@ -110,21 +110,26 @@ struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout) {
  * See more about specification at https://github.com/hankso/timesync
  */
 
-#if defined(TIMESYNC_THREAD_SAFE) && !defined(MUTEX)
-#   include "pthread.h"
-#   define MUTEX()          PTHREAD_MUTEX_INITIALIZER
-#   define ACQUIRE(s, t)    ( (s) ? pthread_mutex_lock(&(s)) : 0 )
-#   define RELEASE(s)       ( (s) ? pthread_mutex_unlock(&(s)) : 0 )
+#ifndef MUTEX
+#   if defined(TIMESYNC_THREAD_SAFE)
+#       include "pthread.h"
+#       define MUTEX()          PTHREAD_MUTEX_INITIALIZER
+#       define ACQUIRE(s, t)    ( (s) ? pthread_mutex_lock(&(s)) : 0 )
+#       define RELEASE(s)       ( (s) ? pthread_mutex_unlock(&(s)) : 0 )
+#   endif
+#   define LOG(L, T, F, ...)    fprintf(stderr, T ": " F "\n", ##__VA_ARGS__)
+#else
+#   define LOG(L, ...)          ESP_LOG##L(__VA_ARGS__)
 #endif
 
 static void * mutex = NULL;
 
 static void log_error(const char *tag, const int sock, const char *msg) {
+    const char *err = strerror(errno);
     if (sock < 0) {
-        ESP_LOGE(tag, "%s errno=%d %s", msg ?: "", errno, strerror(errno));
+        LOG(E, tag, "%s errno=%d %s", msg ?: "", errno, err);
     } else {
-        ESP_LOGE(tag, "%s sock=%d errno=%d %s",
-                 msg ?: "", sock, errno, strerror(errno));
+        LOG(E, tag, "%s sock=%d errno=%d %s", msg ?: "", sock, errno, err);
     }
 }
 
@@ -222,7 +227,7 @@ static void timesync_server_add(int fd) {
             setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (void *)&nodelay, nlen)
         ) break;
         strcpy(clients[i].addr, getaddrname(fd, false));
-        ESP_LOGI(TSS, "client %s connected", clients[i].addr);
+        LOG(I, TSS, "client %s connected", clients[i].addr);
         clients[i].fd = pollfds[i].fd = fd;
         pollfds[i].events = POLLIN;
         fd = 0; // added
@@ -231,7 +236,7 @@ static void timesync_server_add(int fd) {
     RELEASE(mutex);
     if (fd) { // not added
         close(fd);
-        ESP_LOGW(TSS, "client %s rejected", getaddrname(fd, false));
+        LOG(W, TSS, "client %s rejected", getaddrname(fd, false));
     }
 }
 
@@ -262,7 +267,7 @@ int timesync_server_init(uint16_t port) {
     if (!mutex && ( mutex = MUTEX() )) RELEASE(mutex);
 #endif
     if (server >= 0) return 0;
-    ESP_LOGD(TSS, "TimeSync Server init");
+    LOG(D, TSS, "TimeSync Server init");
     if (( server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP) ) == -1) {
         log_error(TSS, server, "socket");
         return -1;
@@ -280,7 +285,7 @@ int timesync_server_init(uint16_t port) {
     } else if (listen(server, 1)) {
         log_error(TSS, server, "listen");
     } else {
-        ESP_LOGI(TSS, "listening on port %d", ntohs(laddr.sin_port));
+        LOG(I, TSS, "listening on port %d", ntohs(laddr.sin_port));
         return 0;
     }
     timesync_server_close(&server);
@@ -326,8 +331,8 @@ static int timesync_server_handle(
         result->offset = (ts_recv + result->send) / 2 - ts_client_sync;
         // values calculated by server and client should approximately equal
         if (ABS(result->offset - ts_client_offset) > 0.1) {
-            ESP_LOGW(TSS, "%s unmatched offset. S: %f, C: %f",
-                    client->addr, result->offset, ts_client_offset);
+            LOG(W, TSS, "%s unmatched offset. S: %f, C: %f",
+                client->addr, result->offset, ts_client_offset);
             result->offset = 0;
         } else if (client->count == 1) {
             client->offset = result->offset;
@@ -338,7 +343,7 @@ static int timesync_server_handle(
         }
     } else {
         rcvbuf[msglen] = '\0';
-        ESP_LOGI(TSS, "client %s message: `%s`", client->addr, rcvbuf);
+        LOG(I, TSS, "client %s message: `%s`", client->addr, rcvbuf);
     }
     RELEASE(mutex);
     return 0;
@@ -384,11 +389,11 @@ int timesync_server_loop(uint16_t ms) {
             continue;
         }
         if (( msglen = recv(fd, rcvbuf, TIMESYNC_RCVBUF_SIZE, 0) ) <= 0) {
-            ESP_LOGI(TSS, "client %s closed", clients[i].addr);
+            LOG(I, TSS, "client %s closed", clients[i].addr);
             timesync_server_close(&clients[idx].fd);
         } else if (msglen < 8) {
             rcvbuf[msglen] = '\0';
-            ESP_LOGW(TSS, "client %s message: `%s`", clients[i].addr, rcvbuf);
+            LOG(W, TSS, "client %s message: `%s`", clients[i].addr, rcvbuf);
         } else {
             timesync_server_handle(&clients[idx], rcvbuf, msglen, ts_recv);
         }
@@ -405,7 +410,7 @@ int timesync_server_exit() {
         close(clients[i].fd);
     }
     RELEASE(mutex);
-    ESP_LOGD(TSS, "TimeSync Server exit");
+    LOG(D, TSS, "TimeSync Server exit");
     return 0;
 }
 
@@ -420,7 +425,7 @@ static timesync_client_t client = { 0 };
 int timesync_client_init(const char *host, uint16_t port) {
     if (client.fd == 0) client.fd = -1;
     if (client.fd >= 0) return 0;
-    ESP_LOGD(TSC, "TimeSync Client init");
+    LOG(D, TSC, "TimeSync Client init");
     char address[INET_ADDRSTRLEN];
     struct sockaddr_in raddr = {
         .sin_family = AF_INET,
@@ -451,7 +456,7 @@ int timesync_client_init(const char *host, uint16_t port) {
         log_error(TSC, client.fd, "connect");
     } else {
         strcpy(client.addr, getaddrname(client.fd, false));
-        ESP_LOGI(TSC, "using server %s", client.addr);
+        LOG(I, TSC, "using server %s", client.addr);
         return 0;
     }
     timesync_client_exit();
@@ -485,7 +490,7 @@ int timesync_client_sync(double *offset, uint8_t ack) {
     if (msglen < 0) return 1;
     if (msglen < 8 || strncmp(rcvbuf, "timesync", 8)) {
         rcvbuf[msglen] = '\0';
-        ESP_LOGI(TSC, "server message: `%s`", rcvbuf);
+        LOG(I, TSC, "server message: `%s`", rcvbuf);
         return 1;
     }
     // parse response to calculate timesync offset
@@ -528,6 +533,6 @@ int timesync_client_exit() {
     if (client.fd < 0) return 1;
     close(client.fd);
     client.fd = -1;
-    ESP_LOGD(TSC, "TimeSync Client exit");
+    LOG(D, TSC, "TimeSync Client exit");
     return 0;
 }

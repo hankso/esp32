@@ -8,7 +8,12 @@
 
 #ifdef CONFIG_BASE_USE_BT
 
+#include "esp_bt.h"
+#include "esp_bt_defs.h"
 #include "esp_hidh.h"
+
+#define BDASTR  ESP_BD_ADDR_STR
+#define BDA2STR ESP_BD_ADDR_HEX
 
 // defined in btdev.c
 esp_err_t bt_common_init(esp_bt_mode_t, bool);
@@ -110,23 +115,24 @@ void bthost_status(btmode_t mode) {
                    esp_hidh_dev_name_get(hiddev));
         }
     }
+#else
+    return; NOTUSED(mode);
+#endif
+}
+
+esp_err_t bthost_connect(
+    esp_bd_addr_t bda, esp_bt_dev_type_t devtype, uint8_t remote_addr_type
+) {
+#ifdef CONFIG_BASE_BLE_HID_HOST
+    if (hiddev || !hid_enabled) return ESP_ERR_INVALID_STATE;
+    return esp_hidh_dev_open(
+        bda, devtype == ESP_BT_DEVICE_TYPE_BLE
+            ? ESP_HID_TRANSPORT_BLE : ESP_HID_TRANSPORT_BT, remote_addr_type
+    ) ? ESP_OK : ESP_FAIL;
+#else
+    return ESP_ERR_NOT_SUPPORTED;
+    NOTUSED(bda); NOTUSED(transport); NOTUSED(remote_addr_type);
 #endif
 }
 
 #endif // CONFIG_BASE_USE_BT
-
-esp_err_t btmode_connect(scan_rst_t *dev) {
-#if defined(CONFIG_BASE_USE_BT) && defined(CONFIG_BASE_BLE_HID_HOST)
-    if (!dev) return ESP_ERR_INVALID_ARG;
-    if (hiddev || !hid_enabled) return ESP_ERR_INVALID_STATE;
-    esp_hid_transport_t transport = dev->dev_type == ESP_BT_DEVICE_TYPE_BLE
-        ? ESP_HID_TRANSPORT_BLE : ESP_HID_TRANSPORT_BT;
-    if (transport == ESP_HID_TRANSPORT_BLE) {
-        if (dev->ble.gatts_uuid && dev->ble.gatts_uuid != ESP_GATT_UUID_HID_SVC)
-            return ESP_ERR_INVALID_ARG;
-    }
-    return esp_hidh_dev_open(dev->addr, transport, dev->ble.addr_type) == NULL;
-#else
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(dev);
-#endif
-}

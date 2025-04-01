@@ -25,10 +25,6 @@
 #   undef CONFIG_BASE_USE_KNOB
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define _I2C_NUMBER(num) I2C_NUM_##num
 #define I2C_NUMBER(num) _I2C_NUMBER(num)
 
@@ -44,10 +40,21 @@ extern "C" {
 #define _GPIO_NUMBER(num) GPIO_NUM_##num
 #define GPIO_NUMBER(num) _GPIO_NUMBER(num)
 
-#define PIN_UNUSED      -1
-
 #ifdef CONFIG_BASE_USE_LED
-#   define PIN_LED      GPIO_NUMBER(CONFIG_BASE_GPIO_LED)
+#   if defined(CONFIG_BASE_CAM_ATCAM)
+#       define PIN_LED  GPIO_NUMBER(4)
+#   elif defined(CONFIG_BASE_BOARD_ESP32_DEVKIT)
+#       define PIN_LED  GPIO_NUMBER(2)
+#   elif defined(CONFIG_BASE_BOARD_ESP32S3_LUATOS)
+#       define PIN_LED  GPIO_NUMBER(10)
+#   elif defined(CONFIG_BASE_BOARD_ESP32S3_NOLOGO)
+#       define PIN_LED  GPIO_NUMBER(48)
+#       undef CONFIG_BASE_LED_MODE_GPIO
+#       undef CONFIG_BASE_LED_MODE_LEDC
+#       define CONFIG_BASE_LED_MODE_RMT
+#   else
+#       define PIN_LED  GPIO_NUMBER(CONFIG_BASE_GPIO_LED)
+#   endif
 #endif
 
 #ifdef CONFIG_BASE_USE_UART
@@ -64,13 +71,20 @@ extern "C" {
 #   define PIN_DAT      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_DAT)
 #endif
 
+
 #ifdef CONFIG_BASE_USE_I2C
 #   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
-#   ifdef CONFIG_BASE_USE_I2C0
+#   if defined(CONFIG_BASE_USE_CAM) && CONFIG_BASE_I2C_NUM == 0
+#       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_CAM_SDA)
+#       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_CAM_SCL)
+#   elif defined(CONFIG_BASE_USE_I2C0)
 #       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA0)
 #       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL0)
 #   endif
-#   ifdef CONFIG_BASE_USE_I2C1
+#   if defined(CONFIG_BASE_USE_CAM) && CONFIG_BASE_I2C_NUM == 1
+#       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_CAM_SDA)
+#       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_CAM_SCL)
+#   elif defined(CONFIG_BASE_USE_I2C1)
 #       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA1)
 #       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL1)
 #   endif
@@ -98,14 +112,14 @@ extern "C" {
 #   ifdef CONFIG_BASE_GPIO_SCN_RST
 #       define PIN_SRST GPIO_NUMBER(CONFIG_BASE_GPIO_SCN_RST)
 #   else
-#       define PIN_SRST PIN_UNUSED
+#       define PIN_SRST GPIO_NUM_NC
 #   endif
 #endif
 #ifdef CONFIG_BASE_GPIOEXP_SPI
 #   define PIN_CS2      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS2)
 #endif
 
-#ifdef CONFIG_BASE_USE_GPIOEXP
+#ifdef CONFIG_BASE_GPIOEXP_INT
 #   define PIN_INT      GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
 #endif
 
@@ -127,8 +141,10 @@ extern "C" {
 #   define PIN_TPAD     GPIO_NUMBER(CONFIG_BASE_GPIO_TPAD)
 #endif
 
-#ifdef CONFIG_BASE_USE_BTN
+#ifdef CONFIG_BASE_BTN_INPUT
 #   define PIN_BTN      GPIO_NUMBER(CONFIG_BASE_GPIO_BTN)
+#else
+#   define PIN_BTN      GPIO_NUM_NC
 #endif
 
 #ifdef CONFIG_BASE_USE_KNOB
@@ -145,9 +161,11 @@ extern "C" {
 #   define PIN_BUZZ     GPIO_NUMBER(CONFIG_BASE_GPIO_BUZZER)
 #endif
 
-void driver_initialize();
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-esp_err_t twdt_feed();
+void driver_initialize();
 
 int adc_hall(); // return 0 if error
 int adc_read(uint8_t idx); // return -1 if error, else measured mV

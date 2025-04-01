@@ -20,6 +20,7 @@ typedef struct config_system {
     const char * DIR_DOCS;  // Directory to generated documentation
     const char * DIR_HTML;  // Directory to static webpage files
     const char * BTN_HIGH;  // Button active high
+    const char * INT_EDGE;  // Select interrupt type
     const char * USB_MODE;  // Select USB work mode
     const char * BT_MODE;   // Select BT work mode
     const char * BT_SCAN;   // Bluetooth discoverable

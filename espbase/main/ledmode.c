@@ -16,9 +16,9 @@
 #endif
 
 #define SPEED_MODE  LEDC_LOW_SPEED_MODE
-#define TMR_LED     LEDC_TIMER_0
-#define RES_LED     LEDC_TIMER_13_BIT
-#define CH_LED      LEDC_CHANNEL_0
+#define LED_TMR     LEDC_TIMER_0
+#define LED_RES     LEDC_TIMER_13_BIT
+#define LED_CH      LEDC_CHANNEL_0
 
 static const char * TAG = "LEDMode";
 static led_blink_t state = LED_BLINK_RESET;
@@ -128,9 +128,9 @@ void led_initialize() {
     led_indicator_ledc_config_t ledc_conf = {
         .is_active_level_high = 1,
         .timer_inited = false,
-        .timer_num = TMR_LED,
+        .timer_num = LED_TMR,
         .gpio_num = PIN_LED,
-        .channel = CH_LED,
+        .channel = LED_CH,
     };
     led_indicator_config_t led_conf = {
         .mode = LED_LEDC_MODE,
@@ -192,8 +192,8 @@ static led_handle_t * led_handle;
 void led_initialize() {
     static led_handle_t local = {
         .mode = SPEED_MODE,
-        .timer = TMR_LED,
-        .channel = CH_LED,
+        .timer = LED_TMR,
+        .channel = LED_CH,
     };
 #   if defined(CONFIG_BASE_LED_MODE_GPIO)
     gpio_reset_pin(PIN_LED);
@@ -202,7 +202,7 @@ void led_initialize() {
     ledc_timer_config_t timer_conf = {
         .speed_mode         = local.mode,
         .timer_num          = local.timer,
-        .duty_resolution    = RES_LED,
+        .duty_resolution    = LED_RES,
         .freq_hz            = 5000,
         .clk_cfg            = LEDC_AUTO_CLK
     };
