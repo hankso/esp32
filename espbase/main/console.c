@@ -287,7 +287,7 @@ char * console_handle_rpc(const char *json) {
         ret = rpc_error(-32400, "System Error");
         goto exit;
     }
-    ESP_LOGI(TAG, "Get RPC command: `%s`", cmd);
+    ESP_LOGI(TAG, "Got RPC command: `%s`", cmd);
     tmp = console_handle_command(cmd, true, false);
     if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
         ret = rpc_response(cJSON_GetObjectItem(obj, "id"), tmp ?: "");

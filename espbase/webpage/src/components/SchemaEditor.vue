@@ -38,9 +38,7 @@ const schema = defineModel({
 const plain = ref('')
 const error = ref('')
 
-watch(schema, val => (plain.value = JSON.stringify(val, null, 4)), {
-    immediate: true,
-})
+watchEffect(() => (plain.value = JSON.stringify(toValue(schema), null, 4)))
 
 watch(
     plain,

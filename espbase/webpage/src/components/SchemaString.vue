@@ -7,7 +7,7 @@
         hide-details="auto"
         :clearable="!required"
         :model-value="value"
-        @update:model-value="updateLazy"
+        @update:model-value="debounce(update)"
         :append-inner-icon="!pass ? '' : show ? mdiEyeOff : mdiEye"
         @click:append-inner="show = !show"
     ></v-text-field>
@@ -45,8 +45,6 @@ const props = defineProps({
 const show = ref(false)
 
 const pass = computed(() => props.name.endsWith('pass'))
-
-const updateLazy = computed(() => debounce(props.update))
 
 function validator() {
     if (props.schema && !ajv.validate(props.schema, props.value))

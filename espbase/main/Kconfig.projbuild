@@ -298,6 +298,16 @@ menu "ESP Base Configuration"
                 range 1 80000000
                 default 20000000
         endif
+
+        config BASE_SCREEN_HRES
+            int "Screen horizontal Resolution in pixel"
+            default 128 if BASE_SCREEN_I2C
+            default 320 if BASE_SCREEN_SPI
+
+        config BASE_SCREEN_VRES
+            int "Screen vertical resolution in pixel"
+            default 64  if BASE_SCREEN_I2C
+            default 240 if BASE_SCREEN_SPI
     endif
 
     menuconfig BASE_USE_BTN
@@ -344,6 +354,7 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE & Bluedroid host"
+        depends on !BASE_CAM_ATCAM
         select BT_BLE_42_FEATURES_SUPPORTED if IDF_TARGET_ESP32S3
         select BT_BLE_DYNAMIC_ENV_MEMORY
         default n
@@ -504,6 +515,11 @@ menu "ESP Base Configuration"
             config BASE_SDFS_MMC_4LINE
                 bool "SDCard MMC 4-Line (CMD, CLK, D3...D0)"
         endchoice
+        config BASE_SDFS_MMC
+            int
+            default 0 if BASE_SDFS_SPI
+            default 1 if BASE_SDFS_MMC_1LINE
+            default 4 if BASE_SDFS_MMC_4LINE
     endif
 
     config BASE_USE_ELF
@@ -650,32 +666,32 @@ menu "ESP Base Configuration"
             default 23
     endif
 
-    if BASE_SDFS_MMC_1LINE || BASE_SDFS_MMC_4LINE
+    if BASE_SDFS_MMC > 0 && IDF_TARGET_ESP32S3
         config BASE_GPIO_MMC_D0
             int "MMC D0"
-            default 2
+            default 37
 
         if BASE_SDFS_MMC_4LINE
             config BASE_GPIO_MMC_D1
                 int "MMC D1"
-                default 4
+                default 38
 
             config BASE_GPIO_MMC_D2
                 int "MMC D2"
-                default 12
+                default 33
 
             config BASE_GPIO_MMC_D3
                 int "MMC D3"
-                default 13
+                default 34
         endif
 
         config BASE_GPIO_MMC_CLK
             int "MMC CLK"
-            default 14
+            default 36
 
         config BASE_GPIO_MMC_CMD
             int "MMC CMD"
-            default 15
+            default 35
     endif
 
     config BASE_GPIO_BTN

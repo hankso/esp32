@@ -6,9 +6,10 @@ defineProps({
         type: Array,
         default: () => [],
     },
+    useLink: Boolean,
 })
 
-const { useLink, isActive, guessIcon } = inject('TreeView')
+const { isActive, guessIcon } = inject('TreeView')
 </script>
 
 <template>
@@ -20,16 +21,17 @@ const { useLink, isActive, guessIcon } = inject('TreeView')
     <template v-for="(item, i) in items" :key="item.id">
         <v-divider v-if="i"></v-divider>
         <v-list-item
-            v-if="!item.children || !item.children.length"
+            v-if="!item.childs?.length"
             color="primary"
             :title="item.name"
-            :value="item.link ? item.link : item.name"
+            :value="item.link ?? item.name"
             :to="useLink ? `#${item.link}` : ''"
             :active="isActive(item)"
             :prepend-icon="guessIcon(item)"
         >
             <template #subtitle>
-                {{ item.date ? strftime('%F %T - ', item.date) : '' }}
+                {{ item.date ? strftime('%F %T', item.date) : '' }}
+                {{ item.date && item.size ? '-' : '' }}
                 {{ item.size ? formatSize(item.size) : '' }}
             </template>
         </v-list-item>
@@ -42,12 +44,12 @@ const { useLink, isActive, guessIcon } = inject('TreeView')
                     :prepend-icon="guessIcon(item)"
                 >
                     <template #subtitle>
-                        {{ item.children.length }} childs
+                        {{ item.childs.length }} childs
                     </template>
                 </v-list-item>
             </template>
             <!-- Rescursion call the component to create the tree -->
-            <TreeViewInner :items="item.children" />
+            <TreeViewInner :items="item.childs" :use-link />
         </v-list-group>
     </template>
 </template>

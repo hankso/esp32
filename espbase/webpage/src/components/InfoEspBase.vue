@@ -4,7 +4,7 @@ import { execCommand } from '@/apis'
 
 const notify = inject('notify', console.log)
 
-const mode = process.env.VITE_MODE
+const mode = import.meta.env.MODE
 const info = process.env.BUILD_INFO
 
 const runtime = ref({

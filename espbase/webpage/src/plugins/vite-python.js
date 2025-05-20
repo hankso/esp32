@@ -53,7 +53,7 @@ class PythonServer {
         )
     }
     logln(str) {
-        str.split('\n').forEach(line => this.log(line))
+        str.split('\n').forEach(line => line && this.log(line))
     }
     info() {
         if (this.verb) this.log(...arguments)
@@ -88,7 +88,7 @@ class PythonServer {
         return [
             green('  \u279c '),
             bold('Python: '),
-            cyan('http://' + host + bold(port)),
+            cyan(`http://${host}:${bold(port)}`),
             green(`(PID ${this.pid})`),
         ].join(' ')
     }

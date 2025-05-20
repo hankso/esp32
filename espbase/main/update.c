@@ -16,7 +16,7 @@
 
 static const char *TAG = "Update";
 
-static void UNUSED ota_fetch_task(void *arg) {
+static UNUSED void ota_fetch_task(void *arg) {
     if (wifi_sta_wait(arg ? *(uint16_t *)arg : 30000) == ESP_OK)
         ota_updation_url(NULL, false);
     vTaskDelete(NULL);
@@ -121,15 +121,16 @@ bool ota_updation_write(void *data, size_t size) {
         return false;
     }
     ctx.saved += size;
-    printf("\rProgress: %4d / %4d KB %3d%%",
-           ctx.saved / 1024, ctx.total / 1024,
-           100 * ctx.saved / (ctx.total ?: 1));
+    fprintf(stderr, "\rProgress: %4d / %4d KB %3d%%",
+            ctx.saved / 1024, ctx.total / 1024,
+            100 * ctx.saved / (ctx.total ?: 1));
+    fflush(stderr);
     return true;
 }
 
 bool ota_updation_end() {
     if (!ctx.handle) return false;
-    putchar('\n'); // enter newline after ota_updation_write progress
+    fputc('\n', stderr); // enter newline after ota_updation_write progress
     if (( ctx.error = esp_ota_end(ctx.handle) )) {
         ESP_LOGE(TAG, "OTA end error: %s", ota_updation_error());
     } else if (( ctx.error = esp_ota_set_boot_partition(ctx.target) )) {

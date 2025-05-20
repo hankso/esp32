@@ -4,6 +4,7 @@
         class="command-line fix-terminal"
         :key="forceUpdate"
         :name="title"
+        :theme="isDark ? 'dark' : 'light'"
         :title
         :context
         :init-log
@@ -25,9 +26,8 @@
 import { type, escape, strftime, get_monotonic } from '@/utils'
 
 import { Terminal, TerminalApi, TerminalFlash } from 'vue-web-terminal'
-import 'vue-web-terminal/lib/theme/dark.css'
 
-const emits = defineEmits(['keydown', 'click'])
+const emits = defineEmits(['keydn', 'click'])
 const props = defineProps({
     title: {
         type: String,
@@ -63,6 +63,8 @@ const flash = Object.fromEntries([[props.title, null]])
 const instance = ref(null)
 const forceUpdate = ref(0)
 const commandStore = ref([])
+
+const { isDark } = inject('theme', {})
 
 const context = computed(
     () => props.prompt ?? props.title.split(' ')[0].toLowerCase() + ' > '
@@ -122,11 +124,13 @@ function inputFilter(curChar, curString, e) {
 }
 
 function onKeydown(event, name) {
-    emits('keydown', event, name)
+    emits('keydn', event, name)
     if (!event.ctrlKey) return
     if (event.key === 'l') {
+        // Ctrl-l to clear screen
         TerminalApi.clearLog(name)
     } else if (event.key === 'C') {
+        // Ctrl-C to interrupt current command
         flash[name] = flash[name]?.finish()
         toValue(instance)
             .$el?.querySelector('.t-last-line input.t-cmd-input')
@@ -150,7 +154,7 @@ function onCommand(key, cmdline, success, failed, name) {
                     type: 'normal',
                     class: cls,
                     tag: cls,
-                    content: `This is logging level ${cls}`,
+                    content: `Logging at ${cls} level`,
                 })
             )
             return success()

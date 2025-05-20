@@ -15,7 +15,7 @@ static const char *TAG = "Sensor";
 #define bitread(v, o)       bitsread((v), (o), 1)
 
 static UNUSED uint8_t maskread(uint8_t val, uint8_t mask) {
-    static const uint8_t lowest_bitmap[] = { 0, 1, 2, 0, 3, 5, 0, 8, 4, 7, 6 };
+    const uint8_t lowest_bitmap[] = { 0, 1, 2, 0, 3, 5, 0, 8, 4, 7, 6 };
     return bitsread(val, lowest_bitmap[(mask & ~(mask - 1)) % 11], mask);
 }
 
@@ -189,7 +189,7 @@ esp_err_t tscn_probe(tscn_data_t *dat) {
     if (!err) err = smbus_read_byte(NUM_I2C, tscn, TP_GESTURE_ID, &dat->ges);
     if (!err && dat->num > LEN(dat->pts)) err = ESP_ERR_NO_MEM;
     if (err || !dat->num) return err;
-    static const uint8_t gvals[] = { 0x00, 0x10, 0x14, 0x18, 0x1C, 0x48, 0x49 };
+    const uint8_t gvals[] = { 0x00, 0x10, 0x14, 0x18, 0x1C, 0x48, 0x49 };
     uint8_t buf[6];
     LOOPN(i, dat->num) {
         if (( err = smbus_rregs(NUM_I2C, tscn, TP_P1_XH + 6 * i, buf, 6) ))
@@ -329,7 +329,7 @@ static esp_err_t ist3931_read_frame(ms_ctx_t *ctx) {
     esp_err_t err = ist3931_set_window(ctx, 0, 0);
     if (!err) err = smbus_write_byte(ctx->bus, ctx->addr, MS_REG_CMD, MS_RDRAM);
     if (!err) err = i2c_master_read_from_device(ctx->bus, ctx->addr, v, l, 50);
-    if (!err) ESP_LOG_BUFFER_HEXDUMP(TAG, v + 1, l - 1, ESP_LOG_WARN);
+    if (!err) ESP_LOG_BUFFER_HEX(TAG, v + 1, l - 1);
     return err;
 }
 
@@ -417,7 +417,7 @@ static void vlx_initialize() {
 
 uint16_t vlx_probe() { return vl53l0x_readRangeSingleMillimeters(vlx); }
 #else
-uint16_t vlx_probe() { return (uint16_t)-1; }
+uint16_t vlx_probe() { return UINT16_MAX; }
 #endif
 
 /******************************************************************************
@@ -626,14 +626,14 @@ void pwr_status() {
     }
     if (!err) err = smbus_rregs(NUM_I2C, pwr, 0x00, reg, sizeof(reg));
     if (err) return;
-    static const char * INPTYPE[] = {
+    const char * INPTYPE[] = {
         "No input", "USB Host SDP", "USB CDP(1.5A)", "USB DCP(3.25A)",
         "ADJ DCP(1.5A)", "Unknown(0.5A)", "Non-standard(<2.4A)", "OTG"
     };
-    static const char * CHGSTAT[] = {
+    const char * CHGSTAT[] = {
         "Discharging", "Pre-charge", "Fast-charge", "Charge done"
     };
-    static const char * CHGERR[] = {
+    const char * CHGERR[] = {
         "Normal", "Input", "TS OVR", "TM EXP"
     };
     printf( // ~3KB

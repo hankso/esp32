@@ -91,27 +91,23 @@ function upload() {
         .finally(() => (loading.value = upload.ctrl = false))
 }
 
-watch(
-    () => route.hash,
-    () => {
-        let filename = resolve('/', route.hash.slice(1))
-        if (!filename.slice(1) || toValue(path) === filename) return
-        readFile(filename)
-            .then(resp => {
-                path.value = filename
-                code.value = resp.data
-                location.hash = filename
-                if (filename.endsWith('.gz'))
-                    filename = filename.slice(0, filename.length - 3)
-                config.value.language = extname(filename).slice(1) || 'txt'
-            })
-            .catch(({ message }) => {
-                notify(message)
-                location.hash = ''
-            })
-    },
-    { immediate: true, flush: 'post' }
-)
+watchPostEffect(() => {
+    let filename = resolve('/', route.hash.slice(1))
+    if (!filename.slice(1) || toValue(path) === filename) return
+    readFile(filename)
+        .then(resp => {
+            path.value = filename
+            code.value = resp.data
+            location.hash = filename
+            if (filename.endsWith('.gz'))
+                filename = filename.slice(0, filename.length - 3)
+            config.value.language = extname(filename).slice(1) || 'txt'
+        })
+        .catch(({ message }) => {
+            notify(message)
+            location.hash = ''
+        })
+})
 </script>
 
 <template>
@@ -130,7 +126,7 @@ watch(
                 <v-breadcrumbs density="compact" :items="links"></v-breadcrumbs>
                 <v-spacer></v-spacer>
 
-                <span class="text-error d-none d-md-inline me-4">
+                <span class="text-success d-none d-md-inline me-4">
                     {{ code.trim().split('\n').length }} lines -
                     {{ code.length }} bytes
                 </span>
@@ -157,7 +153,7 @@ watch(
                     icon
                     v-for="(icon, prop) in propIcons"
                     :key="prop"
-                    :color="config[prop] ? 'purple' : ''"
+                    :color="config[prop] ? 'green' : ''"
                     @click="config[prop] = !config[prop]"
                 >
                     <v-icon :icon="icon"></v-icon>

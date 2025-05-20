@@ -11,8 +11,9 @@
 #include "filesys.h"
 #include "network.h"
 #include "sensors.h"
-#include "usbmode.h"
+#include "avcmode.h"
 #include "ledmode.h"
+#include "usbmode.h"
 #include "btmode.h"
 #include "screen.h"
 #include "timesync.h"
@@ -68,6 +69,9 @@
 #   undef  CONSOLE_NET_IPERF
 #   undef  CONSOLE_NET_TSYNC
 #endif
+#ifndef CONFIG_ESP_WIFI_FTM_ENABLE
+#   undef CONSOLE_NET_FTM
+#endif
 
 #if !defined(CONFIG_BASE_USE_USB) \
  && !defined(CONFIG_BASE_USE_BT)  \
@@ -117,8 +121,9 @@ static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
     LOOPN(i, ncmd) { ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) ); }
 }
 
-#define ARG_STR(p, s)   ((p)->count ? (p)->sval[0] : (s))
+#define ARG_STR(p, v)   ((p)->count ? (p)->sval[0] : (v))
 #define ARG_INT(p, v)   ((p)->count ? (p)->ival[0] : (v))
+#define ARG_DBL(p, v)   ((p)->count ? (p)->dval[0] : (v))
 
 #define ESP_CMD(d, c, h)                                                    \
         {                                                                   \
@@ -170,12 +175,12 @@ static void sys_restart_task(void *arg) {
 }
 
 static int sys_restart(int argc, char **argv) {
-    static TaskHandle_t task = NULL;
-    static uint32_t end_ms, tout_ms;
     ARG_PARSE(argc, argv, &sys_restart_args);
-    if (sys_restart_args.cxel->count) {
-        if (task) puts("Restart cancelled");
-        TRYNULL(task, vTaskDelete);
+    TaskHandle_t task = xTaskGetHandle("restart");
+    static uint32_t end_ms, tout_ms;
+    if (sys_restart_args.cxel->count && task) {
+        puts("Restart cancelled");
+        vTaskDelete(task);
     } else if (task) {
         printf("Restart pending: %.0fms", end_ms - get_timestamp(0) * 1e3);
     } else {
@@ -202,8 +207,8 @@ static struct {
     arg_int_t *lvl;
     arg_end_t *end;
 } sys_sleep_args = {
-    .mode = arg_str0(NULL, NULL, "light|deep", "sleep mode"),
-    .tout = arg_int0("t", NULL, "0-2^31", "wakeup timeout in ms"),
+    .mode = arg_str0(NULL, NULL, "light|deep", "sleep mode [default light]"),
+    .tout = arg_int0("t", NULL, "0-2^31", "wakeup timeout in ms [default 0]"),
     .pin  = arg_intn("p", NULL, NULL, 0, 8, "wakeup from GPIO[s]"),
     .lvl  = arg_intn("l", NULL, "0|1", 0, 8, "GPIO level[s] to detect"),
     .end  = arg_end(4)
@@ -466,9 +471,9 @@ static struct {
 
 static int drv_usb(int argc, char **argv) {
     ARG_PARSE(argc, argv, &drv_usb_args);
-    static const char *choices = "CcMmHhS", *c;
     esp_err_t err = ESP_OK;
     bool reboot = drv_usb_args.now->count;
+    const char *choices = "CcMmHhS", *c;
     const char *mode = ARG_STR(drv_usb_args.mode, NULL);
     if (!mode) {
         usbmode_status();
@@ -596,26 +601,29 @@ static int drv_i2c(int argc, char **argv) {
         i2c_detect(bus);
         return ESP_OK;
     }
-    uint8_t reg = ARG_INT(drv_i2c_args.reg, 0);
-    uint8_t len = ARG_INT(drv_i2c_args.len, 0);
-    if (drv_i2c_args.val->count) {
-        if (drv_i2c_args.hex->count) {
-            uint16_t val = drv_i2c_args.val->ival[0];
-            return smbus_write_word(bus, addr, reg, val);
-        } else {
-            uint8_t val = drv_i2c_args.val->ival[0];
-            return smbus_write_byte(bus, addr, reg, val);
-        }
-    }
     esp_err_t err;
-    if (drv_i2c_args.hex->count) {
-        uint16_t val;
-        if (( err = smbus_read_word(bus, addr, reg, &val) )) return err;
-        printf("I2C %d-%02X REG 0x%02X = 0x%04X\n", bus, addr, reg, val);
+    uint8_t word = drv_i2c_args.hex->count ? 4 : 2;
+    uint16_t len = ARG_INT(drv_i2c_args.len, 0);
+    uint16_t reg = ARG_INT(drv_i2c_args.reg, 0);
+    uint16_t val = ARG_INT(drv_i2c_args.val, 0);
+    if (drv_i2c_args.val->count) {
+        if (word == 4) {
+            err = smbus_write_word(bus, addr, reg, val);
+        } else {
+            err = smbus_write_byte(bus, addr, reg, val);
+        }
     } else if (!len) {
-        uint8_t val;
-        if (( err = smbus_read_byte(bus, addr, reg, &val) )) return err;
-        printf("I2C %d-%02X REG 0x%02X = 0x%02X\n", bus, addr, reg, val);
+        if (word == 4) {
+            err = smbus_read_word(bus, addr, reg, &val);
+        } else {
+            uint8_t tmp;
+            err = smbus_read_byte(bus, addr, reg, &tmp);
+            val = tmp;
+        }
+        if (!err) {
+            printf("I2C %d-%02X REG 0x%0*X = 0x%0*X\n",
+                   bus, addr, word, reg, word, val);
+        }
     } else {
         err = smbus_dump(bus, addr, reg, len);
     }
@@ -675,7 +683,7 @@ static int drv_adc(int argc, char **argv) {
             state = asleep(intv_ms, state);
             tout_ms -= intv_ms;
         } else break;
-    } while (true);
+    } while (1);
     fputc('\n', stderr);
     return ESP_OK;
 }
@@ -952,7 +960,7 @@ static struct {
     arg_lit_t *log;
     arg_end_t *end;
 } util_logging_args = {
-    .tag = arg_str0(NULL, NULL, "TAG", "specify tag of the log entries"),
+    .tag = arg_str0(NULL, NULL, "TAG", "tag of the log entries [default *]"),
     .lvl = arg_str0(NULL, NULL, "0-5|NEWIDV", "set logging level"),
     .log = arg_lit0(NULL, "test", "test logging with specified tag"),
     .end = arg_end(3)
@@ -960,7 +968,7 @@ static struct {
 
 static int util_logging(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_logging_args);
-    static const char *choices = "NEWIDV", *c;
+    const char *choices = "NEWIDV", *c;
     const char *tag = ARG_STR(util_logging_args.tag, "*");
     const char *lvl = ARG_STR(util_logging_args.lvl, NULL);
     if (lvl) {
@@ -995,7 +1003,7 @@ static struct {
     arg_end_t *end;
 } util_hist_args = {
     .cmd = arg_str1(NULL, NULL, "load|save", ""),
-    .dst = arg_str0("f", NULL, "history.txt", "relative path to file"),
+    .dst = arg_str0("f", NULL, "PATH", "history file [default history.txt]"),
     .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(3)
 };
@@ -1146,10 +1154,10 @@ static struct {
 
 static int net_bt(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_bt_args);
-    static const char *choices = "dDH", *c;
     esp_err_t err = ESP_OK;
     bool reboot = net_bt_args.now->count;
     int bat = ARG_INT(net_bt_args.bat, -1);
+    const char *choices = "dDH", *c;
     const char *name = ARG_STR(net_bt_args.dev, NULL);
     const char *mode = ARG_STR(net_bt_args.mode, NULL);
     if (net_bt_args.scan->count) {
@@ -1408,6 +1416,7 @@ static struct {
     arg_str_t *mse;
     arg_str_t *dial;
     arg_int_t *tout;
+    arg_dbl_t *tevt;
     arg_str_t *tgt;
     arg_end_t *end;
 } app_hid_args = {
@@ -1415,21 +1424,23 @@ static struct {
     .str  = arg_str0("s", NULL, "STR", "HID report type in"),
     .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
     .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
-    .tout = arg_int0("t", NULL, "0-65535", "key/mouse timeout in ms"),
+    .tout = arg_int0("t", NULL, "0-65535", "event timeout in ms"),
+    .tevt = arg_dbl0(NULL, "ts", "MSEC", "event unix timestamp in ms"),
     .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BT/SCN"),
-    .end  = arg_end(6)
+    .end  = arg_end(7)
 };
 
 static int app_hid(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_hid_args);
     esp_err_t err = ESP_OK;
-    static const char *choices = "UBS", *c;
+    const char *choices = "UBS", *c;
     const char *typein = ARG_STR(app_hid_args.str, NULL);
     const char *press = ARG_STR(app_hid_args.key, NULL);
     const char *mouse = ARG_STR(app_hid_args.mse, NULL);
     const char *dial = ARG_STR(app_hid_args.dial, NULL);
     const char *tstr = ARG_STR(app_hid_args.tgt, NULL);
     uint16_t tout_ms = ARG_INT(app_hid_args.tout, 50);
+    uint32_t tevt_ms = ARG_DBL(app_hid_args.tevt, 0);
 
     hid_target_t to = HID_TARGET_ALL;
     if (tstr) {
@@ -1473,6 +1484,13 @@ static int app_hid(int argc, char **argv) {
         LOOPN(i, strlen(typein)) {
             buf[0] = typein[i];
             hid_report_keybd_press(to, buf, tout_ms); msleep(tout_ms);
+        }
+    }
+
+    if (tevt_ms) {
+        uint32_t curr_ms = get_timestamp(0) * 1e3;
+        if (curr_ms > tevt_ms) {
+            ESP_LOGD(TAG, "event latency: %dms", curr_ms - tevt_ms);
         }
     }
     return err;
@@ -1532,7 +1550,7 @@ static struct {
 
 static int app_als(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_als_args);
-    static const char *choices = "0123HVA", *c;
+    const char *choices = "0123HVA", *c;
     const char *method = ARG_STR(app_als_args.rlt, NULL);
     int idx = ARG_INT(app_als_args.idx, -1);
     esp_err_t err = ESP_OK;
@@ -1563,26 +1581,32 @@ static int app_als(int argc, char **argv) {
 static struct {
     arg_str_t *tgt;
     arg_str_t *ctrl;
+    arg_lit_t *cam;
     arg_lit_t *viz;
     arg_int_t *tout;
     arg_end_t *end;
 } app_avc_args = {
-    .tgt  = arg_str1(NULL, NULL, "0-3", "all|audio|video|all"),
+    .tgt  = arg_str0(NULL, NULL, "1-3", "audio|video|all [default all]"),
     .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
-    .viz  = arg_lit0("v", "viz", "print audio volume"),
+    .cam  = arg_lit0(NULL, "cam", "get or set camera config"),
+    .viz  = arg_lit0("v", "viz", "print audio volume / video frame info"),
     .tout = arg_int0("t", NULL, "0-2^31", "capture task timeout in ms"),
-    .end  = arg_end(4)
+    .end  = arg_end(5)
 };
 
 static int app_avc(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_avc_args);
-    const char *target = ARG_STR(app_avc_args.tgt, "0");
+    const char *target = ARG_STR(app_avc_args.tgt, "3");
     const char *itpl = app_avc_args.tgt->hdr.glossary;
     const char *istr = strstr(itpl, target);
     uint8_t index = istr ? strcnt(itpl, '|', istr - itpl) : target[0] - '0';
+    if (app_avc_args.cam->count) {
+        if (app_avc_args.tgt->count) return CAMERA_LOADS(target);
+        return CAMERA_PRINT(stdout);
+    }
     return avc_command(
         ARG_STR(app_avc_args.ctrl, NULL),
-        MIN(index, 3),
+        index ? MIN(index, 3) : 3,
         ARG_INT(app_avc_args.tout, 0),
         app_avc_args.viz->count ? stderr : NULL
     );
@@ -1642,7 +1666,7 @@ static int app_sen(int argc, char **argv) {
             if (!dat.num && !dat.ges) fprintf(stderr, " not touched");
         } else if (index == 3) {
             uint16_t val = vlx_probe();
-            if (val == (uint16_t)-1) goto error;
+            if (val == UINT16_MAX) goto error;
             fprintf(stderr, "\rDistance: range %6.3fm", val / 1e3);
         } else if (index == 4) {
             gy39_data_t dat;
@@ -1660,7 +1684,7 @@ static int app_sen(int argc, char **argv) {
             state = asleep(intv_ms, state);
             tout_ms -= intv_ms;
         } else break;
-    } while (true);
+    } while (1);
     fputc('\n', stderr);
     return ESP_OK;
 error:

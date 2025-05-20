@@ -14,8 +14,8 @@ const ports = []
 const portIds = reactive([])
 
 function getId(port) {
-    if (!port) return ''
-    let { usbVendorId: v, usbProductId: p } = port.getInfo()
+    let { usbVendorId: v, usbProductId: p } = port?.getInfo() ?? {}
+    if (v === undefined || p === undefined) return port.toString()
     return `${v.toString(16).padStart(4, 0)}:${p.toString(16).padStart(4, 0)}`
 }
 
@@ -120,6 +120,10 @@ export default class SerialController {
         if (type(filters) !== 'array') filters = [filters]
         filters = toFilter(filters)
         let port = await navigator.serial.requestPort({ filters })
+        if (isEmpty(port.getInfo())) {
+            await port.forget()
+            throw new TypeError('Invalid port to use')
+        }
         await refresh()
         return port
     }
@@ -153,8 +157,21 @@ export default class SerialController {
         await this.reader.releaseLock()
         await this.writer.close().catch(() => {})
         await this.writer.releaseLock()
-        await this.port.close()
-        this.opened.value = false
+        try {
+            await this.port.close()
+        } catch (err) {
+            throw `Could not close serial. ${err.message}`
+        } finally {
+            this.opened.value = false
+        }
+    }
+
+    async clear() {
+        await this.close().catch()
+        await navigator.serial
+            .getPorts()
+            .then(arr => Promise.all(arr.map(port => port.forget())))
+        await refresh()
     }
 
     async write(data) {

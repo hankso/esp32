@@ -252,9 +252,9 @@ void tud_suspend_cb(bool en) {
 
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_SERIAL
 static void cdc_device_cb(int itf, cdcacm_event_t *event) {
-    static uint8_t buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE];
     if (event->type == CDC_EVENT_RX) {
         size_t size = 0;
+        uint8_t buf[CONFIG_TINYUSB_CDC_RX_BUFSIZE];
         esp_err_t err = tinyusb_cdcacm_read(itf, buf, sizeof(buf), &size);
         if (err) {
             ESP_LOGE(TAG, "CDC read error %s", esp_err_to_name(err));

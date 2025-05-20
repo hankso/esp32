@@ -17,8 +17,8 @@ import { execSync } from 'node:child_process'
 import { fileURLToPath, URL } from 'node:url'
 
 // https://vitejs.dev/config/
-export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
-    let SRC_VER, BUILD_INFO
+export default defineConfig(({ command, mode }) => {
+    let BUILD_INFO
     if (command === 'build') {
         BUILD_INFO = {
             NODE_JS: process.versions.node,
@@ -26,7 +26,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
             BUILD_TIME: new Date().toLocaleString(),
         }
         try {
-            SRC_VER = `${execSync('git describe --tags --always')}`
+            BUILD_INFO['SOURCE'] = `${execSync('git describe --tags --always')}`
         } catch {}
     }
     let dist = resolve(__dirname, '..', 'files', 'www')
@@ -44,7 +44,7 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
             sport: 5172, // python api server
             proxy: {
                 '/api': {
-                    target: `http://localhost:5172`,
+                    target: 'http://localhost:5172',
                     changeOrigin: true,
                     secure: false,
                 },
@@ -52,11 +52,12 @@ export default defineConfig(({ command, mode, isSsrBuild, isPreview }) => {
         },
         define: {
             'process.env': {
+                PROJECT_VERSION: process.env.npm_package_version,
+                PROJECT_NAME: process.env.npm_package_name,
+                API_SERVER: 'localhost:5172',
                 VITE_PATH: __dirname,
-                VITE_MODE: mode,
                 VITE_CMD: command,
                 BUILD_INFO,
-                SRC_VER,
             },
         },
         plugins: [

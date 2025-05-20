@@ -22,6 +22,7 @@
     "codejar-linenumbers": "^1.0.1",
     "path-browserify": "^1.0.1",
     "prismjs": "^1.29.0",
+    "simple-keyboard": "^3.8.50",
     "vue": "^3.4.15",
     "vue-router": "^4.2.5",
     "vue-web-terminal": "^3.2.5",

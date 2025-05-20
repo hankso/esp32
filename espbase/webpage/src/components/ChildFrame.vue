@@ -1,3 +1,9 @@
+<template>
+    <div class="child-frame" :class="{ hidebar }">
+        <iframe :src></iframe>
+    </div>
+</template>
+
 <script setup>
 const { src, hidebar } = defineProps({
     src: {
@@ -10,12 +16,6 @@ const { src, hidebar } = defineProps({
     },
 })
 </script>
-
-<template>
-    <div class="child-frame" :class="{ hidebar }">
-        <iframe :src></iframe>
-    </div>
-</template>
 
 <style scoped>
 div {

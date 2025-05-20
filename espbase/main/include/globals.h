@@ -28,8 +28,10 @@
 #define PACKED              __attribute__((packed))
 #define FALLTH              __attribute__((fallthrough))
 #define NOTUSED(x)          (void)(x)
-#define _STR_IMPL_(x)       #x
-#define STR(x)              _STR_IMPL_(x)
+#define CONCAT_(a, b)       a ## b
+#define CONCAT(a, b)        CONCAT_(a, b)
+#define STR_(x)             #x
+#define STR(x)              STR_(x)
 #define CASESTR(x, l)       case x: return #x + l
 #define CASESTRV(v, x, l)   case x: (v) = #x + l; break
 #define LEN(arr)            ( sizeof(arr) / sizeof(*arr) )
@@ -60,7 +62,7 @@
         for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
 #define ITERP(v, a)         ITERPN(v, (a), LEN((a)))
 #define ITERV(v, a)         ITERVN(v, (a), LEN((a)))
-#define TIMEOUT(m)          ( (m) > 0 ? pdMS_TO_TICKS((m)) : portMAX_DELAY )
+#define TIMEOUT(m)          ( (m) == -1 ? portMAX_DELAY: pdMS_TO_TICKS((m)) )
 #define MUTEX()             xSemaphoreCreateBinary()
 #define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
 #define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
@@ -86,6 +88,10 @@
 #   define ABSDIFF(a, b)    ({ typeof(a) A_ = (a), B_ = (b);                \
                                 A_ > B_ ? A_ - B_ : B_ - A_; })
 #endif
+#ifndef CDIV
+#   define CDIV(a, b)       ({ typeof(a) A_ = (a), B_ = (b);                \
+                                B_ ? (A_ + B_ - 1) / B_ : 0; })
+#endif
 #ifndef MAX
 #   define MAX(a, b)        ({ typeof(a) A_ = (a), B_ = (b);                \
                                 A_ > B_ ? A_ : B_; })
@@ -94,6 +100,9 @@
 #endif
 #ifndef CONS
 #   define CONS(x, l, h)    MAX((l), MIN((x), (h)))
+#endif
+#ifndef STATIC_ASSERT
+#   define STATIC_ASSERT(c) extern char CONCAT(p, __LINE__)[(c) ? 1 : -1]
 #endif
 
 // Version aliases
@@ -114,11 +123,11 @@ extern "C" {
 void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
 
-bool strbool(const char *);
-size_t strcnt(const char *, char, size_t);
+bool strbool(const char *str);
+size_t strcnt(const char *str, char want, size_t slen);
 char * strtrim(char *str, const char *chars);
 
-char * b64encode(char *out, const char *inp, size_t len);
+char * b64encode(const char *src, char *dst, size_t slen);
 
 bool endswith(const char *, const char *tail);
 bool startswith(const char *, const char *head);
@@ -142,10 +151,17 @@ typedef struct {
     uint16_t timeout_ms;
     FILE *stream;
 } unicode_trick_t;
+esp_err_t unicode_tricks(const unicode_trick_t *);
 
 const char * unicode2str(uint32_t);
-uint32_t str2unicode(const char *);
-esp_err_t unicode_tricks(const unicode_trick_t *);
+size_t str2unicode(const char *, uint32_t *);
+
+// Must provide file descriptor to `gbktable.bin` which is a 47KB
+// mapping file between 16Bit chinese unicode and GBK index.
+const char * unicode2gbk(FILE *, uint32_t);
+size_t gbk2unicode(FILE *, const char *, uint32_t *);
+size_t gbk2str_r(const char *src, char *dst, size_t dlen);
+char * gbk2str(const char *src);
 
 const char * format_size(uint64_t, bool);
 const char * format_sha256(const void *, size_t);
@@ -154,6 +170,10 @@ const char * format_binary(uint64_t, size_t);
 void * setTimeout(uint32_t ms, void (*func)(void *), void *arg);
 void * setInterval(uint32_t ms, void (*func)(void *), void *arg);
 void clearTimer(void *hdl); // = clearTimeout + clearInterval
+
+bool notify_increase(void *task);
+bool notify_decrease(void *task);
+bool notify_wait_for(uint32_t value, uint32_t tout_ms, uint32_t wait_ms);
 
 void task_info(uint8_t sort);
 void memory_info();

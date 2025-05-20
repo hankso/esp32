@@ -5,7 +5,7 @@
         <template v-for="item in items" :key="item.name">
             <slot :name="item.name" v-bind="item">
                 <v-list-item
-                    v-if="!hideUnknown || item.schema"
+                    v-if="item.schema || !hideUnknown"
                     :subtitle="item.schema?.description"
                 >
                     <template #title>
@@ -36,16 +36,16 @@
                 <v-spacer></v-spacer>
                 <slot name="buttons" />
                 <v-btn
+                    v-if="modified"
+                    text="Reset"
+                    variant="text"
+                    @click="modified = Object.assign(data, backup) != data"
+                ></v-btn>
+                <v-btn
                     v-if="schema && showSchema"
                     text="Schema"
                     variant="text"
                     ref="overlay"
-                ></v-btn>
-                <v-btn
-                    v-if="backup"
-                    text="Reset"
-                    variant="text"
-                    @click="Object.assign(data, backup)"
                 ></v-btn>
                 <slot name="submit">
                     <v-btn
@@ -90,8 +90,8 @@ const props = defineProps({
         default: undefined,
     },
     nullVal: {
+        type: null,
         default: null,
-        validator: () => true,
     },
     showSchema: {
         type: Boolean,
@@ -102,6 +102,8 @@ const props = defineProps({
         default: false,
     },
 })
+
+const modified = ref(false)
 
 function scaffold(schema, func) {
     if (!schema) return
@@ -114,7 +116,7 @@ function scaffold(schema, func) {
     } else if (schema.type === 'array') {
         return [scaffold(schema.items, func)]
     } else {
-        return func?.(schema)
+        return func ? func(schema) : props.nullVal
     }
 }
 
@@ -151,6 +153,8 @@ function genItem(obj) {
                 if (!toValue(data)) return
                 if (val?.trim) val = val.trim()
                 data.value[key] = val ?? props.nullVal
+                if (props.backup && props.backup[key] != data.value[key])
+                    modified.value = true
             },
             required: props.schema?.required?.includes(key) ?? false,
         }

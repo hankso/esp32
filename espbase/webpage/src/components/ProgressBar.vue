@@ -8,7 +8,7 @@
     <v-progress-linear
         v-else-if="loading !== false"
         class="progress-bar"
-        :model-value="loading"
+        :model-value="loading > 1 ? loading : loading * 100"
         :stream
         :color
     ></v-progress-linear>

@@ -6,8 +6,7 @@
         variant="outlined"
         hide-details="auto"
         :items="schema.enum"
-        :model-value="value"
-        @update:model-value="updateLazy"
+        v-model="proxy"
     ></v-combobox>
 </template>
 
@@ -38,12 +37,13 @@ const isNumber = computed(() =>
     ['number', 'integer'].includes(props.schema?.type ?? type(props.value))
 )
 
-const updateLazy = debounce(val => {
-    props.update(toValue(isNumber) ? parseNum(val) : val)
+const proxy = computed({
+    get: () => (toValue(isNumber) ? parseNum(props.value) : props.value),
+    set: debounce(val => props.update(toValue(isNumber) ? parseNum(val) : val)),
 })
 
 function validator() {
-    if (props.schema && !ajv.validate(props.schema, props.value))
+    if (!ajv.validate(props.schema, props.value))
         return ajv.errorsText().split(', ')[0]
     return true
 }

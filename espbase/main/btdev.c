@@ -201,13 +201,13 @@ scan_rst_t *btmode_find_device(const char *name, uint8_t *bda) {
     return ptr;
 }
 
-static size_t UNUSED scan_rst_num(scan_rst_t *ptr) {
+static UNUSED size_t scan_rst_num(scan_rst_t *ptr) {
     size_t num = 0;
     for (ptr = ptr ?: s_devs; ptr; ptr = ptr->next) { num++; }
     return num;
 }
 
-static void UNUSED scan_print_devinfo(scan_rst_t *devs, int count) {
+static UNUSED void scan_print_devinfo(scan_rst_t *devs, int count) {
     size_t maxlen = 16, num = 0, uuidlen = 2;
     scan_rst_t *ptr = devs;
     while (ptr && (count < 0 || num < count)) {

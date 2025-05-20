@@ -1,3 +1,8 @@
+<script setup>
+import { createVuetify } from 'vuetify'
+const version = createVuetify.version
+</script>
+
 <template>
     <div class="text-center">
         <svg
@@ -34,7 +39,7 @@
                 variant="text"
                 color="primary"
             >
-                Vuetify
+                Vuetify {{ version }}
             </v-btn>
         </h2>
         <v-row class="py-10 align-center justify-center">

@@ -1,11 +1,10 @@
 <script setup>
-import { name } from '@/../package.json'
 import { escape, strftime } from '@/utils'
 import SerialController from '@/utils/serial'
 
 import { mdiCog, mdiOctagon, mdiCloseOctagon } from '@mdi/js'
 
-const title = name + ' Serial'
+const title = `${process.env.PROJECT_NAME} Serial`
 const serial = new SerialController()
 const opened = serial.opened
 
@@ -31,6 +30,13 @@ function request() {
         })
 }
 
+function clear() {
+    serial
+        .clear()
+        .then(() => (filter.value = ''))
+        .catch(notify)
+}
+
 function print(msg, timestamp = true) {
     msg = msg.trimEnd()
     if (!msg || !toValue(terminal)) return
@@ -52,10 +58,11 @@ function toggle(val) {
             })
             .catch(notify)
     } else {
-        return serial.close()
+        return serial.close().catch(notify)
     }
 }
 
+onMounted(() => (dialog.value = true))
 onBeforeUnmount(() => toggle(false))
 </script>
 
@@ -113,6 +120,13 @@ onBeforeUnmount(() => toggle(false))
                             text="auth"
                             variant="outlined"
                             @click="request"
+                        ></v-btn>
+                        <v-btn
+                            text="clear"
+                            color="error"
+                            class="ml-2"
+                            variant="outlined"
+                            @click="clear"
                         ></v-btn>
                         <SchemaSelect
                             class="form-values"

@@ -8,6 +8,18 @@ export function get_monotonic() {
     return performance.now()
 }
 
+export function random_id(length = 8) {
+    return Math.random().toString(16).substr(2, length)
+}
+
+export function range(start, end) {
+    if (end === undefined) {
+        end = start
+        start = 0
+    }
+    return [...Array(end - start).keys()].map(i => i + start)
+}
+
 export var type = (function () {
     let cache = {}
     return obj => {
@@ -165,16 +177,12 @@ export function downloadAsFile(data, fn = 'data.txt', type = 'text/plain') {
 
 export function toggleFullscreen(e) {
     let elem = document.documentElement
-    switch (type(e)) {
-        case 'string':
-            elem = document.getElementById(e)
-            break
-        case 'element':
-            elem = e
-            break
-        case 'mouseevent':
-            elem = e.target
-            break
+    if (e instanceof String) {
+        elem = document.querySelector(e)
+    } else if (type(e) === 'element') {
+        elem = e
+    } else if (type(e).includes('event')) {
+        elem = e.target
     }
     if (!elem || !elem.requestFullscreen) return
     if (!document.fullscreenElement) {
@@ -193,6 +201,7 @@ export var rules = {
         return Number(v) === parseInt(v) || 'Must be an integer'
     },
     length(v, r0, r1) {
+        if (type(v) !== 'array') return 'This field is required'
         if (r0 !== undefined && r1 !== undefined)
             return v =>
                 (r0 <= v.length && v.length <= r1) ||

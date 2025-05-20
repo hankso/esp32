@@ -1,45 +1,55 @@
 <script setup>
-import { name, version } from '@/../package.json'
-
-import { isApmode } from '@/apis'
+import { isAPmode } from '@/apis'
 
 import { useDark, useToggle } from '@vueuse/core'
 import { useTheme, useDisplay } from 'vuetify'
 import {
     mdiConsole,
     mdiUsbPort,
-    mdiDuck,
+    mdiKeyboardOutline,
     mdiFileTree,
     mdiPencilBoxMultiple,
     mdiCog,
     mdiUpdate,
     mdiInformation,
     mdiCompare,
+    mdiMultimedia,
 } from '@mdi/js'
 
-var desc = process.env.VITE_MODE
-if (process.env.SRC_VER) {
-    desc += '-' + process.env.SRC_VER
-}
+const desc =
+    import.meta.env.MODE +
+    (process.env.BUILD_INFO?.SOURCE
+        ? `-${process.env.BUILD_INFO.SOURCE}`
+        : '') +
+    ` v${process.env.PROJECT_VERSION}`
 
 const { lg } = useDisplay()
 const theme = useTheme()
 const isDark = useDark({
     onChanged(dark) {
-        theme.global.name.value = dark ? 'light' : 'dark'
+        theme.global.name.value = dark ? 'dark' : 'light'
     },
 })
 const toggleDark = useToggle(isDark)
 
-const title = `${name} WebUI`
+provide('theme', { isDark, toggleDark })
+
+const title = `${process.env.PROJECT_NAME} WebUI`
 const apmode = ref(true)
 const drawer = ref(false)
 
-function parseLink(title, descs) {
+function updateAP() {
+    // unlock some features if http client is connected from AP
+    isAPmode()
+        .then(() => (apmode.value = true))
+        .catch(() => (apmode.value = false))
+}
+
+function parseLink(title, links) {
     return [
         { type: 'divider' },
         { type: 'subheader', title },
-        ...descs.map(([t, to, prependIcon]) => ({
+        ...links.map(([t, to, prependIcon]) => ({
             title: t,
             props: {
                 to,
@@ -61,7 +71,8 @@ const aponly = parseLink('AP mode', [
 const staonly = parseLink('STA mode', [
     ['Web Console', '/home', mdiConsole],
     ['Web Serial', '/serial', mdiUsbPort],
-    ['JSON RPC', '/jsonrpc', mdiDuck],
+    ['Web Socket', '/jsonrpc', mdiKeyboardOutline],
+    ['Web Stream', '/stream', mdiMultimedia],
 ])
 
 const progbar = ref(false)
@@ -74,10 +85,11 @@ const snackbar = ref({
     timeout: 0,
 })
 
-provide('notify', function (msg, timeout = 3000) {
-    if (msg === undefined || snackbar.value.show) return false
+provide('notify', function (msg, timeout = 5000) {
+    if (msg === undefined) return false
     snackbar.value.message = `${msg}`
-    snackbar.value.timeout = timeout
+    snackbar.value.timeout = timeout - 1
+    nextTick(() => (snackbar.value.timeout = timeout))
     return (snackbar.value.show = true)
 })
 
@@ -103,10 +115,7 @@ onMounted(() => {
     // maybe redirected from other html subpages
     let redirect = new URLSearchParams(location.search).get('to')
     if (redirect) return useRouter().push(redirect)
-    // unlock some features if http client is connected from AP
-    isApmode()
-        .then(() => (apmode.value = true))
-        .catch(() => (apmode.value = false))
+    updateAP()
 })
 </script>
 
@@ -144,7 +153,7 @@ onMounted(() => {
             @keyup.esc="drawer = false"
         >
             <v-list nav class="mt-n1 mb-n3">
-                <v-list-item :title :subtitle="`${desc} v${version}`">
+                <v-list-item :title :subtitle="desc">
                     <template #append v-if="!lg">
                         <v-icon
                             size="small"
@@ -158,7 +167,7 @@ onMounted(() => {
         </v-navigation-drawer>
 
         <v-app-bar border="b" elevation="0" density="comfortable" :title>
-            <ProgressBar :loading="progbar" style="position: absolute" />
+            <ProgressBar :loading="progbar" class="position-absolute" />
             <template #prepend>
                 <v-app-bar-nav-icon
                     @click="drawer = !drawer"
@@ -166,8 +175,13 @@ onMounted(() => {
                 ></v-app-bar-nav-icon>
             </template>
             <template #append>
-                <v-btn variant="text">STA mode</v-btn>
-                <v-btn variant="text" v-if="apmode">AP mode</v-btn>
+                <v-btn
+                    @click="updateAP"
+                    variant="outlined"
+                    :color="apmode ? 'success' : 'grey'"
+                >
+                    AP mode
+                </v-btn>
                 <v-divider vertical class="mx-2"></v-divider>
                 <v-btn icon @click="toggleDark()">
                     <v-icon :icon="mdiCompare"></v-icon>
@@ -179,15 +193,9 @@ onMounted(() => {
         </v-app-bar>
 
         <v-main id="main-content">
-            <v-container class="h-100">
+            <v-container class="h-100 position-relative">
                 <RouterView />
             </v-container>
         </v-main>
     </v-app>
 </template>
-
-<style scoped>
-.v-container:has(> .v-row) {
-    display: flex;
-}
-</style>

@@ -6,13 +6,12 @@
 
 #include "drivers.h"
 #include "config.h"
-#include "ledmode.h"
-#include "hidtool.h"
-#include "timesync.h"
+#include "hidtool.h"            // for hid_report_xxx
+#include "ledmode.h"            // for led_initialize
+#include "avcmode.h"            // for avc_initialize
 
 #include "esp_attr.h"
-#include "esp_camera.h"
-#include "esp_intr_alloc.h"
+#include "esp_intr_alloc.h"     // for GPIO_INTR_XXX
 #include "soc/soc_caps.h"
 #include "driver/ledc.h"
 #include "freertos/FreeRTOS.h"
@@ -26,7 +25,7 @@
 #   include "iot_knob.h"
 #endif
 
-static const char *TAG = "Driver";
+static UNUSED const char *TAG = "Driver";
 
 /******************************************************************************
  * UART with custom pin
@@ -363,7 +362,7 @@ static void pwm_initialize() {
 #endif
 }
 
-static esp_err_t UNUSED pwm_set_duty(int channel, int duty) {
+static UNUSED esp_err_t pwm_set_duty(int channel, int duty) {
     esp_err_t err = ledc_set_duty(SPEED_MODE, channel, duty);
     if (!err) err = ledc_update_duty(SPEED_MODE, channel);
     return err;
@@ -450,7 +449,9 @@ static void spi_initialize() {
         .sclk_io_num = PIN_SCLK,
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
-        // FIXME: .max_transfer_sz = 81960,
+#   if defined(CONFIG_BASE_SCREEN_SPI) && defined(WITH_LVGL)
+        .max_transfer_sz = CONFIG_BASE_SCREEN_HRES * CONFIG_BASE_SCREEN_VRES,
+#   endif
         .flags = SPICOMMON_BUSFLAG_MASTER,
     };
     esp_err_t err = spi_bus_initialize(NUM_SPI, &buf_conf, SPI_DMA_CH_AUTO);
@@ -488,14 +489,19 @@ esp_err_t smbus_probe(int bus, uint8_t addr) {
 }
 
 esp_err_t smbus_wregs(
-    int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len
+    int bus, uint8_t addr, uint16_t reg, uint8_t *val, size_t len
 ) {
     // SMBus Write protocol:
-    //      S | (ADDR | W) | ACK | REG | ACK | (DATA | ACK) * n | P
+    //      S | (ADDR + W) | ACK | REG | ACK | {DATA | ACK} * n | P
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
+    if (SMBUS_IS_WORD(reg)) {
+        i2c_master_write_byte(cmd, SMBUS_HI_WORD(reg), true);
+        i2c_master_write_byte(cmd, SMBUS_LO_WORD(reg), true);
+    } else {
+        i2c_master_write_byte(cmd, reg, true);
+    }
     i2c_master_write(cmd, val, len, true);
     i2c_master_stop(cmd);
     esp_err_t err = i2c_master_cmd_begin(bus, cmd, TIMEOUT(20 * len));
@@ -504,15 +510,20 @@ esp_err_t smbus_wregs(
 }
 
 esp_err_t smbus_rregs(
-    int bus, uint8_t addr, uint8_t reg, uint8_t *val, size_t len
+    int bus, uint8_t addr, uint16_t reg, uint8_t *val, size_t len
 ) {
     // SMBus Read protocol:
-    //      S | (ADDR | W) | ACK | REG | ACK |
-    //      S | (ADDR | R) | ACK | (DATA | A) * n - 1 | (DATA | N) | P
+    //      S | (ADDR + W) | ACK | REG | ACK |
+    //      S | (ADDR + R) | ACK | {DATA | ACK} * (n - 1) | DATA | NACK | P
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
-    i2c_master_write_byte(cmd, reg, true);
+    if (SMBUS_IS_WORD(reg)) {
+        i2c_master_write_byte(cmd, SMBUS_HI_WORD(reg), true);
+        i2c_master_write_byte(cmd, SMBUS_LO_WORD(reg), true);
+    } else {
+        i2c_master_write_byte(cmd, reg, true);
+    }
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_READ, true);
     if (len > 1) i2c_master_read(cmd, val, len - 1, I2C_MASTER_ACK);
@@ -526,59 +537,59 @@ esp_err_t smbus_rregs(
 esp_err_t smbus_probe(int b, uint8_t a) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(b); NOTUSED(a);
 }
-esp_err_t smbus_wregs(int b, uint8_t a, uint8_t r, uint8_t *v, size_t l) {
+esp_err_t smbus_wregs(int b, uint8_t a, uint16_t r, uint8_t *v, size_t l) {
     return ESP_ERR_NOT_SUPPORTED;
     NOTUSED(b); NOTUSED(a); NOTUSED(r); NOTUSED(v); NOTUSED(l);
 }
-esp_err_t smbus_rregs(int b, uint8_t a, uint8_t r, uint8_t *v, size_t l) {
+esp_err_t smbus_rregs(int b, uint8_t a, uint16_t r, uint8_t *v, size_t l) {
     return ESP_ERR_NOT_SUPPORTED;
     NOTUSED(b); NOTUSED(a); NOTUSED(r); NOTUSED(v); NOTUSED(l);
 }
 #endif // CONFIG_BASE_USE_I2C
 
-esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val) {
+esp_err_t smbus_write_byte(int bus, uint8_t addr, uint16_t reg, uint8_t val) {
     return smbus_wregs(bus, addr, reg, &val, 1);
 }
 
-esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val) {
+esp_err_t smbus_read_byte(int bus, uint8_t addr, uint16_t reg, uint8_t *val) {
     return smbus_rregs(bus, addr, reg, val, 1);
 }
 
-esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val) {
+esp_err_t smbus_write_word(int bus, uint8_t addr, uint16_t reg, uint16_t val) {
     uint8_t buf[2] = { val >> 8, val & 0xFF };
     return smbus_wregs(bus, addr, reg, buf, 2);
 }
 
-esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val) {
+esp_err_t smbus_read_word(int bus, uint8_t addr, uint16_t reg, uint16_t *val) {
     uint8_t buf[2] = { 0, 0 };
     esp_err_t err = smbus_rregs(bus, addr, reg, buf, 2);
     if (!err) *val = buf[0] << 8 | buf[1];
     return err;
 }
 
-esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num) {
-#define LENGTH 16
-    uint8_t *buf = NULL;
-    esp_err_t err = EMALLOC(buf, num);
-    if (!err) err = smbus_rregs(bus, addr, reg, buf, num);
-    if (!err && num) {
-        printf("I2C %d-%02X register table 0x%02X - 0x%02X\n  ",
-               bus, addr, reg, reg + num);
-        LOOPN(i, LENGTH) { printf(" %02X", i); }
-        if (reg % LENGTH) // pad start spaces
-            printf("\n%02X%*s", reg - (reg % LENGTH), 3 * (reg % LENGTH), "");
-        LOOPN(i, num) {
-            if ((i + reg) % LENGTH == 0) printf("\n%02X", i + reg); // newline
-            printf(" %02X", buf[i]);
-        }
-        putchar('\n');
+esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    uint8_t *buf = NULL, length = 16, wb = SMBUS_IS_WORD(reg) ? 4 : 2;
+    reg = SMBUS_HI_WORD(reg) << 8 | SMBUS_LO_WORD(reg);
+    if (!addr || !num || ( err = EMALLOC(buf, num) ) ||
+        ( err = smbus_rregs(bus, addr, reg, buf, num) )) goto exit;
+    printf("I2C %d-%02X register table 0x%0*X - 0x%0*X\n%*s",
+           bus, addr, wb, reg, wb, reg + num, wb, "");
+    LOOPN(i, length) { printf(" %02X", i); }
+    if (reg % length) // pad start spaces
+        printf("\n%0*X%*s", wb, reg - (reg % length), 3 * (reg % length), "");
+    LOOPN(i, num) {
+        if ((i + reg) % length == 0)
+            printf("\n%0*X", wb, i + reg); // newline
+        printf(" %02X", buf[i]);
     }
+    putchar('\n');
+exit:
     TRYFREE(buf);
     return err;
-#undef LENGTH
 }
 
-esp_err_t smbus_toggle(int bus, uint8_t addr, uint8_t reg, uint8_t bit) {
+esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit) {
     uint8_t val = 0, mask = BIT(bit);
     esp_err_t err = smbus_read_byte(bus, addr, reg, &val);
     if (val & mask) {
@@ -672,7 +683,7 @@ static esp_err_t spi_gexp_get_level(gexp_num_t pin, bool *level, bool sync) {
 #endif
 
 #ifdef CONFIG_BASE_USE_GPIOEXP
-static void IRAM_ATTR UNUSED gexp_isr(void *arg) {
+static UNUSED void IRAM_ATTR gexp_isr(void *arg) {
 #   ifdef CONFIG_BASE_GPIOEXP_INT
     ets_printf("PIN_INT %s\n", gpio_get_level(PIN_INT) ? "RISE" : "FALL");
 #   endif
@@ -775,7 +786,7 @@ static void gexp_initialize() {
  * GPIO Interrupt (inc. button & knob)
  */
 
-static const char * gpio_default_usage[GPIO_PIN_COUNT] = {
+static const char * usage_table[GPIO_PIN_COUNT] = {
 #if defined(CONFIG_IDF_TARGET_ESP32)
     [0]         = "Strapping PU",
     [2]         = "Strapping PD",
@@ -808,8 +819,8 @@ static const char * gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_LED]   = "LED",
 #endif
 #ifdef CONFIG_BASE_USE_UART
-    [PIN_TXD]   = "UART TXD" STR(CONFIG_BASE_UART_NUM),
-    [PIN_RXD]   = "UART RXD" STR(CONFIG_BASE_UART_NUM),
+    [PIN_TXD]   = "UART TX" STR(CONFIG_BASE_UART_NUM),
+    [PIN_RXD]   = "UART RX" STR(CONFIG_BASE_UART_NUM),
 #endif
 #ifdef CONFIG_BASE_USE_I2S
     [PIN_CLK]   = "I2S CLK",
@@ -828,7 +839,7 @@ static const char * gpio_default_usage[GPIO_PIN_COUNT] = {
     [PIN_MOSI]  = "SPI MOSI",
     [PIN_SCLK]  = "SPI SCLK",
 #endif
-#ifdef CONFIG_BASE_USE_SDFS
+#ifdef CONFIG_BASE_SDFS_SPI
     [PIN_CS0]   = "SPI CS0 (SDCard)",
 #endif
 #ifdef CONFIG_BASE_SCREEN_SPI
@@ -880,10 +891,12 @@ static const char * gpio_default_usage[GPIO_PIN_COUNT] = {
 #endif
 };
 
-static bool gpio_usable(gpio_num_t pin) {
-    if (pin > GPIO_PIN_COUNT) return false;
-    if (!gpio_default_usage[pin]) return true;
-    return startswith(gpio_default_usage[pin], "Strapping");
+const char * gpio_usage(gpio_num_t pin, const char *usage) {
+    if (pin < 0 || pin >= GPIO_PIN_COUNT) return NULL;
+    const char *current = usage_table[pin];
+    if (!strlen(usage ?: "") || (current && !startswith(current, "Strapping")))
+        return current;
+    return usage_table[pin] = usage;
 }
 
 #ifdef CONFIG_BASE_USE_BTN
@@ -895,11 +908,15 @@ static void cb_button(void *arg, void *data) {
     switch (iot_button_get_event(arg)) {
     case BUTTON_PRESS_DOWN:
         ESP_LOGI(BTAG, "%d press", pin);
+#ifdef CONFIG_BASE_BTN_INPUT
         if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_DN);
+#endif
         break;
     case BUTTON_PRESS_UP:
         ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
+#ifdef CONFIG_BASE_BTN_INPUT
         if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_UP);
+#endif
         break;
     case BUTTON_SINGLE_CLICK:
         ESP_LOGI(BTAG, "%d single click", pin);
@@ -998,12 +1015,20 @@ static void gpio_initialize() {
     btn[0] = button_init(&btn_conf, PIN_BTN, cb_button);
 #   endif
 #   ifdef CONFIG_BASE_BTN_GPIO0
-    if (gpio_usable(GPIO_NUM_0)) {
+    const char *usage = gpio_usage(GPIO_NUM_0, NULL);
+    if (!usage || startswith(usage, "Strapping")) {
         button_config_t io0_conf = {
             .type = BUTTON_TYPE_GPIO,
             .gpio_button_config = { .gpio_num = GPIO_NUM_0 }
         };
         btn[1] = button_init(&io0_conf, GPIO_NUM_0, cb_button);
+        if (btn[1] && !usage) {
+            gpio_usage(GPIO_NUM_0, "Button");
+        } else if (btn[1]) {
+            static char desc[32];
+            snprintf(desc, sizeof(desc), "%s (Button)", usage);
+            gpio_usage(GPIO_NUM_0, desc);
+        }
     }
 #   endif
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
@@ -1059,7 +1084,7 @@ void gpio_table(bool i2c, bool spi) {
     LOOPN(pin, GPIO_PIN_COUNT) {
         if (!GPIO_IS_VALID_GPIO(pin)) continue;
         value = gpio_get_level(pin) ? "HIGH" : "LOW";
-        printf("%-3d %5s %s\n", pin, value, gpio_default_usage[pin] ?: "");
+        printf("%-3d %5s %s\n", pin, value, gpio_usage(pin, NULL) ?: "");
     }
 #ifdef CONFIG_BASE_GPIOEXP_I2C
     if (i2c) {
@@ -1100,346 +1125,6 @@ void gpio_table(bool i2c, bool spi) {
 }
 
 /******************************************************************************
- * Audio/Video sensors (I2S PDM MIC and SCCB/SMBus Camera)
- */
-
-ESP_EVENT_DEFINE_BASE(AVC_EVENT);
-
-#define AVC_POST(id, data, len, tout) \
-    esp_event_post(AVC_EVENT, id, data, len, TIMEOUT(tout))
-
-static UNUSED bool audio_run, video_run;
-static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
-
-#ifdef CONFIG_BASE_USE_I2S
-
-#ifdef TARGET_IDF_5
-static i2s_chan_handle_t i2s_handle;
-#   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
-#   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
-#   define I2S_READ(...)    i2c_channel_read(i2s_handle, __VA_ARGS__)
-#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
-#   define PDM_TYPE         int16_t
-#   ifdef CONFIG_BASE_PDM_STEREO
-#       define PDM_NCH      I2S_SLOT_MODE_STEREO
-#   else
-#       define PDM_NCH      I2S_SLOT_MODE_MONO
-#   endif
-
-static void i2s_initialize() {
-#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
-    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
-    i2s_pdm_rx_config_t pdm_conf = {
-        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
-        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
-        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
-    };
-#   undef DEFAULT
-    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
-    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
-}
-#else // TARGET_IDF_4
-#   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
-#   define I2S_RELEASE()    i2s_stop(NUM_I2S)
-#   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
-#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_BITS_PER_SAMPLE_16BIT / 8 )
-#   define PDM_TYPE         int16_t
-#   ifdef CONFIG_BASE_PDM_STEREO
-#       define PDM_NCH      I2S_CHANNEL_STEREO
-#       define PDM_FCH      I2S_CHANNEL_FMT_RIGHT_LEFT
-#   else
-#       define PDM_NCH      I2S_CHANNEL_MONO
-#       define PDM_FCH      I2S_CHANNEL_FMT_ONLY_RIGHT
-#   endif
-
-static void i2s_initialize() {
-    i2s_config_t i2s_conf = {
-        .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM,
-        .sample_rate            = PDM_SHZ,
-        .bits_per_sample        = PDM_BPC * 8,
-        .channel_format         = PDM_FCH,
-        .communication_format   = I2S_COMM_FORMAT_STAND_I2S,
-        .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL2,
-        .dma_buf_count          = 8,
-        .dma_buf_len            = 128,
-    };
-    i2s_pin_config_t pin_conf = {
-        .mck_io_num     = I2S_PIN_NO_CHANGE,
-        .bck_io_num     = I2S_PIN_NO_CHANGE,
-        .ws_io_num      = PIN_CLK,
-        .data_out_num   = I2S_PIN_NO_CHANGE,
-        .data_in_num    = PIN_DAT,
-    };
-    ESP_ERROR_CHECK( i2s_driver_install(NUM_I2S, &i2s_conf, 0, NULL) );
-    ESP_ERROR_CHECK( i2s_set_pin(NUM_I2S, &pin_conf) );
-    ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
-}
-#endif // TARGET_IDF_5
-
-static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
-    static char eqls[80 - 4 - 3 - 13];
-    FILE *stream = arg;
-    audio_evt_t *evt = *(audio_evt_t **)data;
-    if (id == AUD_EVENT_START) {
-        memset(eqls, '=', sizeof(eqls) - 1);
-        eqls[sizeof(eqls) - 1] = '\0';
-    } else if (id == AUD_EVENT_STOP) {
-        fputc('\n', stream);
-        fflush(stream);
-    }
-    if (id != AUD_EVENT_DATA || evt->id % 10 || !evt->mode->nch) return;
-    size_t nch = evt->mode->nch, vmax = BIT(evt->mode->depth * 8 - 1);
-    size_t tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
-    PDM_TYPE *buf = evt->data, vol[nch], len[nch];
-    LOOPN(i, evt->len / nch / evt->mode->depth) {
-        LOOPN(j, nch) {
-            vol[j] = MAX(vol[j], ABS(buf[i * nch + j]));
-        }
-    }
-    fprintf(stream, "\r%s [", format_timestamp_us(0));
-    LOOPN(j, nch) {
-        vol[j] = vol[j] * 100 / vmax;           // 0 ~ 100
-        len[j] = vol[j] * tlen / 100;           // 0 ~ tlen
-        if (j) fputc('|', stream);
-        if (j % 2 || nch == 1) {
-            fprintf(stream, "%-3d%%%.*s%c%*s",
-                vol[j], len[j], eqls, vol[j] ? '+' : ' ', tlen - len[j], "");
-        } else {
-            fprintf(stream, "%*s%c%.*s%3d%%",
-                tlen - len[j], "", vol[j] ? '+' : ' ', len[j], eqls, vol[j]);
-        }
-    }
-    fputc(']', stream);
-    fflush(stream);
-}
-
-static void audio_capture(void *arg) {
-    audio_mode_t mode = { PDM_SHZ, PDM_NCH, PDM_BPC };
-    wav_header_t WAV = {
-        "RIFF", -1,
-        "WAVE",
-        "fmt ", WAV_HEADER_FMT_LEN,
-            0x01, mode.nch, mode.srate,
-            mode.nch * mode.depth * mode.srate,
-            mode.nch * mode.depth, mode.depth * 8,
-        "data", -1
-    };
-    size_t dlen = (uint64_t)WAV.Bps * (uint32_t)arg / 1000;
-    size_t rlen, plen = sizeof(void **), blen = WAV.Bps / 50; // 20ms buffer
-    WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;
-    audio_evt_t wav = { .len = sizeof(WAV), .data = &WAV };
-    audio_evt_t evt = { .data = malloc(blen), .mode = &mode };
-    void *dptr = &wav;
-    if (!evt.data) goto exit;
-    AVC_POST(AUD_EVENT_START, &dptr, plen, -1); msleep(10);
-    dptr = &evt;
-    I2S_ACQUIRE();
-    for (evt.id = 0; audio_run && dlen; evt.id++) {
-        if (I2S_READ(evt.data, blen, &rlen, TIMEOUT(25)) || !rlen) break;
-        dlen -= (evt.len = MIN(rlen, dlen));
-        AVC_POST(AUD_EVENT_DATA, &dptr, plen, 15);
-    }
-    I2S_RELEASE();
-    memset(dptr = &wav, 0, sizeof(wav));
-    AVC_POST(AUD_EVENT_STOP, &dptr, plen, -1); msleep(10);
-    UREGEVTS(AVC, aud_shdl);
-    TRYFREE(evt.data);
-exit:
-    vTaskDelete(NULL);
-}
-#   undef I2S_ACQUIRE
-#   undef I2S_RELEASE
-#   undef I2S_READ
-#   undef PDM_TYPE
-#   undef PDM_SHZ
-#   undef PDM_NCH
-#   undef PDM_BPC
-#endif // CONFIG_BASE_USE_I2S
-
-#ifdef CONFIG_BASE_USE_CAM
-static void cam_initialize() {
-    esp_err_t err = ESP_OK;
-    static const char *pin_names[14] = {
-        "CAM PWDN", "CAM RESET", "CAM XCLK",
-        "CAM VSYNC", "CAM HREF", "CAM PCLK",
-        "CAM D7", "CAM D6", "CAM D5", "CAM D4",
-        "CAM D3", "CAM D2", "CAM D1", "CAM D0",
-    };
-#   ifdef CONFIG_BASE_CAM_CUSTOM
-#       define P(name) CONFIG_BASE_GPIO_CAM_##NAME
-    int pins[LEN(pin_names)] = {
-        P(PWDN), P(RESET), P(XCLK), P(VSYNC), P(HREF), P(PCLK),
-        P(D7), P(D6), P(D5), P(D4), P(D3), P(D2), P(D1), P(D0)
-    };
-#       undef P
-#   else
-    int pins[LEN(pin_names)];
-    if (parse_all(CONFIG_BASE_CAM_PINS, pins, LEN(pins)) != LEN(pins)) {
-        ESP_LOGE(TAG, "Could not parse CAM pins: %s", CONFIG_BASE_CAM_PINS);
-        err = ESP_ERR_INVALID_ARG;
-    }
-#   endif
-    LOOPN(i, LEN(pins)) {
-        if (pins[i] == -1) {
-            if (i >= 2) err = ESP_ERR_INVALID_ARG;
-        } else if (gpio_usable(pins[i])) {
-            gpio_default_usage[pins[i]] = pin_names[i];
-        } else {
-            ESP_LOGE(TAG, "Invalid %s pin: %d", pin_names[i], pins[i]);
-            err = ESP_ERR_INVALID_ARG;
-        }
-    }
-    if (err) return;
-    camera_config_t conf = {
-        .pin_pwdn = pins[0], .pin_reset = pins[1], .pin_xclk = pins[2],
-        .pin_sccb_sda = -1, .pin_sccb_scl = -1, .sccb_i2c_port = NUM_I2C,
-        .pin_vsync = pins[3], .pin_href = pins[4], .pin_pclk = pins[5],
-        .pin_d7 = pins[6],  .pin_d6 = pins[7],
-        .pin_d5 = pins[8],  .pin_d4 = pins[9],
-        .pin_d3 = pins[10], .pin_d2 = pins[11],
-        .pin_d1 = pins[12], .pin_d0 = pins[13],
-        .xclk_freq_hz = 20000000, // 20MHz
-        .ledc_timer = LEDC_TIMER_3,
-        .ledc_channel = LEDC_CHANNEL_4,
-        .pixel_format = PIXFORMAT_JPEG,
-        .frame_size = FRAMESIZE_QSXGA, // init as large buffer as possible
-        .jpeg_quality = 10,
-        .fb_count = 2,
-        .fb_location = CAMERA_FB_IN_PSRAM,
-        .grab_mode = CAMERA_GRAB_WHEN_EMPTY,
-    };
-    if (( err = esp_camera_init(&conf) )) {
-        ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(err));
-    } else {
-        sensor_t *cam = esp_camera_sensor_get();
-        if (cam->id.PID == OV3660_PID) {
-            cam->set_brightness(cam, 1);
-            cam->set_saturation(cam, -2);
-        }
-        cam->set_framesize(cam, FRAMESIZE_HD);
-    }
-}
-
-static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
-    FILE *stream = arg;
-    video_evt_t *evt = *(video_evt_t **)data;
-    if (id == VID_EVENT_STOP) {
-        fputc('\n', stream);
-    } else if (id == VID_EVENT_DATA && (evt->id % evt->mode->fps) == 0) {
-        fprintf(stream, "\r%08d %dx%dx%d %.4s %dBytes",
-                evt->id, evt->mode->width, evt->mode->height,
-                evt->mode->depth, evt->mode->fourcc, evt->len);
-    }
-    fflush(stream);
-}
-
-static void video_capture(void *arg) {
-    sensor_t *cam = esp_camera_sensor_get();
-    if (!cam) return;
-    const resolution_info_t *res = resolution + cam->status.framesize;
-    video_mode_t mode = { 15, res->width, res->height, 3, "MJPG" }; // FIXME fps
-    uint32_t ms = (uint32_t)arg, retry = 5;
-    uint32_t BPF = mode.width * mode.height * mode.depth * 0.6; // BytePerFrame
-    avi_header_t AVI = {
-        "RIFF", -1,
-        "AVI ",
-        "LIST", AVI_HEADER_HDLR_LEN, "hdlr",
-            "avih", AVI_HEADER_AVIH_LEN,
-                1000000 / mode.fps, mode.fps * BPF, 0, 0x910, -1, 0, 1,
-                0x100000, mode.width, mode.height, { 0, 0, 0, 0 },
-        "LIST", AVI_HEADER_STRL_LEN, "strl",
-            "strh", AVI_HEADER_STRH_LEN,
-                "vids", "MJPG", 0, 0, 0, 0, 1, mode.fps, 0, -1,
-                BPF, -1, 0, 0, 0, mode.width, mode.height,
-            "strf", AVI_HEADER_STRF_LEN,
-                AVI_HEADER_STRF_LEN, mode.width, mode.height, 1,
-                mode.depth * 8, "MJPG", BPF, 0, 0, 0, 0,
-        "LIST", -1, "movi",
-    };
-    size_t nframe = ms * (ms == -1 ? 1 : mode.fps), plen = sizeof(void **);
-    AVI.total_frames = AVI.length = nframe;
-    camera_fb_t *fb = NULL;
-    video_evt_t avi = { .len = sizeof(AVI), .data = &AVI };
-    video_evt_t evt = { .data = NULL, .mode = &mode };
-    void *dptr = &avi;
-    AVC_POST(VID_EVENT_START, &dptr, plen, -1); msleep(10);
-    dptr = &evt;
-    vTaskResume(xTaskGetHandle("cam_task"));
-    for (evt.id = 0; video_run && retry && evt.id < nframe; evt.id++) {
-        if (evt.data && fb && fb->buf != evt.data) free(evt.data);
-        TRYNULL(fb, esp_camera_fb_return);
-        if (!( fb = esp_camera_fb_get() )) break;
-        if (fb->format == PIXFORMAT_JPEG) {
-            evt.data = fb->buf;
-            evt.len = fb->len;
-        } else if (!frame2jpg(fb, 80, (uint8_t **)&evt.data, &evt.len)) {
-            ESP_LOGE(TAG, "JPEG compression failed");
-            retry--;
-        }
-        AVC_POST(VID_EVENT_DATA, &dptr, plen, 33);
-    }
-    vTaskSuspend(xTaskGetHandle("cam_task"));
-    memset(dptr = &avi, 0, sizeof(avi));
-    AVC_POST(VID_EVENT_STOP, &dptr, plen, -1); msleep(10);
-    UREGEVTS(AVC, vid_shdl);
-    if (evt.data && fb && fb->buf != evt.data) free(evt.data);
-    TRYNULL(fb, esp_camera_fb_return);
-    vTaskDelete(NULL);
-}
-#endif // CONFIG_BASE_USE_CAM
-
-#undef AVC_POST
-
-esp_err_t avc_command(
-    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream
-) {
-    if (!targets) targets = AUDIO_TARGET | VIDEO_TARGET;
-    bool atgt = targets & AUDIO_TARGET, vtgt = targets & VIDEO_TARGET;
-    TaskHandle_t atask = xTaskGetHandle("audio");
-    TaskHandle_t vtask = xTaskGetHandle("video");
-    if (ctrl) {
-        if (!strbool(ctrl)) {
-            if (atgt) audio_run = false;
-            if (vtgt) video_run = false;
-            for (int ms = 10; ms && (atgt || vtgt); ms--) {
-                if (atgt && !xTaskGetHandle("audio")) atgt = false;
-                if (vtgt && !xTaskGetHandle("video")) vtgt = false;
-                msleep(ms);
-            }
-        } else {
-            void *arg = (void *)(tout_ms ?: (uint32_t)-1);
-#ifdef CONFIG_BASE_USE_I2S
-            if (atgt && !atask) {
-                audio_run = true;
-                xTaskCreate(audio_capture, "audio", 8192, arg, 20, &atask);
-                if (!atask) return ESP_ERR_NO_MEM;
-            }
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-            if (vtgt && !vtask) {
-                video_run = true;
-                xTaskCreate(video_capture, "video", 2048, arg, 20, &vtask);
-                if (!vtask) return ESP_ERR_NO_MEM;
-            }
-#endif
-        }
-    } else if (stream) {
-#ifdef CONFIG_BASE_USE_I2S
-        if (atgt && !aud_shdl) REGEVTS(AVC, aud_visual, stream, &aud_shdl);
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-        if (vtgt && !vid_shdl) REGEVTS(AVC, vid_visual, stream, &vid_shdl);
-#endif
-    } else {
-        printf("Audio Capture: %s\n", atask ? "enabled" : "disabled");
-        printf("Video Capture: %s\n", vtask ? "enabled" : "disabled");
-    }
-    return ESP_OK;
-}
-
-/******************************************************************************
  * Task Watchdog
  */
 
@@ -1465,7 +1150,8 @@ static void twdt_initialize() {
 
 void driver_initialize() {
     const char * tags[] = {
-        "gpio", "button", "adc button", "led_indicator", "Knob"
+        "gpio", "button", "adc button", "led_indicator", "Knob",
+        "cam_hal", "camera",
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 
@@ -1491,10 +1177,5 @@ void driver_initialize() {
 #ifdef CONFIG_BASE_USE_LED
     led_initialize();
 #endif
-#ifdef CONFIG_BASE_USE_I2S
-    i2s_initialize();
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-    cam_initialize();
-#endif
+    avc_initialize();
 }

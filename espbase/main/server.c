@@ -7,10 +7,11 @@
 #include "config.h"
 #include "update.h"
 #include "drivers.h"
-#include "console.h"
 #include "filesys.h"
-#include "ledmode.h"
-#include "timesync.h"
+#include "avcmode.h"
+#include "ledmode.h"            // for led_set_blink
+#include "console.h"            // for console_handle_xxx
+#include "timesync.h"           // for format_datetime
 
 #include "esp_rom_md5.h"
 #include "esp_http_server.h"
@@ -31,7 +32,7 @@
 #define TYPE_JSON "application/json"
 #define TYPE_UENC "application/x-www-form-urlencoded"
 #define TYPE_MPRT "multipart/form-data"
-#define CHUNK_SIZE 1024
+#define CHUNK_SIZE 2048
 
 #define send_str httpd_resp_sendstr // simple alias
 
@@ -67,9 +68,10 @@ static const char *MEDIA_HTML =
 "<html>"
 "<head>"
     "<title>Simple Media test</title>"
+    "<style>img {cursor:pointer;min-width:320px;min-height:240px;}</style>"
 "</head>"
 "<body>"
-    "<img id=\"vp\" style=\"cursor:pointer\" src=\"media?mjpg&still\">"
+    "<img id=\"vp\" src=\"media?mjpg&still\"><br>"
     "<audio id=\"ap\" preload=\"none\" src=\"media?wav\" controls "
         "controlslist=\"nodownload noremoteplayback noplaybackrate\"></audio>"
     "<script>"
@@ -78,12 +80,15 @@ static const char *MEDIA_HTML =
             "if (tmp.endsWith('&still')) {"
                 "vp.src = tmp.substr(0, tmp.length - 6);"
             "} else {"
-                "vp.src = ''; vp.src = tmp + '&still';"
+                "vp.src = '';"
+                "vp.src = tmp + '&still';"
             "}"
         "});"
         "ap.addEventListener('pause', e => {"
             "let tmp = ap.src;"
-            "ap.src = ''; ap.load(); ap.src = tmp;"
+            "ap.src = '';"
+            "ap.load();"
+            "ap.src = tmp;"
         "});"
     "</script>"
 "</body>"
@@ -235,7 +240,7 @@ static http_auth_t * auth_init() {
     sprintf(buf, "%s:%s", ctx->user, ctx->pass);
     size_t len = (strlen(buf) + 2) / 3 * 4 + 7; // 7 for "Basic " and '\0'
     if (!ECALLOC(ctx->basic, 1, len))
-        b64encode(stpcpy(ctx->basic, "Basic "), buf, strlen(buf));
+        b64encode(buf, stpcpy(ctx->basic, "Basic "), strlen(buf));
     return ctx;
 }
 
@@ -388,8 +393,8 @@ static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
     }
     TRYFREE(buf);
     TRYNULL(fd, fclose);
-    httpd_resp_sendstr_chunk(req, NULL);
     if (err) send_err(req, 500, "Failed to send file");
+    else     httpd_resp_sendstr_chunk(req, NULL);
     return err;
 }
 
@@ -440,8 +445,8 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
                         parse_kvs(head + 20, "; ", LEN(keys), keys, vals);
                     }
                     crlf = strstr(head = crlf + slen, sep);
-                } else if (vals[1]) {
-                    if (!vals[0]) vals[0] = vals[1];
+                } else if (vals[1]) {                   // filename
+                    if (!vals[0]) vals[0] = vals[1];    // name
                     crlf = strstr(head += slen, sep);
                     state = PARSE_DATA;
                     idx = 0;
@@ -659,18 +664,19 @@ static esp_err_t on_upload_file(httpd_req_t *req, const char *name,
             send_err(req, 500, "Could not open file to write");
             goto error;
         }
-        printf("Upload file: %s\n", path);
-        led_set_blink(1);
+        fprintf(stderr, "Upload file: %s\n", path);
     }
     if (fd && len) {
         if (len != fwrite(data, 1, len, fd)) {
             send_err(req, 500, "Could not write to file");
             goto error;
         }
-        printf("\rProgress: %8s", format_size(idx, false));
+        fprintf(stderr, "\rProgress: %8s", format_size(idx, false));
+        fflush(stderr);
     }
     if (end && fd) {
-        printf("Upload success: %s\n", format_size(idx + len, false));
+        fputc('\n', stderr);
+        fprintf(stderr, "Upload success: %s\n", format_size(idx + len, false));
         TRYNULL(fd, fclose);
         TRYFREE(fn);
     }
@@ -727,7 +733,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
 static esp_err_t on_config(httpd_req_t *req) {
     CHECK_REQUEST(req);
     if (req->method == HTTP_POST) {
-        const char *json = get_param(req, "json", FROM_ANY);
+        const char *json = get_param(req, "json", FROM_BODY);
         if (json && !config_loads(json)) {
             send_err(req, 500, "Failed to load config from JSON");
         } else {
@@ -736,7 +742,7 @@ static esp_err_t on_config(httpd_req_t *req) {
     } else {
         char *json = config_dumps();
         if (!json) {
-            send_err(req, 500, "Failed to dump configs into JSON");
+            send_err(req, 500, "Failed to dump config into JSON");
         } else {
             httpd_resp_set_type(req, TYPE_JSON);
             send_str(req, json);
@@ -754,13 +760,13 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
     if (!idx) {
         if (strcmp(name, "update")) return ESP_ERR_HTTPD_SKIP_DATA;
         if (!has_param(req, "size", -1) && !ota_updation_begin(0)) goto error;
-        printf("Update file: %s\n", name);
-        led_set_blink(2);
+        fprintf(stderr, "Update file: %s\n", name);
+        led_set_blink(1);
     }
     if (len && !ota_updation_write(data, len)) goto error;
     if (end) {
         if (!ota_updation_end()) goto error;
-        printf("Update success: %s\n", format_size(idx + len, false));
+        fprintf(stderr, "Update success: %s\n", format_size(idx + len, false));
         send_str(req, "OTA Updation success: reboot now");
         setTimeout(10, restart, NULL);
     }
@@ -816,18 +822,28 @@ static esp_err_t on_static(httpd_req_t *req) {
 
 typedef struct {
     int fd;
-    bool stop;
+    bool stop, once;
     char addr[ADDRSTRLEN];
     esp_event_handler_instance_t inst;
 } http_media_t;
+
+static UNUSED int socket_send_all(int fd, void *buf, size_t len) {
+    int ret = 0;
+    while (len > 0 && fd > 0) {
+        if (( ret = httpd_socket_send(server, fd, buf, len, 0) ) < 0) break;
+        buf += ret;
+        len -= ret;
+    }
+    if (len) ESP_LOGD(TAG, "%d remain = %d, ret = %d", fd, len, ret);
+    return MIN(ret, 0);
+}
 
 #ifdef CONFIG_BASE_USE_I2S
 static http_media_t audio_ctx;
 
 static void handle_audio_streaming(void *arg) {
     audio_evt_t *evt = arg;
-    int len = evt ? evt->len : 0, fd = audio_ctx.fd;
-    if (len && httpd_socket_send(server, fd, evt->data, len, 0) == len) return;
+    if (evt->len && !socket_send_all(autio_ctx.fd, evt->data, evt->len)) return;
     UREGEVTS(AVC, audio_ctx.inst);
     if (audio_ctx.stop) AUDIO_STOP();
     ESP_LOGI(TAG, "Audio stream to %s stopped", audio_ctx.addr);
@@ -838,39 +854,90 @@ static void handle_audio_streaming(void *arg) {
 static http_media_t video_ctx;
 
 static void handle_video_streaming(void *arg) {
+    if (!video_ctx.fd) return;  // once
     video_evt_t *evt = arg;
-    int len = (evt && evt->mode) ? evt->len : 0, fd = video_ctx.fd;
-    if (len && fd) {
-        static char bdary[51 + 14 + 1] =
-            "--FRAME\r\n"
-            "Content-Type: image/jpeg\r\n"
-            "Content-Length: ";
-        int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", len);
-        if (httpd_socket_send(server, fd, bdary, blen, 0) == blen &&
-            httpd_socket_send(server, fd, evt->data, len, 0) == len) return;
-    }
+    notify_increase(evt->task);
+    if (!evt->mode) goto exit;  // VID_EVENT_START
+    if (!evt->len) goto stop;   // VID_EVENT_STOP
+    static char bdary[51 + 14 + 1] =
+        "--FRAME\r\n"
+        "Content-Type: image/jpeg\r\n"
+        "Content-Length: ";
+    int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", evt->len);
+    if (!socket_send_all(video_ctx.fd, bdary, blen) &&
+        !socket_send_all(video_ctx.fd, evt->data, evt->len) &&
+        !video_ctx.once) goto exit;
+stop:
     UREGEVTS(AVC, video_ctx.inst);
     if (video_ctx.stop) VIDEO_STOP();
     ESP_LOGI(TAG, "Video stream to %s stopped", video_ctx.addr);
+    if (video_ctx.once) {
+        httpd_sess_trigger_close(server, video_ctx.fd);
+        video_ctx.fd = 0;
+    }
+exit:
+    notify_decrease(evt->task);
 }
 #endif
 
+#if defined(CONFIG_BASE_USE_I2S) || defined(CONFIG_BASE_USE_CAM)
 static void on_media_data(void *func, esp_event_base_t b, int32_t i, void *p) {
     // this function is called in sys_evt task
     // recv data from capture task
     // send data to httpd task
-    httpd_queue_work(server, func, p ? *(void **)p : NULL);
+    httpd_queue_work(server, func, *(void **)p);
     return; NOTUSED(b); NOTUSED(i);
 }
+#endif
 
 static esp_err_t on_media(httpd_req_t *req) {
     CHECK_REQUEST(req);
-    if (has_param(req, "wav", FROM_ANY)) {
-#ifndef CONFIG_BASE_USE_I2S
-        return send_err(req, 403, "Audio stream not available");
+    if (has_param(req, "video", FROM_ANY)) {
+#ifndef CONFIG_BASE_USE_CAM
+        send_err(req, 403, "Video stream not available");
 #else
-        if (audio_ctx.inst)
-            return send_err(req, 403, "Audio stream is in using");
+        const char *video = get_param(req, "video", FROM_ANY);
+        if (req->method == HTTP_POST) {
+            if (video && CAMERA_LOADS(video)) {
+                return send_err(req, 500, "Failed to load config from JSON");
+            } else {
+                return send_str(req, NULL);
+            }
+        }
+        if (strcmp(video ?: "", "mjpg")) {
+            char *json = NULL;
+            if (CAMERA_DUMPS((const char *)&json)) {
+                send_err(req, 500, "Failed to dump config from JSON");
+            } else {
+                httpd_resp_set_type(req, TYPE_JSON);
+                send_str(req, json);
+            }
+            TRYFREE(json);
+            return ESP_OK;
+        }
+        if (video_ctx.inst) return send_err(req, 403, "Video stream is busy");
+        const char *resp =
+            "HTTP/1.1 200 OK\r\n"
+            "Content-Type: multipart/x-mixed-replace;boundary=--FRAME\r\n"
+            "Cache-Control: no-store\r\n"
+            "X-Framerate: 60\r\n\r\n";
+        int fd = video_ctx.fd = httpd_req_to_sockfd(req);
+        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
+        REGEVTS(AVC, on_media_data, handle_video_streaming, &video_ctx.inst);
+        if (!video_ctx.inst) return ESP_FAIL;
+        video_ctx.stop = xTaskGetHandle("video") == NULL;
+        video_ctx.once = has_param(req, "still", FROM_ANY);
+        VIDEO_START(-1);
+        snprintf(video_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
+        ESP_LOGI(TAG, "Video stream to %s started", video_ctx.addr);
+#endif
+    } else if (has_param(req, "audio", FROM_ANY)) {
+#ifndef CONFIG_BASE_USE_I2S
+        send_err(req, 403, "Audio stream not available");
+#else
+        const char *audio = get_param(req, "audio", FROM_ANY);
+        if (strcmp(audio ?: "", "wav")) return send_str(req, NULL);
+        if (audio_ctx.inst) return send_err(req, 403, "Audio stream is busy");
         const char *resp =
             "HTTP/1.1 200 OK\r\n"
             "Content-Type: audio/wav\r\n"
@@ -883,26 +950,6 @@ static esp_err_t on_media(httpd_req_t *req) {
         AUDIO_START(-1);
         snprintf(audio_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
         ESP_LOGI(TAG, "Audio stream to %s started", audio_ctx.addr);
-#endif
-    } else if (has_param(req, "mjpg", FROM_ANY)) {
-#ifndef CONFIG_BASE_USE_CAM
-        return send_err(req, 403, "Video stream not available");
-#else
-        if (video_ctx.inst)
-            return send_err(req, 403, "Video stream is in using");
-        const char *resp =
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: multipart/x-mixed-replace;boundary=--FRAME\r\n"
-            "Cache-Control: no-store\r\n"
-            "X-Framerate: 60\r\n\r\n";
-        int fd = video_ctx.fd = httpd_req_to_sockfd(req);
-        httpd_socket_send(req->handle, fd, resp, strlen(resp), 0);
-        REGEVTS(AVC, on_media_data, handle_video_streaming, &video_ctx.inst);
-        if (!video_ctx.inst) return ESP_FAIL;
-        video_ctx.stop = xTaskGetHandle("video") == NULL;
-        VIDEO_START(-1);
-        snprintf(video_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
-        ESP_LOGI(TAG, "Video stream to %s started", video_ctx.addr);
 #endif
     } else {
         return send_str(req, MEDIA_HTML);
@@ -998,8 +1045,8 @@ void server_initialize() {
 #endif // CONFIG_HTTPD_WS_SUPPORT
 
 // Use `httpd_config_t.global_user_ctx` to store authorization info
-// Use `httpd_req_t.sess_ctx` to store parsed `http_param_t *`
-// Use `httpd_req_t.user_ctx` to store `FLAG_XXXs`
+// Use `httpd_req_t.sess_ctx` to store `http_param_t *` which is auto released
+// Use `httpd_req_t.user_ctx` to store `FLAG_XXXs` which is never released
 void server_loop_begin() {
     if (server) return;
 
@@ -1010,6 +1057,7 @@ void server_loop_begin() {
         HTTP_API("/alive",  GET,    on_success, NULL),
         HTTP_API("/exec",   POST,   on_command, FLAG_NEED_AUTH),
         HTTP_API("/media",  GET,    on_media,   FLAG_NEED_AUTH),
+        HTTP_API("/media",  POST,   on_media,   FLAG_NEED_AUTH),
         // AP APIs
         HTTP_API("/edit",   GET,    on_editor,  FLAG_AP_ONLY),
         HTTP_API("/edit",   PUT,    on_editor,  FLAG_AP_ONLY | FLAG_NEED_AUTH),
@@ -1034,11 +1082,13 @@ void server_loop_begin() {
     config.global_user_ctx = auth_init();
     config.global_user_ctx_free_fn = auth_exit;
 
-    // httpd_start => httpd_thread => httpd_server => select
-    //                                                    |
-    //                          httpd_accept_conn       <=|
-    // httpd_queue_work     =>  httpd_process_ctrl_msg  <=|
-    // uri->handler(req)    <=  httpd_process_session   <=+
+    // Call stack: httpd_start => httpd_thread => httpd_server => select
+    // If select rfds:
+    //      1. httpd_accept_conn
+    //      2. httpd_process_ctrl_msg <= httpd_queue_work
+    //      3. httpd_process_session  => uri->handler(req)
+    // So avoid using infinite loop in uri handlers.
+    // Use httpd_queue_work instead.
     esp_err_t err = httpd_start(&server, &config);
     if (err) {
         ESP_LOGE(TAG, "Start server failed: %s", esp_err_to_name(err));

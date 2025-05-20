@@ -1,29 +1,23 @@
 /*
- * File: avutils.h
+ * File: avcmode.h
  * Authors: Hank <hankso1106@gmail.com>
  * Time: 2025/3/25 8:53:45
  */
 
 #pragma once
 
-#include <stdint.h>
-#include <string.h>
-
-typedef char fcc[4];
-typedef uint8_t u8;
-typedef uint16_t u16;
-typedef uint32_t u32;
+#include "globals.h"
 
 #define AUDIO_TARGET        (1 << 0)
 #define VIDEO_TARGET        (1 << 1)
 #define IMAGE_TARGET        (1 << 2)
+#define ACTION_READ         (1 << 4)
+#define ACTION_WRITE        (1 << 5)
 #define SHIFT3(a, b, c)     (((a) << 16) | ((b) << 8) | (c))
 #define SHIFT4(a, b, c, d)  (((a) << 24) | SHIFT3((b), (c), (d)))
 #define FOURCC(a, b, c, d)  SHIFT4((u32)(a), (u32)(b), (u32)(c), (u32)(d))
-
-#ifndef PACKED
-#   define PACKED           __attribute__((__packed__))
-#endif
+#define FRAMEDIV(id, n)     ( (id) % (n) == 0 )
+#define FRAMESEC(id)        FRAMEDIV((id), mode.fps)
 
 #define UNION_TYPE(type, name, suffix, p1, p2, p3)                          \
     union {                                                                 \
@@ -38,6 +32,19 @@ typedef uint32_t u32;
 extern "C" {
 #endif
 
+void avc_initialize();
+
+typedef char fcc[4];
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+
+typedef struct PACKED {
+    u32 srate;      // sample rate
+    u16 nch;        // number of channels
+    u16 depth;      // Bytes per channel per sample (i.e. BPC)
+} audio_mode_t;
+
 typedef struct PACKED {
     u16 fps;        // frame per second
     u16 width;      // frame width in pixel
@@ -47,20 +54,51 @@ typedef struct PACKED {
 } video_mode_t;
 
 typedef struct PACKED {
-    u32 srate;      // sample rate
-    u16 nch;        // number of channels
-    u16 depth;      // Bytes per channel per sample (i.e. BPC)
-} audio_mode_t;
+    size_t id;
+    size_t len;
+    void *data;
+    void *task;
+    audio_mode_t *mode;
+} audio_evt_t;
 
-static inline int parse_fourcc(const char *str, u32 *var) {
-    u32 len = strlen(str ?: ""), val;
-    if (len < 3 || len > 4) return -1;
-    for (u8_t idx = 0; idx < 4; idx++) {
-        val |= (u32)(idx < len ? str[idx] : ' ') << (idx * 8);
-    }
-    if (var) *var = val;
-    return 0;
-}
+typedef struct {
+    size_t id;
+    size_t len;
+    void *data;
+    void *task;
+    video_mode_t *mode;
+} video_evt_t;
+
+// esp_event_post keeps a copy of event_data instead of passing it (a pointer)
+// directly to the event handlers. To avoid copying whole xxx_evt_t structure,
+// (audio_evt_t **) and (video_evt_t **) are passed to event handlers.
+ESP_EVENT_DECLARE_BASE(AVC_EVENT);
+
+#define AVC_POST(evt, data, tout)                                           \
+    ({                                                                      \
+        void *ptr = &(data);                                                \
+        esp_event_post(AVC_EVENT, (evt), &ptr, sizeof(ptr), TIMEOUT(tout)); \
+    })
+
+enum {
+    AUD_EVENT_START,    // evt.data is WAV header, evt.len = sizeof(wav_header_t)
+    AUD_EVENT_DATA,     // evt.data is audio data, evt.len > 0, evt.id >= 0
+    AUD_EVENT_STOP,     // evt.data is NULL,       evt.len = 0
+    VID_EVENT_START,    // evt.data is AVI header, evt.len = sizeof(avi_header_t)
+    VID_EVENT_DATA,     // evt.data is frame jpeg, evt.len > 0, evt.id >= 0
+    VID_EVENT_STOP,     // evt.data is AVI tailer, evt.len = 8 + evt.id * 16
+};
+
+#define AUDIO_START(ms) avc_command("1", AUDIO_TARGET, (ms), NULL)
+#define VIDEO_START(ms) avc_command("1", VIDEO_TARGET, (ms), NULL)
+#define AUDIO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
+#define VIDEO_STOP()    avc_command("0", VIDEO_TARGET, 0, NULL)
+#define AUDIO_PRINT(s)  avc_command(NULL, AUDIO_TARGET, 0, (s))
+#define VIDEO_PRINT(s)  avc_command(NULL, VIDEO_TARGET, 0, (s))
+#define CAMERA_LOADS(v) avc_command((v), IMAGE_TARGET | ACTION_WRITE, 0, NULL)
+#define CAMERA_DUMPS(v) avc_command((v), IMAGE_TARGET | ACTION_READ, 0, NULL)
+#define CAMERA_PRINT(s) avc_command(NULL, IMAGE_TARGET | ACTION_READ, 0, (s))
+esp_err_t avc_command(const char *ctrl, int tgt, uint32_t tout_ms, FILE *out);
 
 typedef struct PACKED {
 #define WAV_HEADER_FMT_LEN 16

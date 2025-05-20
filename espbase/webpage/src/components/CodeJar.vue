@@ -15,9 +15,9 @@ import { highlightElement as prism } from 'prismjs' // 3.6kB
 
 var editor = null
 
-const elem = ref()
+const elem = ref(null)
 
-const model = defineModel({
+const text = defineModel({
     type: String,
     default: 'Type in your code here',
 })
@@ -35,8 +35,8 @@ const props = defineProps({
     lineNumber: Boolean,
 })
 
+// see https://github.com/antonmedv/codejar
 const config = {
-    // see https://github.com/antonmedv/codejar
     tab: ' '.repeat(4),
     spellcheck: true,
     catchTab: true,
@@ -84,8 +84,8 @@ function destroy() {
 function refresh() {
     if (!destroy()) return // not ready yet
     editor = CodeJar(toValue(elem), toValue(highlight), config)
-    editor.updateCode(toValue(model))
-    editor.onUpdate(debounce(() => (model.value = editor.toString())))
+    editor.updateCode(toValue(text))
+    editor.onUpdate(debounce(() => (text.value = editor.toString())))
     setReadonly(props.readonly)
 }
 
@@ -93,7 +93,7 @@ watch(highlight, refresh)
 
 watch(() => props.readonly, setReadonly)
 
-watch(model, val => {
+watch(text, val => {
     if (editor && editor.toString() !== val) {
         let pos
         try {
@@ -123,25 +123,24 @@ onBeforeUnmount(destroy)
 .codejar-editor {
     padding-left: 8px;
 }
-</style>
 
-<style>
-/* These elements are generated at runtime and not tracked by scoped CSS */
-.codejar-editor .token:before {
-    opacity: 0.3;
+.codejar-editor :deep(.token:before) {
+    opacity: 0.2;
 }
 
-.codejar-linenumbers-inner-wrap {
+.code-jar :deep(.codejar-linenumbers-inner-wrap) {
+    z-index: 1;
     position: absolute;
-    z-index: 2;
+    border-right: 1px solid rgba(var(--v-border-color), var(--v-border-opacity));
 }
 
-.codejar-linenumbers {
-    background-color: rgb(var(--v-theme-surface-light)) !important;
+.code-jar :deep(.codejar-linenumbers) {
+    background-color: rgb(var(--v-theme-background)) !important;
 }
 
-.codejar-linenumber {
+.code-jar :deep(.codejar-linenumber) {
+    color: rgb(var(--v-theme-on-background)) !important;
     text-align: right;
-    padding-right: 5px;
+    padding-right: 8px;
 }
 </style>

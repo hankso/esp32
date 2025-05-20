@@ -115,9 +115,9 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 Native GPIO 0-39
 PIN Value Usage
 0    HIGH Strapping PU
-1    HIGH UART TXD0
+1    HIGH UART TX0
 2     LOW Strapping PD
-3    HIGH UART RXD0
+3    HIGH UART RX0
 4     LOW Buzzer
 5     LOW LED
 6     LOW Flash SPICLK
@@ -286,8 +286,8 @@ PIN Value Usage
 40    LOW
 41   HIGH I2C SDA1
 42   HIGH I2C SCL1
-43   HIGH UART0 TXD
-44   HIGH UART0 RXD
+43   HIGH UART TX0
+44   HIGH UART RX0
 45    LOW Strapping PD
 46    LOW Strapping PD
 47    LOW

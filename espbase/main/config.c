@@ -185,15 +185,17 @@ void config_stats() {
 }
 
 static void set_config_callback(const char *key, cJSON *item) {
-    if (!cJSON_IsString(item)) {
-        if (!cJSON_IsObject(item)) {
-            char *json = cJSON_Print(item);
-            if (json) ESP_LOGE(TAG, "Invalid type of `%s`", json);
-            TRYFREE(json);
-        }
+    const char *val;
+    if (cJSON_IsNumber(item)) {
+        val = item->valuedouble ? "1" : "0";
+    } else if (cJSON_IsString(item)) {
+        val = item->valuestring;
+    } else {
+        char *json = cJSON_Print(item);
+        if (json) ESP_LOGE(TAG, "Invalid type of `%s`", json);
+        TRYFREE(json);
         return;
     }
-    const char *val = item->valuestring;
     if (!config_set(key, val))
         ESP_LOGD(TAG, "JSON Config set `%s` to `%s` failed", key, val);
 }
@@ -202,7 +204,7 @@ static void json_parse_object_recurse(
     cJSON *item, void (*cb)(const char *, cJSON *), const char *root
 ) {
     while (item) {
-        if (item->string == NULL) {  // may be the root object
+        if (item->string == NULL) {  // may be the root object or array
             if (item->child) json_parse_object_recurse(item->child, cb, root);
             item = item->next;
             continue;

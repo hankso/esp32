@@ -3,6 +3,93 @@ import { type, html, notEmpty, gzipCompress } from '@/utils'
 import axios from 'axios'
 import { basename, resolve } from 'path-browserify'
 
+export async function getSchema(name = '', opt = {}) {
+    return axios.get(resolve('/', `${name ? name + '.' : ''}schema.json`), opt)
+}
+
+const api = axios.create({
+    baseURL: '/api/',
+    timeout: 5000,
+})
+
+async function merge(opt1, opt2, instance = api) {
+    return instance(axios.mergeConfig(opt1, opt2))
+}
+
+export async function isAPmode(opt = {}) {
+    return merge(opt, { url: 'apmode' })
+}
+
+export async function getConfig(opt = {}) {
+    return merge(opt, { url: 'config' })
+}
+
+export async function setConfig(cfg, opt = {}) {
+    return merge(opt, {
+        url: 'config',
+        method: 'POST',
+        data: `json=${JSON.stringify(cfg)}`,
+    })
+}
+
+export async function getMedia(opt = {}) {
+    return Promise.all([
+        merge(opt, {
+            url: 'media',
+            params: { video: '' },
+            validateStatus: false,
+        }),
+        merge(opt, {
+            url: 'media',
+            params: { audio: '' },
+            validateStatus: false,
+        }),
+    ])
+}
+
+export async function setCamera(cfg, opt = {}) {
+    return merge(opt, {
+        url: 'media',
+        method: 'POST',
+        data: `video=${JSON.stringify(cfg)}`,
+    })
+}
+
+export async function listDir(path = '', opt = {}) {
+    return merge(opt, {
+        url: 'edit',
+        params: { path, list: '' },
+    }).then(resp => {
+        resp.data.forEach(node => {
+            node.name = node.name.replace(new RegExp(`^${path}`), '')
+        })
+        return resp
+    })
+}
+
+export async function readFile(path, download = false, opt = {}) {
+    return merge(opt, {
+        url: 'edit',
+        responseType: 'text', // raw file: do NOT parse to json
+        params: download ? { path, download: '' } : { path },
+    })
+}
+
+export async function createPath(path, isdir = true, opt = {}) {
+    return merge(opt, {
+        url: 'edit',
+        method: 'PUT',
+        params: { path, type: isdir ? 'dir' : 'file' },
+    })
+}
+export async function deletePath(path, isdir = false, opt = {}) {
+    return merge(opt, {
+        url: 'edit',
+        method: 'DELETE',
+        params: { path, type: isdir ? 'dir' : 'file' },
+    })
+}
+
 async function toFormData(data, name = 'data') {
     let fn = name
     let tmp = data
@@ -40,71 +127,7 @@ async function toFormData(data, name = 'data') {
     return Promise.resolve(data)
 }
 
-const api = axios.create({
-    baseURL: '/api/',
-    timeout: 5000,
-})
-
-function merge(opt1, opt2, instance = api) {
-    return instance(axios.mergeConfig(opt1, opt2))
-}
-
-export function getSchema(name = '', opt = {}) {
-    return axios.get(resolve('/', `${name ? name + '.' : ''}schema.json`), opt)
-}
-
-export function isApmode(opt = {}) {
-    return merge(opt, { url: 'apmode' })
-}
-
-export function getConfig(opt = {}) {
-    return merge(opt, { url: 'config' })
-}
-
-export function setConfig(cfg, opt = {}) {
-    return merge(opt, {
-        url: 'config',
-        method: 'POST',
-        data: `json=${JSON.stringify(cfg)}`,
-    })
-}
-
-export function listDir(path = '', opt = {}) {
-    return merge(opt, {
-        url: 'edit',
-        params: { path, list: '' },
-    }).then(resp => {
-        resp.data.forEach(node => {
-            node.name = node.name.replace(new RegExp(`^${path}`), '')
-        })
-        return resp
-    })
-}
-
-export function readFile(path, download = false, opt = {}) {
-    return merge(opt, {
-        url: 'edit',
-        responseType: 'text', // raw file: do NOT parse to json
-        params: download ? { path, download: '' } : { path },
-    })
-}
-
-export function createPath(path, isdir = true, opt = {}) {
-    return merge(opt, {
-        url: 'edit',
-        method: 'PUT',
-        params: { path, type: isdir ? 'dir' : 'file' },
-    })
-}
-export function deletePath(path, isdir = false, opt = {}) {
-    return merge(opt, {
-        url: 'edit',
-        method: 'DELETE',
-        params: { path, type: isdir ? 'dir' : 'file' },
-    })
-}
-
-export function uploadFile(filename, file, opt = {}) {
+export async function uploadFile(filename, file, opt = {}) {
     return toFormData(file, filename).then(data =>
         merge(opt, {
             url: 'edit',
@@ -116,7 +139,7 @@ export function uploadFile(filename, file, opt = {}) {
     )
 }
 
-export function updateOTA(firmware, opt = {}) {
+export async function updateOTA(firmware, opt = {}) {
     return toFormData(firmware, 'update').then(data =>
         merge(opt, {
             url: 'update',
@@ -127,7 +150,7 @@ export function updateOTA(firmware, opt = {}) {
     )
 }
 
-export function execCommand(cmd, opt = {}) {
+export async function execCommand(cmd, opt = {}) {
     let ctype = type(cmd)
     switch (ctype) {
         case 'string':
@@ -152,7 +175,7 @@ export function execCommand(cmd, opt = {}) {
 }
 
 function parseCommand(str) {
-    // An command help generated by argtable3 seems like this:
+    // Command help text generated by argtable3 seems like this:
     //      <name> [<hints> ...]
     //      <desc>
     //          [<args desc>]
@@ -170,7 +193,7 @@ function parseCommand(str) {
     return cmd
 }
 
-export function getCommands(opt = {}) {
+export async function getCommands(opt = {}) {
     return execCommand('help', opt).then(resp => {
         resp.data = resp.data.split('\n\n').map(parseCommand).filter(notEmpty)
         return resp

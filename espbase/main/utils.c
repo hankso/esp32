@@ -35,9 +35,9 @@ bool strbool(const char *str) {
     return !strcmp(str, "1") || !strcasecmp(str, "y") || !strcasecmp(str, "on");
 }
 
-size_t strcnt(const char *str, char want, size_t num) {
+size_t strcnt(const char *str, char want, size_t slen) {
     size_t cnt = 0, idx = 0;
-    while (idx < strnlen(str, num)) {
+    while (idx < strnlen(str, slen)) {
         if (str[idx++] == want) cnt++;
     }
     return cnt;
@@ -53,11 +53,11 @@ char * strtrim(char *str, const char *chars) {
     return str + head;
 }
 
-char * b64encode(char *buf, const char *inp, size_t len) {
-    const char *end = inp + len, chars[] =
+char * b64encode(const char *inp, char *dst, size_t slen) {
+    const char *end = inp + slen, chars[] =
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    if (!inp || (!buf && ECALLOC(buf, 1, (len + 2) / 3 * 4 + 1))) return buf;
-    for (char *out = buf; inp < end; inp += 3, out += 4) {
+    if (!inp || (!dst && ECALLOC(dst, 1, CDIV(slen, 3) * 4 + 1))) return dst;
+    for (char *out = dst; inp < end; inp += 3, out += 4) {
         uint32_t u24 = inp[0] << 16;
         if ((inp + 1) < end) u24 |= inp[1] << 8;
         if ((inp + 2) < end) u24 |= inp[2];
@@ -66,7 +66,7 @@ char * b64encode(char *buf, const char *inp, size_t len) {
         out[2] = (inp + 1) >= end ? '=' : chars[(u24 >> 6) & 0x3F];
         out[3] = (inp + 2) >= end ? '=' : chars[u24 & 0x3F];
     }
-    return buf;
+    return dst;
 }
 
 bool endswith(const char *str, const char *tail) {
@@ -93,7 +93,7 @@ bool parse_int(const char *str, int *var) {
 bool parse_uint16(const char *str, uint16_t *var) {
     int value;
     if (!parse_int(str, &value)) return false;
-    if (value < 0 || value > (uint16_t)-1) return false;
+    if (value < 0 || value > UINT16_MAX) return false;
     if (var != NULL) *var = value;
     return true;
 }
@@ -158,18 +158,21 @@ char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
         dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
     }
     if (offset) {
-        sprintf(dst + offset - numdigits(count), " ... [%u/%u]", count, bytes);
+        offset -= numdigits(count);
+        if (offset > (count * 2))
+            memset(dst + count * 2, ' ', offset - count * 2);
+        sprintf(dst + offset, " ... [%u/%u]", count, bytes);
     } else {
         dst[count * 2] = '\0';
     }
     return dst;
 }
 
-// Convert between Unicode & Bytes
-// 0x00000000 - 0x0000007F : 0b0xxxxxxx
-// 0x00000080 - 0x000007FF : 0b110xxxxx 0b10xxxxxx
-// 0x00000800 - 0x0000FFFF : 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
-// 0x00010000 - 0x001FFFFF : 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
+// Convert between Unicode and UTF-8 encoded Bytes
+// 0x000000 - 0x00007F <=> 0b0xxxxxxx
+// 0x000080 - 0x0007FF <=> 0b110xxxxx 0b10xxxxxx
+// 0x000800 - 0x00FFFF <=> 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
+// 0x010000 - 0x1FFFFF <=> 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
 const char * unicode2str(uint32_t unicode) {
     static char buf[5];
     if (unicode < 0x80) {
@@ -196,30 +199,86 @@ const char * unicode2str(uint32_t unicode) {
     return buf;
 }
 
-uint32_t str2unicode(const char *str) {
+size_t str2unicode(const char *str, uint32_t *uptr) {
     if (!str || str[0] > 0xF7) return 0;
-    uint32_t nbytes = 0, unicode = 0;
+    uint32_t nbytes, unicode;
     if (str[0] >= 0xF0) {
-        nbytes = 3;
+        nbytes = 4;
         unicode = str[0] & 0x7;
     } else if (str[0] >= 0xE0) {
-        nbytes = 2;
+        nbytes = 3;
         unicode = str[0] & 0xF;
     } else if (str[0] >= 0xC0) {
-        nbytes = 1;
+        nbytes = 2;
         unicode = str[0] & 0x1F;
     } else {
-        return str[0];
+        unicode = str[0];
+        nbytes = unicode ? 1 : 0;
     }
-    for (uint32_t i = 1; i <= nbytes; i++) {
+    if (strlen(str) < nbytes) return 0;
+    for (uint32_t i = 1; i < nbytes; i++) {
         if ((str[i] >> 6) != 0x2) return 0; // invalid format
         unicode = (unicode << 6) | (str[i] & 0x3F);
     }
-    return unicode;
+    if (uptr) *uptr = unicode;
+    return nbytes;
+}
+
+// Convert between Unicode and GBK encoded Bytes
+// 0x0800 - 0xFFFF <=> 0b1xxxxxxx 0bxxxxxxxx (0x8140 - 0xFEFF)
+const char * unicode2gbk(FILE *fd, uint32_t unicode) {
+    static char buf[3];
+    buf[0] = '\0';
+    if (unicode < 0x800 || unicode > 0xFFFF || !fd || fseek(fd, 0, SEEK_SET))
+        return buf;
+    for (uint16_t val; fread(&val, 1, 2, fd) == 2;) {
+        if (unicode != val) continue;
+        uint16_t idx = ftell(fd) / 2, num = idx / (0x100 - 0x40) + 1;
+        uint16_t gbk = 0x8100 + idx + num * 0x40;
+        buf[0] = gbk >> 8;
+        buf[1] = gbk & 0xFF;
+        buf[2] = '\0';
+        break;
+    }
+    return buf;
+}
+
+size_t gbk2unicode(FILE *fd, const char *str, uint32_t *uptr) {
+    if (!fd || !str || str[0] > 0xFE) return 0;
+    if (str[0] < 0x81) {
+        if (uptr) *uptr = str[0];
+        return str[0] ? 1 : 0;
+    }
+    uint16_t unicode = 0, val = ((str[0] - 0x81) << 8) | str[1];
+    if (!fseek(fd, (val - CDIV(val, 0x100) * 0x40) * 2, SEEK_SET) &&
+        fread(&unicode, 1, 2, fd) == 2 && unicode && uptr) *uptr = unicode;
+    return unicode ? 2 : 0;
+}
+
+size_t gbk2str_r(const char *src, char *dst, size_t dlen) {
+    FILE *fd = fopen(fjoin(2, Config.sys.DIR_DATA, "gbktable.bin"), "r");
+    if (!fd && filesys_get_info(FILESYS_SDCARD, NULL))
+        fd = fopen(snorm("gbktable.bin"), "r");
+    if (!fd) return 0;
+    uint32_t unicode, used, slen = strlen(src), sidx = 0, didx = 0;
+    while (sidx < slen && didx < dlen) {
+        if (!( used = gbk2unicode(fd, src + sidx, &unicode) )) break;
+        didx += snprintf(dst + didx, dlen - didx, unicode2str(unicode));
+        sidx += used;
+    }
+    TRYNULL(fd, fclose);
+    return sidx;
+}
+
+char * gbk2str(const char *src) {
+    char *dst = NULL;
+    size_t slen = strlen(src), dlen = slen / 2 * 3 + 1;
+    if (EMALLOC(dst, dlen) || gbk2str_r(src, dst, dlen) != slen) TRYFREE(dst);
+    return dst;
 }
 
 static const uint8_t unicode_table[][10] = {
-    { 0x25, 6, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                      // circle
+    { 0x25, 5, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                      // circle
     { 0x25, 8, 0x8F, 0x8E, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x88 },    // v bars
     { 0x25, 8, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88 },    // h bars
     { 0x25, 4, 0x91, 0x92, 0x93, 0x89 },                            // shades
@@ -261,20 +320,18 @@ const char * format_binary(uint64_t num, size_t bytes) {
 }
 
 const char * format_size(uint64_t bytes, bool inbit) {
-    static char buffer[16]; // xxxx.xx u\0
-    static const char * units[] = { " ", "K", "M", "G", "T", "P" };
-    static const int Bdems[] = { 0, 1, 2, 3, 3, 4 };
-    static const int bdems[] = { 0, 2, 3, 3, 4, 7 };
+    static char buf[16]; // xxxx.xx u\0
     if (!bytes) return inbit ? "0 b" : "0 B";
-    double tmp = bytes * (inbit ? 8 : 1), base = 1024;
-    int exp = 0;                        // you can replace this with log10
-    while (exp < 5 && tmp > base) {
-        tmp /= base;
+    const int Bdems[] = { 0, 1, 2, 3, 3, 4 }, bdems[] = { 0, 2, 3, 3, 4, 7 };
+    double val = bytes * (inbit ? 8 : 1), base = 1024;
+    int exp = 0;
+    while (exp < LEN(Bdems) && val > base) {
+        val /= base;
         exp++;
     }
-    snprintf(buffer, sizeof(buffer), "%.*f %s%c",
-            inbit ? bdems[exp] : Bdems[exp], tmp, units[exp], "Bb"[inbit]);
-    return buffer;
+    snprintf(buf, sizeof(buf), "%.*f %c%c",
+             inbit ? bdems[exp] : Bdems[exp], val, " KMGTP"[exp], "Bb"[inbit]);
+    return buf;
 }
 
 static void * createTimer(int64_t us, void (*func)(void *), void *arg) {
@@ -302,6 +359,29 @@ void clearTimer(void *hdl) {
     if (!hdl) return;
     esp_timer_stop(hdl);
     esp_timer_delete(hdl);
+}
+
+bool notify_increase(void *task) {
+    return task ? xTaskNotifyGive(task) : false;
+}
+
+bool notify_decrease(void *task) {
+    uint32_t val = 0;
+    if (task) xTaskNotifyAndQuery(task, 0, eNoAction, &val);
+    return val ? xTaskNotify(task, val - 1, eSetValueWithOverwrite) : false;
+}
+
+bool notify_wait_for(uint32_t target, uint32_t tout_ms, uint32_t wait_ms) {
+    uint32_t val = ulTaskNotifyValueClear(NULL, 0);
+    if (val == target && !xTaskNotifyWait(0, 0, &val, TIMEOUT(wait_ms)))
+        return true;
+    TickType_t ts = xTaskGetTickCount();
+    while (val != target && tout_ms) {
+        if (!xTaskNotifyWait(0, 0, &val, TIMEOUT(tout_ms))) break;
+        TickType_t dt = xTaskGetTickCount() - ts; ts += dt;
+        if (tout_ms != -1) tout_ms -= MIN(tout_ms, pdTICKS_TO_MS(dt));
+    }
+    return val == target;
 }
 
 static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
@@ -371,11 +451,11 @@ void version_info() {
 }
 
 void memory_info() {
-    static const uint32_t caps[] = {
+    const uint32_t caps[] = {
         MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM,
         MALLOC_CAP_DMA, MALLOC_CAP_EXEC
     };
-    static const char * const names[] = {
+    const char * const names[] = {
         "DEFAULT", "INTERN", "SPI RAM", "DMA", "EXEC"
     };
     multi_heap_info_t info;
@@ -552,12 +632,22 @@ void partition_info() {
         printf("No partitons found in flash. Skip");
         return;
     }
-    printf("LabelName    Type SubType  Offset   Size     Used Secure\n");
+    printf("Label        Type SubType   Offset   Size     Used Secure\n");
     while (num--) {
         part = parts[num];
-        printf("%-12s %-4s %-8s 0x%06X 0x%06X %3d%% %s\n",
+        esp_partition_subtype_t subtype = part->subtype;
+#ifdef CONFIG_BASE_USE_FFS
+        if (!strcmp(part->label, CONFIG_BASE_FFS_PART)) {
+#   ifdef CONFIG_BASE_FFS_FAT
+            subtype = ESP_PARTITION_SUBTYPE_DATA_FAT;
+#   else
+            subtype = ESP_PARTITION_SUBTYPE_DATA_SPIFFS;
+#   endif
+        }
+#endif
+        printf("%-12s %-4s %-9s 0x%06X 0x%06X %3d%% %s\n",
                part->label, partition_type_str(part->type),
-               partition_subtype_str(part->type, part->subtype),
+               partition_subtype_str(part->type, subtype),
                part->address, part->size, partition_used(part),
                part->encrypted ? "true" : "false");
     }

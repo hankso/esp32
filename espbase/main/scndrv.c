@@ -18,16 +18,13 @@
 #   include "u8g2.h"
 #endif
 
-#ifdef CONFIG_BASE_SCREEN_I2C
-#   define SCREEN_H_RES    128
-#   define SCREEN_V_RES    64
-#   define SCREEN_DEPTH    1
+#define SCREEN_WIDTH    CONFIG_BASE_SCREEN_HRES
+#define SCREEN_HEIGHT   CONFIG_BASE_SCREEN_VRES
+#ifdef WITH_LVGL
+#   define SCREEN_DEPTH CONFIG_LV_COLOR_DEPTH
 #else
-#   define SCREEN_H_RES    240
-#   define SCREEN_V_RES    240
-#   define SCREEN_DEPTH    CONFIG_LV_COLOR_DEPTH
+#   define SCREEN_DEPTH 1
 #endif
-#define SCREEN_PIXELS   ( SCREEN_H_RES * SCREEN_V_RES )
 
 static const char *TAG = "Screen";
 
@@ -139,14 +136,14 @@ static void screen_u8g2_init() {
 static esp_err_t u8g2_ui_cmd(scn_cmd_t cmd, const char *arg) {
     if (cmd == SCN_PBAR) {
         static char buf[16];
-        static int ys = SCREEN_V_RES * 7 / 16, ye = SCREEN_V_RES * 9 / 16;
+        static int YS = SCREEN_HEIGHT * 7 / 16, YE = SCREEN_HEIGHT * 9 / 16;
         snprintf(buf, sizeof(buf), "%d %%", MIN(*(uint8_t *)arg, 100));
-        int x = SCREEN_H_RES * CONS(*(int *)arg, 0, 100) / 100;
-        int middle = MAX(0, SCREEN_H_RES - u8g2_GetStrWidth(&ctx.hdl, buf)) / 2;
+        int x = SCREEN_WIDTH * CONS(*(int *)arg, 0, 100) / 100;
+        int middle = MAX(0, SCREEN_WIDTH - u8g2_GetStrWidth(&ctx.hdl, buf)) / 2;
         u8g2_ClearBuffer(&ctx.hdl);
-        u8g2_DrawFrame(&ctx.hdl, 0, ys, SCREEN_H_RES, ye - ys);
-        u8g2_DrawBox(&ctx.hdl, 0, ys, x, ye - ys);
-        u8g2_DrawStr(&ctx.hdl, middle, ye + 10, buf);
+        u8g2_DrawFrame(&ctx.hdl, 0, YS, SCREEN_WIDTH, YE - YS);
+        u8g2_DrawBox(&ctx.hdl, 0, YS, x, YE - YS);
+        u8g2_DrawStr(&ctx.hdl, middle, YE + 10, buf);
         u8g2_SendBuffer(&ctx.hdl);
     } else {
         return ESP_ERR_NOT_SUPPORTED;
@@ -202,8 +199,8 @@ static void screen_lvgl_init() {
         0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81, // cross
         0x81, 0x42, 0x24, 0x18, 0x18, 0x24, 0x42, 0x81,
     };
-    LOOPN(i, err ? 0 : (SCREEN_H_RES / 16)) {
-        LOOPN(j, err ? 0 : (SCREEN_V_RES / 8)) {
+    LOOPN(i, err ? 0 : (SCREEN_WIDTH / 16)) {
+        LOOPN(j, err ? 0 : (SCREEN_HEIGHT / 8)) {
             err = esp_lcd_panel_draw_bitmap(
                 ctx.hdl, i * 16, j * 8,
                 i * 16 + 16, j * 8 + 8,
@@ -213,8 +210,8 @@ static void screen_lvgl_init() {
 #   else
     uint8_t cbuf[16 * 16 * SCREEN_DEPTH / 8];
     memset(cbuf, 0xAA, sizeof(cbuf));
-    LOOPN(i, err ? 0 : (SCREEN_H_RES / 16)) {
-        LOOPN(j, err ? 0 : (SCREEN_V_RES / 16)) {
+    LOOPN(i, err ? 0 : (SCREEN_WIDTH / 16)) {
+        LOOPN(j, err ? 0 : (SCREEN_HEIGHT / 16)) {
             err = esp_lcd_panel_draw_bitmap(
                 ctx.hdl, i * 16, j * 16, (i + 1) * 16, (j + 1) * 16, cbuf);
         }
@@ -234,10 +231,10 @@ static void screen_lvgl_init() {
     const lvgl_port_display_cfg_t disp_conf = {
         .io_handle = ctx.io,
         .panel_handle = ctx.hdl,
-        .buffer_size = SCREEN_PIXELS / (SCREEN_DEPTH == 1 ? 1 : 4),
+        .buffer_size = SCREEN_WIDTH * SCREEN_HEIGHT * SCREEN_DEPTH / 8,
         .double_buffer = true,
-        .hres = SCREEN_H_RES,
-        .vres = SCREEN_V_RES,
+        .hres = SCREEN_WIDTH,
+        .vres = SCREEN_HEIGHT,
         .monochrome = SCREEN_DEPTH == 1,
 #       if LVGL_VERSION_MAJOR >= 9
         .color_format = LV_COLOR_FORMAT_RGB565,
@@ -332,7 +329,7 @@ void screen_status() {
         return;
     }
     printf("Using Screen %dx%d %dbpp at ",
-           SCREEN_H_RES, SCREEN_V_RES, SCREEN_DEPTH);
+           SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH);
 #ifdef CONFIG_BASE_SCREEN_I2C
     printf("I2C%d-0x%02X %dKHz SDA:%d SCL:%d",
            ctx.bus, ctx.addr, ctx.speed / 1000, ctx.sda, ctx.scl);
@@ -364,11 +361,9 @@ esp_err_t screen_command(scn_cmd_t cmd, const void *arg) {
     return err;
 #else
     if (cmd == SCN_PBAR) {
-#   define XS ( 8 )
-#   define XE ( SCREEN_H_RES - 8 )
-#   define YS ( SCREEN_V_RES * 7 / 16 )
-#   define YE ( SCREEN_V_RES * 9 / 16 )
         esp_err_t err = ESP_OK;
+        static uint16_t XS = 8,                YS = SCREEN_HEIGHT * 7 / 16;
+        static uint16_t XE = SCREEN_WIDTH - 8, YE = SCREEN_HEIGHT * 9 / 16;
         static uint8_t cbuf[(XE - XS) * (YE - YS) * SCREEN_DEPTH / 8];
         int x = XS + (XE - XS) * CONS(*(int*)arg, 0, 100) / 100;
         if (!err && x > XS) {

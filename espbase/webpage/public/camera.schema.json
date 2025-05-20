@@ -1,0 +1,194 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "/camera.schema.json",
+  "title": "ESP Base Camera Config",
+  "description": "Generated from espbase/main/driver.c",
+  "type": "object",
+  "properties": {
+    "pixformat": {
+      "description": "Select pixel format",
+      "enum": [
+        "RGB565",
+        "YUV422",
+        "YUV420",
+        "GRAY",
+        "JPEG",
+        "RGB888",
+        "RAW",
+        "RGB444",
+        "RGB555"
+      ]
+    },
+    "framesize": {
+      "description": "Select frame resolution",
+      "enum": [
+        "RECT 96x96",
+        "QQVGA 160x120",
+        "RECT 128x128",
+        "QCIF 176x144",
+        "HQVGA 240x176",
+        "RECT 320x320",
+        "CIF 400x296",
+        "HVGA 480x320",
+        "VGA 640x480",
+        "SVGA 800x600",
+        "XGA 1024x768",
+        "HD 1280x720",
+        "SXGA 1280x1024",
+        "UXGA 1600x1200",
+        "FHD 1920x1080",
+        "P_HD 720x1280",
+        "P_3MP 864x1536",
+        "QXGA 2048x1536",
+        "QHD 2560x1440",
+        "WQXGA 2560x1600",
+        "P_FHD 1080x1920",
+        "QSXGA 2560x1920",
+        "5MP 2592x1944"
+      ]
+    },
+    "gainceiling": {
+      "description": "Select gain ceiling @ 0x3A18",
+      "enum": [
+        "2X",
+        "4X",
+        "8X",
+        "16X",
+        "32X",
+        "64X",
+        "128X"
+      ]
+    },
+    "quality": {
+      "description": "Set compression quality @ 0x4407",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 63
+    },
+    "contrast": {
+      "description": "Set contrast @ 0x5586",
+      "type": "integer",
+      "minimum": -3,
+      "maximum": 3
+    },
+    "brightness": {
+      "description": "Set brightness @ 0x5587",
+      "type": "integer",
+      "minimum": -3,
+      "maximum": 3
+    },
+    "saturation": {
+      "description": "Set saturation @ 0x5381",
+      "type": "integer",
+      "minimum": -4,
+      "maximum": 4
+    },
+    "sharpness": {
+      "description": "Set sharpness @ 0x5303",
+      "type": "integer",
+      "minimum": -3,
+      "maximum": 3
+    },
+    "denoise": {
+      "description": "Set denoise @ 0x5308",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 8
+    },
+    "hmirror": {
+      "description": "Enable Horizontal Mirror @ 0x3821",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "vflip": {
+      "description": "Enable Vertical Flip @ 0x3820",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "colorbar": {
+      "description": "Enable Color Bar Test @ 0x503D",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "special_effect": {
+      "description": "Set Special Digital Effect @ 0x5580",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 6
+    },
+    "gain_ctrl": {
+      "description": "Enable Manual Gain Control @ 0x3503",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "agc_gain": {
+      "description": "Set Gain @ 0x350A",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 64
+    },
+    "exposure_ctrl": {
+      "description": "Enable Manual Exposure Control @ 0x3503",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "aec_value": {
+      "description": "Set Exposure @ 0x3500",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 1200
+    },
+    "aec2": {
+      "description": "Enable AEC night mode @ 0x3A00",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "ae_level": {
+      "description": "Set AEC step and range @ 0x3A0X",
+      "type": "integer",
+      "minimum": -5,
+      "maximum": 5
+    },
+    "whitebal": {
+      "description": "Enable Auto White Balance @ 0x5001",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "awb_gain": {
+      "description": "Enable Manual White Balance @ 0x3406",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "wb_mode": {
+      "description": "Set White Balance preset @ 0x340X",
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 4
+    },
+    "dcw": {
+      "description": "Enable AWB advanced @ 0x5183",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "bpc": {
+      "description": "Enable Black Pixel Cancellation @ 0x5000",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "wpc": {
+      "description": "Enable White Pixel Cancellation @ 0x5000",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "lenc": {
+      "description": "Enable LENC Correction @ 0x5000",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "raw_gma": {
+      "description": "Enable Raw Gamma @ 0x5000",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    }
+  }
+}

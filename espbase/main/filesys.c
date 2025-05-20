@@ -14,6 +14,7 @@
 #include "diskio_wl.h"
 #include "diskio_sdmmc.h"
 #include "driver/sdspi_host.h"
+#include "driver/sdmmc_host.h"
 
 #ifdef CONFIG_BASE_USE_ELF
 #   include "esp_elf.h"
@@ -71,7 +72,7 @@ static esp_err_t filesys_init(
         part = "";
     }
 #endif
-    if (!strlen(part)) part = NULL;
+    if (part && !strlen(part)) part = NULL;
     if (!dev || !startswith(mp, "/")) return ESP_ERR_INVALID_ARG;
     if (dev->type && dev->type != type) return ESP_ERR_INVALID_STATE;
     if (dev->type && dev->mp == mp && dev->part == part) return ESP_OK;
@@ -109,13 +110,13 @@ static esp_err_t filesys_init(
     if (type == FILESYS_SDCARD) {
         esp_log_level_set("sdspi_transaction", ESP_LOG_WARN);
         sdmmc_card_t *card = NULL;
-        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         esp_vfs_fat_mount_config_t mount = {
             .format_if_mount_failed = false,
             .max_files = 10,
             .allocation_unit_size = 16 * 1024,
         };
-#   ifdef CONFIG_BASE_SDFS_SPI
+#   if defined(CONFIG_BASE_SDFS_SPI)                // SDSPI
+        sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         sdspi_device_config_t spi = {
             .host_id  = host.slot = NUM_SPI,
             .gpio_cs  = PIN_CS0,
@@ -124,8 +125,9 @@ static esp_err_t filesys_init(
             .gpio_int = SDSPI_SLOT_NO_INT,
         };
         esp_err_t err = esp_vfs_fat_sdspi_mount(mp, &host, &spi, &mount, &card);
-#   else
-        sdmmc_device_config_t mmc = {
+#   elif defined(CONFIG_IDF_TARGET_ESP32S3)         // SDMMC - ESP32S3
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        sdmmc_slot_config_t mmc = {
             .clk   = CONFIG_BASE_GPIO_MMC_CLK,
             .cmd   = CONFIG_BASE_GPIO_MMC_CMD,
             .d0    = CONFIG_BASE_GPIO_MMC_D0,
@@ -133,12 +135,16 @@ static esp_err_t filesys_init(
             .d1    = CONFIG_BASE_GPIO_MMC_D1,
             .d2    = CONFIG_BASE_GPIO_MMC_D2,
             .d3    = CONFIG_BASE_GPIO_MMC_D3,
-            .width = 4,
-#       else
-            .width = 1,
 #       endif
+            .width = CONFIG_BASE_SDFS_MMC,
             .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
         };
+        esp_err_t err = esp_vfs_fat_sdmmc_mount(mp, &host, &mmc, &mount, &card);
+#   else                                            // SDMMC - ESP32
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        sdmmc_slot_config_t mmc = SDMMC_SLOT_CONFIG_DEFAULT();
+        mmc.width = CONFIG_BASE_SDFS_MMC;
+        mmc.flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
         esp_err_t err = esp_vfs_fat_sdmmc_mount(mp, &host, &mmc, &mount, &card);
 #   endif
         if (!err) {
@@ -146,8 +152,7 @@ static esp_err_t filesys_init(
             dev->mp = mp;
             dev->card = card;
             dev->type = type;
-            ESP_LOGI(TAG, "SDCard BUS=%d,CS=%d mounted to %s",
-                     spi.host_id, spi.gpio_cs, dev->mp);
+            ESP_LOGI(TAG, "SDCard mounted to %s", dev->mp);
         }
         return err;
     }
@@ -180,12 +185,13 @@ bool filesys_release(filesys_type_t type) {
 }
 
 bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
-    if (!info) return false;
+    filesys_info_t tmp;
+    if (!info) info = &tmp;
     memset(info, 0, sizeof(filesys_info_t));
     info->pdrv = FF_DRV_NOT_USED;
     info->type = type;
 #ifdef CONFIG_BASE_USE_FFS
-    if (info->type == FILESYS_FLASH) {
+    if (type == FILESYS_FLASH) {
 #   ifdef CONFIG_BASE_FFS_FAT
         wl_handle_t wlhdl = devs[0].wlhdl;
         if (wlhdl == WL_INVALID_HANDLE) return false;
@@ -210,7 +216,7 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
     }
 #endif // CONFIG_BASE_USE_FFS
 #ifdef CONFIG_BASE_USE_SDFS
-    if (info->type == FILESYS_SDCARD && devs[1].card) {
+    if (type == FILESYS_SDCARD && devs[1].card) {
         info->pdrv = ff_diskio_get_pdrv_card(devs[1].card);
         info->blkcnt = devs[1].card->csd.capacity;
         info->blksize = devs[1].card->csd.sector_size;
@@ -556,18 +562,23 @@ exit:
 }
 
 static void print_files(const char *base, const struct stat *st, void *arg) {
-    char buf[13]; // MTH DD HH:MM\0
+    char *utf8 = NULL, buf[13]; // MTH DD HH:MM\0
     time_t ts = time(NULL);
-    int this_year = localtime(&ts)->tm_year;
     struct tm *ptm = localtime(&st->st_mtime);
-    if (this_year == ptm->tm_year) {
+    if (localtime(&ts)->tm_year == ptm->tm_year) {
         strftime(buf, sizeof(buf), "%b %d %H:%M", ptm);
     } else {
         strftime(buf, sizeof(buf), "%b %d  %Y", ptm);
     }
+    LOOPN(i, strlen(base)) {
+        if (base[i] < 0x7F) continue;
+        if (( utf8 = gbk2str(base) )) base = utf8;
+        break;
+    }
     fprintf((FILE *)arg, "%s %8s %12s %s%s\n", // something like 'ls -alh'
             statperm(st->st_mode), format_size(st->st_size, false),
             buf, base, S_ISDIR(st->st_mode) ? "/" : "");
+    TRYFREE(utf8);
 }
 
 void filesys_listdir(filesys_type_t type, const char *path, FILE *stream) {

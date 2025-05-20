@@ -544,7 +544,7 @@ static const struct {
     { HID_KEY_END,          "End" },        // 3 ETX
     { HID_KEY_BACKSPACE,    "Backspace" },  // 8
     { HID_KEY_TAB,          "Tab" },        // 9
-    { HID_KEY_ENTER,        "CR" },         // 10 \n or 13 \r
+    { HID_KEY_ENTER,        "Enter" },      // 10 \n or 13 \r
     { HID_KEY_ARROW_UP,     "Up" },         // 17
     { HID_KEY_ARROW_DOWN,   "Down" },       // 18
     { HID_KEY_ARROW_RIGHT,  "Right" },      // 19
@@ -554,13 +554,19 @@ static const struct {
     { HID_KEY_SPACE,        "Space" },      // 32 (should not be "special")
     { HID_KEY_DELETE,       "Delete" },     // 127
     { HID_KEY_CAPS_LOCK,    "CapsLock" },
-    { HID_KEY_PRINT_SCREEN, "PrtScn" },
     { HID_KEY_SCROLL_LOCK,  "ScrLock" },
+    { HID_KEY_NUM_LOCK,     "NumLock" },
+    { HID_KEY_PRINT_SCREEN, "PrtScn" },
     { HID_KEY_PAUSE,        "Pause" },
-    { HID_KEY_INSERT,       "Insert" },
+    { HID_KEY_MUTE,         "VolumeMute" },
+    { HID_KEY_VOLUME_DOWN,  "VolumeDown" },
+    { HID_KEY_VOLUME_UP,    "VolumeUp" },
+    { HID_KEY_HOME,         "Home" },
+    { HID_KEY_END,          "End" },
     { HID_KEY_PAGE_UP,      "PageUp" },
     { HID_KEY_PAGE_DOWN,    "PageDown" },
-    { HID_KEY_NUM_LOCK,     "NumLock" },
+    { HID_KEY_INSERT,       "Insert" },
+    { HID_KEY_MENU,         "Menu" },
     { HID_KEY_POWER,        "Power" },
 };
 
@@ -592,9 +598,9 @@ static const uint8_t keycodes_normal[][3] = {
 };
 
 static const char * modifier_names[] = {
-    "L-Ctrl", "L-Shift", "L-Alt", "L-Win",
-    "R-Ctrl", "R-Shift", "R-Alt", "R-Win",
-      "Ctrl",   "Shift",   "Alt",   "Win",
+    "L-Ctrl", "L-Shift", "L-Alt", "L-Meta",
+    "R-Ctrl", "R-Shift", "R-Alt", "R-Meta",
+      "Ctrl",   "Shift",   "Alt",   "Meta",
 };
 
 uint8_t str2modifier(const char *str) {
@@ -734,13 +740,12 @@ void hid_handle_keybd(
     hid_target_t from, hid_keybd_report_t *rpt, hid_key_cb key_cb
 ) {
     if (!rpt) return;
-    static uint8_t kcnum = LEN(rpt->keycode);
     static uint8_t pmods[HID_TARGET_CNT];
     static uint8_t prevs[HID_TARGET_CNT][LEN(rpt->keycode)];
     uint8_t *next = rpt->keycode, *prev = prevs[from];
-    LOOPN(i, kcnum) {
+    LOOPN(i, LEN(rpt->keycode)) {
         bool prev_found = false, next_found = false;
-        LOOPN(j, kcnum) {
+        LOOPN(j, LEN(rpt->keycode)) {
             if (prev[i] == next[j]) next_found = true;
             if (next[i] == prev[j]) prev_found = true;
         }
@@ -755,6 +760,6 @@ void hid_handle_keybd(
                      hid_modifier_str(rpt->modifier));
         }
     }
-    memcpy(prev, next, kcnum);
+    memcpy(prev, next, LEN(rpt->keycode));
     pmods[from] = rpt->modifier;
 }

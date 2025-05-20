@@ -9,10 +9,6 @@
 #include "globals.h"
 #include "hidtool.h"
 
-#ifdef CONFIG_BASE_CAM_ATCAM
-#   undef CONFIG_BASE_USE_BT
-#endif
-
 #if defined(CONFIG_BASE_BT_HID_DEVICE) && !defined(CONFIG_BT_HID_DEVICE_ENABLED)
 #   warning "Run `idf.py menuconfig` -> Component config -> Bluetooth -> Bluedroid Options -> Classic BT HID -> Classic BT HID Device"
 #   undef CONFIG_BASE_BT_HID_DEVICE

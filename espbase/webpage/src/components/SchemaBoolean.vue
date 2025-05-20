@@ -29,7 +29,7 @@ const props = defineProps({
 })
 
 const isBoolean = computed(
-    () => props.schema?.type ?? type(props.value) === 'boolean'
+    () => (props.schema?.type ?? type(props.value)) === 'boolean'
 )
 
 const proxy = computed({

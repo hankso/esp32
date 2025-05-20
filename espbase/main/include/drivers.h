@@ -7,7 +7,6 @@
 #pragma once
 
 #include "globals.h"
-#include "avutils.h"
 
 #include "driver/i2c.h"         // for I2C_NUM_XXX
 #include "driver/i2s.h"         // for I2S_NUM_XXX
@@ -42,7 +41,7 @@
 
 #ifdef CONFIG_BASE_USE_LED
 #   if defined(CONFIG_BASE_CAM_ATCAM)
-#       define PIN_LED  GPIO_NUMBER(4)
+#       define PIN_LED  GPIO_NUMBER(33)
 #   elif defined(CONFIG_BASE_BOARD_ESP32_DEVKIT)
 #       define PIN_LED  GPIO_NUMBER(2)
 #   elif defined(CONFIG_BASE_BOARD_ESP32S3_LUATOS)
@@ -103,7 +102,7 @@
 #   define PIN_MOSI     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MOSI)
 #   define PIN_SCLK     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SCLK)
 #endif
-#ifdef CONFIG_BASE_USE_SDFS
+#ifdef CONFIG_BASE_SDFS_SPI
 #   define PIN_CS0      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS0)
 #endif
 #ifdef CONFIG_BASE_SCREEN_SPI
@@ -143,8 +142,6 @@
 
 #ifdef CONFIG_BASE_BTN_INPUT
 #   define PIN_BTN      GPIO_NUMBER(CONFIG_BASE_GPIO_BTN)
-#else
-#   define PIN_BTN      GPIO_NUM_NC
 #endif
 
 #ifdef CONFIG_BASE_USE_KNOB
@@ -179,48 +176,20 @@ esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
 esp_err_t pwm_set_tone(int freq, int pcent);
 esp_err_t pwm_get_tone(int *freq, int *pcent);
 
-ESP_EVENT_DECLARE_BASE(AVC_EVENT);
-typedef struct {
-    size_t id;
-    size_t len;
-    void *data;
-    audio_mode_t *mode;
-} audio_evt_t;          // data passed to AUD_EVENT handler is (audio_evt_t **)
-typedef struct {
-    size_t id;
-    size_t len;
-    void *data;
-    video_mode_t *mode;
-} video_evt_t;          // data passed to VID_EVENT handler is (video_evt_t **)
-enum {
-    AUD_EVENT_START,    // evt.data is WAV header, evt.len = sizeof(wav_header_t)
-    AUD_EVENT_DATA,     // evt.data is audio data, evt.len > 0, evt.id >= 0
-    AUD_EVENT_STOP,     // evt.data is undefined,  evt.len = 0
-    VID_EVENT_START,    // evt.data is AVI header, evt.len = sizeof(avi_header_t)
-    VID_EVENT_DATA,     // evt.data is frame jpeg, evt.len > 0, evt.id >= 0
-    VID_EVENT_STOP,     // evt.data is AVI tailer, evt.len = 8 + evt.id * 16
-};
-
-esp_err_t avc_command(
-    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream);
-
-#define AUDIO_START(ms) avc_command("1", AUDIO_TARGET, (ms), NULL)
-#define VIDEO_START(ms) avc_command("1", VIDEO_TARGET, (ms), NULL)
-#define AUDIO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
-#define VIDEO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
-#define AUDIO_PRINT(s)  avc_command(NULL, AUDIO_TARGET, 0, (s))
-#define VIDEO_PRINT(s)  avc_command(NULL, VIDEO_TARGET, 0, (s))
-
-void i2c_detect(int bus);
+#define SMBUS_TO_WORD(reg)  ( (reg) | 0x8000 )
+#define SMBUS_IS_WORD(reg)  ( (reg) & 0x8000 || (reg) > 0xFF )
+#define SMBUS_HI_WORD(reg)  (( (reg) >> 8 ) & ~0x80 )
+#define SMBUS_LO_WORD(reg)  ( (reg) & 0xFF )
+esp_err_t smbus_wregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
+esp_err_t smbus_rregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
+esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
+esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit);
+esp_err_t smbus_write_byte(int bus, uint8_t addr, uint16_t reg, uint8_t val);
+esp_err_t smbus_read_byte(int bus, uint8_t addr, uint16_t reg, uint8_t *val);
+esp_err_t smbus_write_word(int bus, uint8_t addr, uint16_t reg, uint16_t val);
+esp_err_t smbus_read_word(int bus, uint8_t addr, uint16_t reg, uint16_t *val);
 esp_err_t smbus_probe(int bus, uint8_t addr);
-esp_err_t smbus_wregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
-esp_err_t smbus_rregs(int bus, uint8_t addr, uint8_t reg, uint8_t *, size_t);
-esp_err_t smbus_dump(int bus, uint8_t addr, uint8_t reg, uint8_t num);
-esp_err_t smbus_toggle(int bus, uint8_t addr, uint8_t reg, uint8_t bit);
-esp_err_t smbus_write_byte(int bus, uint8_t addr, uint8_t reg, uint8_t val);
-esp_err_t smbus_read_byte(int bus, uint8_t addr, uint8_t reg, uint8_t *val);
-esp_err_t smbus_write_word(int bus, uint8_t addr, uint8_t reg, uint16_t val);
-esp_err_t smbus_read_word(int bus, uint8_t addr, uint8_t reg, uint16_t *val);
+void i2c_detect(int bus);
 
 typedef enum {
     // GPIO Expander by PCF8574: Endstops | Temprature | Valves
@@ -263,6 +232,7 @@ typedef enum {
 esp_err_t gexp_set_level(int pin, bool level);
 esp_err_t gexp_get_level(int pin, bool *level, bool sync);
 void gpio_table(bool i2c, bool spi);
+const char * gpio_usage(gpio_num_t pin, const char *usage);
 
 #ifdef __cplusplus
 }

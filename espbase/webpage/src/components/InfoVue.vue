@@ -1,4 +1,6 @@
 <script setup>
+import { version } from 'vue'
+
 import {
     // create-vue/IconDocumentation.vue
     mdiBookOpenVariant,
@@ -39,13 +41,13 @@ import {
             </svg>
             <h2>
                 JS Powered by
-                <a href="https://vitejs.dev/" target="_blank" rel="noopener"
-                    >Vite</a
-                >
+                <a href="https://vitejs.dev/" target="_blank" rel="noopener">
+                    Vite
+                </a>
                 and
-                <a href="https://vuejs.org/" target="_blank" rel="noopener"
-                    >Vue 3</a
-                >.
+                <a href="https://vuejs.org/" target="_blank" rel="noopener">
+                    Vue {{ version }}
+                </a>
             </h2>
         </div>
         <div>
@@ -54,9 +56,9 @@ import {
                 <template #heading>Documentation</template>
 
                 Vue’s
-                <a href="https://vuejs.org/" target="_blank" rel="noopener"
-                    >official documentation</a
-                >
+                <a href="https://vuejs.org/" target="_blank" rel="noopener">
+                    official documentation
+                </a>
                 provides you with all information you need to get started.
             </WelcomeItem>
 

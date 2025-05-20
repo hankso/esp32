@@ -15,20 +15,27 @@ import sys
 import glob
 import json
 import time
+import uuid
+import zlib
+import base64
+import select
 import socket
 import struct
 import fnmatch
+import hashlib
 import argparse
 import tempfile
 import threading
 import subprocess
 from io import StringIO
-from os import path as op, environ as env
+from os import path as op, environ as ENV
+from datetime import datetime
 from urllib.parse import urljoin
+from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer
 
 # requirements.txt: bottle, requests, zeroconf
-# requirements.txt: numpy, pyturbojpeg, opencv-python
+# requirements.txt: numpy, pyturbojpeg, turbojpeg, opencv-python
 try:
     import bottle
 except Exception:
@@ -46,10 +53,7 @@ try:
 except Exception:
     np = None
 try:
-    from turbojpeg import TurboJPEG
-    from turbojpeg import TJPF_GRAY, TJPF_BGR, TJPF_BGRA
-    from turbojpeg import TJSAMP_GRAY, TJSAMP_420
-    tj = TurboJPEG()
+    import turbojpeg as tj
 except Exception:
     tj = None
 try:
@@ -59,7 +63,7 @@ except Exception:
 
 PORT = 9999
 ROOT_DIR = op.dirname(op.abspath(__file__))
-IDF_PATH = env['IDF_PATH'] if op.isdir(env.get('IDF_PATH', '')) else ''
+IDF_PATH = ENV['IDF_PATH'] if op.isdir(ENV.get('IDF_PATH', '')) else ''
 
 
 def fromroot(*a): return op.join(ROOT_DIR, *a)
@@ -127,12 +131,11 @@ def walk_exclude(root, include_exts=[], excludes=None):
         yield root, dirs, files
 
 
-def random_id(len=8):
+def random_id(length=None):
     #  from random import choice
     #  from string import hexdigits
     #  return ''.join([choice(hexdigits) for i in range(len)])
-    from uuid import uuid4
-    return uuid4().hex[:len].upper()
+    return uuid.uuid4().hex[:length].upper()
 
 
 def project_name():
@@ -179,7 +182,7 @@ def process_nvs(args):
             dist = args.pack
         else:
             dist = tempfile.mktemp() + '.bin'
-        sys.argv[1:] = ['generate', args.out, dist, args.size]
+        sys.argv[1:] = ['generate', args.output, dist, args.size]
         nvs_gen()
         if args.flash:
             sys.argv[1:] = ['-p', args.flash, 'write_flash', args.offset, dist]
@@ -187,8 +190,8 @@ def process_nvs(args):
     except (SystemExit, Exception) as e:
         return print('Generate NVS binary failed:', e, file=sys.stderr)
     finally:
-        if op.exists(args.out):
-            os.remove(args.out)
+        if op.exists(args.output):
+            os.remove(args.output)
         sys.argv = argv_backup
         sys.stdout = stdout_backup
 
@@ -202,37 +205,58 @@ def gencfg(args):
             'NAME': prefix, 'UID': random_id(args.len),
             'URL': firmware_url(prefix + '.bin'),
         }).replace('\n\n', '\n').replace(' ', '')
-    if args.out == sys.stdout and IDF_PATH:
-        args.out = tempfile.mktemp()
-    if hasattr(args.out, 'name'):
-        filename = args.out.name
-    else:
-        filename = str(args.out)
+    if args.output is sys.stdout and IDF_PATH:
+        args.output = tempfile.mktemp()
+    filename = getattr(args.output, 'name', str(args.output))
     if not args.quiet:
         print('Writing NVS information to `%s`' % filename)
-    if hasattr(args.out, 'write'):
-        args.out.write(data)
-        args.out.flush()
-    else:
-        with open(args.out, 'w', encoding='utf8') as f:
+    if hasattr(args.output, 'write'):
+        args.output.write(data)
+        args.output.flush()
+    elif isinstance(args.output, str):
+        with open(args.output, 'w', encoding='utf8') as f:
             f.write(data)
-    if args.pack and IDF_PATH and filename[0] != '<':
-        args.out = filename
-        process_nvs(args)
+        if args.pack and IDF_PATH:
+            process_nvs(args)
+
+
+def gbk2idx(g):
+    '''GBK encoding (0x8100 - 0xFE50) => index (0 - 24016)'''
+    g -= 0x8100
+    return g - (g + 0xFF) // 0x100 * 0x40
+
+
+def idx2gbk(i): return 0x8100 + i + (i // (0x100 - 0x40) + 1) * 0x40
+
+
+def gbk2str(g):
+    '''GBK encoding (0x8100 - 0xFEFF) => string'''
+    return bytes([g >> 8, g & 0xFF]).decode('gbk')
+
+
+def gengbk(args):
+    output = fromroot('files', 'data', 'gbktable.bin')
+    with open(output, 'wb') as f:
+        for idx in range(gbk2idx(0xFE50)):
+            try:
+                u16 = ord(gbk2str(idx2gbk(idx)))  # 0x00A4 - 0xFFE5
+            except Exception:
+                u16 = 0
+            f.write(struct.pack('<H', u16))
 
 
 def font_output(args):
-    if args.out:
-        out = args.out
+    if args.output:
+        output = args.output
     elif args.bin:
-        out = fromroot('files', 'data', 'chinese')
+        output = fromroot('files', 'data', 'chinese')
     else:
-        out = fromroot('main', 'scnfont.c')
-    dirname, basename = op.split(out)
+        output = fromroot('main', 'scnfont.c')
+    dirname, basename = op.split(output)
     if args.bin and not basename.startswith('lv_font'):
         basename = 'lv_font_' + basename
     if args.bin and not basename.endswith('bin'):
-        basename += '_%d.bin' % args.size
+        basename = f'{basename}_{args.size}.bin'
     return op.join(dirname, basename)
 
 
@@ -295,18 +319,18 @@ def genfont(args):
         return print('No chinese characters found. Skip')
     if not op.exists(args.font):
         return print('Font file `%s` not found' % args.font)
-    args.out = font_output(args)
+    args.output = font_output(args)
     cmd = (
         'lv_font_conv --bpp %d --size %d --no-kerning --format %s -o "%s"'
         ' --font "%s" --symbols "%s" -r 0x3000-0x301F %s'
     ) % (
-        args.bpp, args.size, 'bin' if args.bin else 'lvgl', args.out,
+        args.bpp, args.size, 'bin' if args.bin else 'lvgl', args.output,
         args.font, ''.join(sorted(symbols)), font_icon(args)
     )
     try:
         execute(cmd, quiet=args.quiet)
         if not args.bin:
-            font_postproc(args.out)
+            font_postproc(args.output)
     except Exception as e:
         return print('Error', e)
 
@@ -325,7 +349,7 @@ ESP_IDF_COMMON = '''
 def glob_headers(dirname):
     '''find .h files and return relative posix path'''
     try:
-        dirname = glob.glob(dirname)[0]
+        dirname = op.normpath(dirname)
         return [
             op.relpath(path, dirname).replace('\\', '/')
             for path in glob.glob(op.join(dirname, '**/*.h'), recursive=True)
@@ -412,7 +436,7 @@ def gendeps(args):
         return
     try:
         headers.difference_update(glob_headers(op.join(
-            env['IDF_TOOLS_PATH'], 'tools/xtensa-esp-elf',
+            ENV['IDF_TOOLS_PATH'], 'tools/xtensa-esp-elf',
             '*/xtensa-esp-elf/xtensa-esp-elf/include/'
         )))
         for header in list(headers):
@@ -452,6 +476,7 @@ def prebuild(args):
     except Exception as e:
         print('Rebuild webpage failed', e)
     args.quiet = True
+    gengbk(args)
     gendeps(args)
 
 
@@ -463,10 +488,10 @@ def sdkconfig(args):
             defaults = f.read().splitlines()
     except Exception:
         pass
-    tpl = re.compile(r'(.*)=n')
+    tpl = [re.compile(r'^#|\s*$'), re.compile(r'(.*)=n')]
     for line in defaults:
-        if not line.strip() or line.startswith('#') or tpl.sub(
-            lambda m: '# ' + m.groups()[0] + ' is not set', line
+        if tpl[0].match(line) or tpl[1].sub(
+            lambda m: f'# {m.groups()[0]} is not set', line
         ) in configs:
             continue
         print(line, 'is set but has no effect')
@@ -552,6 +577,7 @@ def blame(args):
     try:
         comps = size_components(quiet=args.quiet, files=args.files)
         order, comps = sort_components(comps, sort=args.sort)
+        assert len(comps)
     except Exception:
         return
     nlen = max(map(len, comps))
@@ -616,7 +642,7 @@ def search(args):
         if args.all:
             services.update(zeroconf.ZeroconfServiceTypes.find(timeout=1))
         return bonjour_browser(services, project_name(), **vars(args))
-    print('TODO: send mDNS query packet and parse response')
+    return print('TODO: send mDNS query packet and parse response')
     addr = ('224.0.0.251', 5353)
     opt = socket.inet_aton(addr[0]) + struct.pack('l', socket.INADDR_ANY)
     udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
@@ -636,25 +662,53 @@ def search(args):
             break
 
 
-def relpath(p, ref='.', strip=False):
+def relpath(p, maxlen=True, ref='.'):
     try:
-        p = op.relpath(p, ref)
-    except Exception:
+        p = op.normpath(op.relpath(p, ref))
+    except ValueError:
         pass
-    if not strip:
+    try:
+        if maxlen is True:
+            maxlen = os.get_terminal_size().columns
+        elif isinstance(maxlen, int) and maxlen < 0:
+            maxlen += os.get_terminal_size().columns
+    except OSError:
+        maxlen = None
+    if not isinstance(maxlen, int) or len(p) < maxlen:
         return p
-    if (len(p.split(op.sep)) > 3 and len(p) > 30) or len(p) > 80:
-        m = re.findall(r'\w+%s(.+)%s\w+' % tuple([op.sep] * 2), p)
-        p = p.replace((m or [''])[0], '...')
-    return p
+    chunks = p.split(op.sep)
+    dotnum = sum(c == '..' for c in chunks)
+    dotlen = dotnum * 3 - (dotnum != 0) + len(chunks[dotnum])
+    maxlen -= dotlen + 3
+    return p if maxlen < 0 else (p[:dotlen] + '...' + p[-maxlen:])
+
+
+def print_method(prefix=''):
+    if prefix:
+        print(prefix + ': ', end='')
+    print(bottle.request.method, bottle.request.url)
+
+
+def print_request(prefix='Request', attr='headers', environ=False):
+    dct = getattr(bottle.request, attr)
+    klen = max(map(len, dct.keys())) if dct else 0
+    prefix += (' ' if prefix else '') + attr
+    print_method('\n' + prefix.ljust(klen))
+    for k, v in dct.items():
+        print('%-*s: %s' % (klen, k, v))
+    if attr == 'environ' or not environ:
+        return
+    keys = sorted([k for k in bottle.request.environ if k not in ENV])
+    klen = max(map(len, keys)) if keys else 0
+    if keys:
+        print('\n' + 'Environments'.ljust(klen))
+    for k in keys:
+        print('%-*s: %s' % (klen, k, bottle.request.environ[k]))
 
 
 def on_edit(root):
-    print(bottle.request.path)
-    print('method', bottle.request.method)
-    print('params', dict(bottle.request.params))
-    if 'list' in bottle.request.query:
-        path = op.join(root, bottle.request.query.get('path').strip('/'))
+    if 'list' in bottle.request.params:
+        path = op.join(root, bottle.request.params.path.strip('/'))
         if not op.exists(path):
             bottle.abort(404)
         elif op.isfile(path):
@@ -672,44 +726,30 @@ def on_edit(root):
             })
         bottle.response.content_type = 'application/json'
         return json.dumps(d)
-    elif 'path' in bottle.request.query:
+    elif 'path' in bottle.request.params:
         return bottle.static_file(
-            bottle.request.query.get('path').strip('/'), root,
-            download='download' in bottle.request.query)
+            bottle.request.params.path.strip('/'), root,
+            download='download' in bottle.request.params)
     return bottle.redirect('/editor')  # vue.js router
 
 
-def on_editc():
-    print(bottle.request.path)
-    print('method', bottle.request.method)
-    print('params', dict(bottle.request.params))
-
-
-def on_editd():
-    print(bottle.request.path)
-    print('method', bottle.request.method)
-    print('params', dict(bottle.request.params))
-
-
-def on_editu():
-    print(bottle.request.path)
-    print('method', bottle.request.method)
-    print('header', dict(bottle.request.headers))
-    print('params', dict(bottle.request.params))
-    for idx, file in enumerate(bottle.request.files.values()):
-        print('file', idx, vars(file), dict(file.headers))
+def on_edit_extra():
+    print_request(attr='forms')
+    if bottle.request.method == 'POST':
+        for idx, file in enumerate(bottle.request.files.values()):
+            print('file', idx, vars(file), dict(file.headers))
     time.sleep(0.5)
 
 
 def load_config():
-    configs = []
+    configs = [('app.ota.auto', '1'), ('sys.int.edge', 'NEG')]
     try:
         args = make_parser().parse_args(['--quiet', 'gencfg'])
-        args.out = StringIO()
+        args.output = StringIO()
         args.func(args)
-        args.out.seek(0)
+        args.output.seek(0)
         record = False
-        for line in csv.reader(args.out):
+        for line in csv.reader(args.output):
             if 'namespace' in line:
                 record = 'config' in line
                 continue
@@ -722,22 +762,17 @@ def load_config():
 
 
 def on_config():
-    print(bottle.request.path)
-    print('method', bottle.request.method)
-    print('params', dict(bottle.request.params))
     if not hasattr(on_config, 'data'):
         on_config.data = load_config()
     if bottle.request.method == 'GET':
         return on_config.data
-    data = bottle.request.params.get('json', {})
-    if isinstance(data, str):
-        data = json.loads(data)
-    on_config.data.update(data)
+    print_request(attr='forms')
+    on_config.data.update(json.loads(bottle.request.forms.get('json', '{}')))
 
 
 def on_update():
-    if 'raw' in bottle.request.query:
-        return 'Raw updation HTML'
+    if 'raw' in bottle.request.params:
+        return 'PLACEHOLDER: raw updation HTML'  # see server.c -> UPDATE_HTML
     return bottle.redirect('/updation')  # vue.js router
 
 
@@ -752,12 +787,9 @@ def audio_random(fs, fmt, sec=0.25, volume=255, **k):
 
 
 def audio_stream(**kwargs):
-    if not np:
-        raise bottle.HTTPResponse('Audio streaming not available', 500)
     bottle.response.set_header('Cache-Control', 'no-store')
     bottle.response.set_header('Content-Type', 'audio/wav')
-    host = bottle.request.environ.get('REMOTE_ADDR')
-    port = bottle.request.environ.get('REMOTE_PORT')
+    remote = bottle.request.environ.get('REMOTE_HOST')
     fs = int(kwargs.get('fs', kwargs.get('rate', 44100)))
     nch = int(kwargs.get('nch', kwargs.get('channels', 1)))
     fmt = kwargs.get('fmt', kwargs.get('format', 'int16'))
@@ -766,7 +798,7 @@ def audio_stream(**kwargs):
     Bps = BpS * fs
     bpC = BpC * 8
     dts = kwargs.get('dt', (2 ** 32 - 36 - 1) / Bps)
-    print('audio streaming to %s:%d started' % (host, port))
+    print('audio streaming to %s started' % remote)
     yield struct.pack(
         '= 4s I 4s 4s I H H I I H H 4s I',
         b'RIFF', 36 + int(dts * Bps), b'WAVE', b'fmt ', 0x10, 0x01,
@@ -779,38 +811,39 @@ def audio_stream(**kwargs):
             break
         except Exception as e:
             raise bottle.HTTPResponse(str(e), 500)
-    print('audio streaming to %s:%d stopped' % (host, port))
+    print('audio streaming to %s stopped' % remote)
 
 
-def video_random(fs, width, height, qual=1, **k):
+def video_random(fs, width, height, qual=1, depth=1, **k):
     time.sleep(1 / fs)
-    img = np.random.randint(0, 255, (height, width), dtype=np.uint8)
+    img = np.random.randint(0, 255, (height, width, depth), dtype=np.uint8)
     if cv2 is not None:
         return cv2.imencode(
             '.jpg', img, (cv2.IMWRITE_JPEG_QUALITY, qual)
         )[1].tobytes()
     if tj is None:
         return b''
-    depth = 1 if img.ndim == 2 else (img.shape[-1] if img.ndim == 3 else 0)
-    tjPF = [0, TJPF_GRAY, TJPF_GRAY, TJPF_BGR, TJPF_BGRA][depth]
-    tjSA = [0, TJSAMP_GRAY, TJSAMP_420, TJSAMP_420, TJSAMP_420][depth]
-    return tj.encode(img, qual, tjPF, tjSA)
+    idx = 0 if img.ndim == 2 else ((img.shape[-1] - 1) if img.ndim == 3 else 0)
+    if hasattr(tj, 'TurboJPEG'):
+        PF = [tj.TJPF_GRAY, tj.TJPF_GRAY, tj.TJPF_BGR, tj.TJPF_BGRA][idx]
+        SA = tj.TJSAMP_420 if idx else tj.TJSAMP_GRAY
+        return tj.TurboJPEG().encode(img, qual, PF, SA)
+    else:
+        PF = [tj.PF.GRAY, tj.PF.GRAY, tj.PF.BGR, tj.PF.BGRA][idx]
+        SA = tj.SAMP.Y420 if idx else tj.SAMP.GRAY
+        return tj.compress(img, qual, SA, pixelformat=PF)
 
 
-def video_stream(**kwargs):
-    if not tj and not cv2:
-        raise bottle.HTTPResponse('Video streaming not available', 500)
+def video_stream(bdary='FRAME', **kwargs):
     kwargs.setdefault('fs', 30)
-    kwargs.setdefault('width', 640)
-    kwargs.setdefault('height', 480)
-    bdary = kwargs.get('boundary', 'FRAME')
-    host = bottle.request.environ.get('REMOTE_ADDR')
-    port = bottle.request.environ.get('REMOTE_PORT')
+    kwargs.setdefault('width', 1280)
+    kwargs.setdefault('height', 720)
     bottle.response.set_header('Cache-Control', 'no-store')
     bottle.response.set_header(
         'Content-Type', 'multipart/x-mixed-replace; boundary=--' + bdary
     )
-    print('video streaming to %s:%d started' % (host, port))
+    remote = bottle.request.environ.get('REMOTE_HOST')
+    print('video streaming to %s started' % remote)
     while True:
         try:
             frame = video_random(**kwargs)
@@ -820,43 +853,91 @@ def video_stream(**kwargs):
                 'Content-Length: %d' % len(frame),
                 '\r\n'
             ]).encode() + frame
-            if 'still' in bottle.request.query:
+            if 'still' in bottle.request.params:
                 break
         except (StopIteration, KeyboardInterrupt, GeneratorExit):
             break
         except Exception as e:
             raise bottle.HTTPResponse(str(e), 500)
-    print('video streaming to %s:%d stopped' % (host, port))
+    print('video streaming to %s stopped' % remote)
 
 
 def on_media(**k):
-    if 'wav' in bottle.request.query:
-        return audio_stream(**k)
-    if 'mjpg' in bottle.request.query:
-        return video_stream(**k)
-    return bottle.HTTPResponse('''
-        <img id="vplayer" style="cursor:pointer" src="media?mjpg&still">
-        <audio id="aplayer" preload="none" src="media?wav" controls
-            controlslist="nodownload noremoteplayback noplaybackrate"></audio>
-        <script>
-            vplayer.addEventListener('click', e => {
-                let elem = e.target, tmp = elem.src;
-                if (tmp.endsWith('&still')) {
-                    elem.src = tmp.substr(0, tmp.length - 6);
-                } else {
-                    elem.src = '';
-                    elem.src = tmp + '&still';
-                }
-            });
-            aplayer.addEventListener('pause', e => {
-                let elem = e.target, tmp = elem.src;
-                elem.src = '';  // stop buffering after paused
-                elem.load();
-                elem.src = tmp; // recover streaming source
-                // alt.: window.stop();
-            });
-        </script>
-    ''')  # simple page for debugging only
+    if not hasattr(on_media, 'data'):
+        on_media.data = {'pixformat': 4, 'framesize': 13}
+    if bottle.request.method == 'POST':
+        print_request(attr='forms')
+        data = json.loads(bottle.request.forms.get('video', '{}'))
+        for key, val in data.items():
+            try:
+                if not isinstance(val, (int, float)):
+                    data[key] = re.findall(r'^\d+', str(val))[0]
+            except Exception:
+                data[key] = 0
+        return on_media.data.update(data)
+    if 'video' in bottle.request.params:
+        if not tj and not cv2:
+            return bottle.HTTPResponse('Video streaming not available', 403)
+        if bottle.request.params.video == 'mjpg':
+            return video_stream(**k)
+        return on_media.data
+    if 'audio' in bottle.request.params:
+        if not np:
+            return bottle.HTTPResponse('Audio streaming not available', 403)
+        if bottle.request.params.audio == 'wav':
+            return audio_stream(**k)
+        return on_media.data
+    return bottle.redirect('/stream')  # vue.js router
+
+
+def rpc_hid(*args):
+    # see commands.cpp -> app_hid_args
+    parser = getattr(rpc_hid, 'parser', None)
+    if parser is None:
+        parser = rpc_hid.parser = argparse.ArgumentParser()
+        for i in ('-k', '-s', '-m', '-d', '-t', '--ts', '--to'):
+            parser.add_argument(i, type=i in ('-t', '--ts') and int or str)
+    try:
+        args = vars(parser.parse_known_args(args)[0])
+    except SystemExit:
+        return parser.format_help()
+    if args['ts'] is not None:
+        args = {'dt': '%dms' % (1e3 * time.time() - args.pop('ts')), **args}
+    print(datetime.now().strftime('%T.%f')[:-3],
+          *[f'{k}={v}' for k, v in args.items() if v is not None])
+
+
+def rpc_sleep(sec, *a):
+    try:
+        time.sleep(float(sec))
+    except Exception:
+        pass
+    return time.strftime('%F %T')
+
+
+def on_websocket():
+    #  print_request(environ=True)
+    ws = bottle.request.environ.get('wsgi.websocket')
+    if ws is None:
+        return print('WebSocket not handled by server')
+    try:
+        while not ws.closed:
+            msg = ws.recv()
+            if not msg:
+                continue
+            try:
+                rpc = json.loads(msg)
+                func = globals().get('rpc_' + rpc.pop('method'), lambda *a: a)
+                rpc['result'] = func(*rpc.pop('params', ()))
+                if 'id' in rpc:
+                    ws.send(json.dumps(rpc))
+            except Exception:
+                print('WebSocket got', msg)
+        print('WebSocket remote closed')
+    except KeyboardInterrupt:
+        pass
+    except Exception as e:
+        print('WebSocket recv error:', e)
 
 
 def static_factory(_root):
@@ -865,23 +946,29 @@ def static_factory(_root):
     2. auto detect "index.html" if resolving directory
     3. fallback to file manager if no "index.html" under dir
     '''
-    def on_static(filename, root=_root):
-        target = op.join(root, filename.strip('/\\'))
+    def on_static(filename, root=op.normpath(_root)):
+        target = op.normpath(op.join(root, filename.strip('/\\')))
+        try:
+            assert target.startswith(root)
+            filename = op.relpath(target, root)
+        except Exception:
+            return bottle.HTTPError(404)
         if op.isdir(target):
-            return on_static(op.join(target, 'index.html'))
+            return on_static(op.join(filename, 'index.html'), root)
         if op.isfile(target):
-            return bottle.static_file(relpath(target, root), root)
+            return bottle.static_file(filename, root)
         if op.isfile(target + '.gz'):
             return bottle.static_file(
-                relpath(target + '.gz', root), root,
-                mimetype=bottle.mimetypes.guess_type(target)[0],
+                filename + '.gz', root,
+                mimetype=bottle.mimetypes.guess_type(filename)[0],
                 headers={'Content-Encoding': 'gzip'})
-        return bottle.HTTPError(404, 'File not found')
+        return bottle.HTTPError(404)
     return on_static
 
 
 def error_factory(root):
     def on_error(err, on_static=static_factory(root)):
+        print_request('Error')
         index = on_static('index.html')
         if isinstance(index, bottle.HTTPError):
             return bottle.Bottle.default_error_handler(None, err)
@@ -892,7 +979,7 @@ def error_factory(root):
 def test_apis(apis):
     configs = load_config()
     auth = (configs.get('web.http.name'), configs.get('web.http.pass'))
-    ulen, mlen = [max(map(len, i)) for i in zip(*apis)]
+    ulen, mlen = [max(map(len, i)) if i else 0 for i in zip(*apis)]
     for url, method in apis:
         print(method.rjust(mlen), url.ljust(ulen), end=' ')
         try:
@@ -911,11 +998,187 @@ def test_apis(apis):
 def redirect_esp32(esphost):
     def wrapper(urlbase=esphost):
         # FIXME: Authorization may be stripped by HTTP client after redirection
-        return bottle.redirect(urljoin(urlbase, bottle.request.path), 307)
+        return bottle.redirect(urljoin(urlbase, bottle.request.url), 307)
     return wrapper if esphost else lambda: ''
 
 
-class SSLServer(WSGIServer):
+class WebSocketError(Exception):
+    pass
+
+
+class WebSocket(object):
+    def __init__(self, rfile, write, compressed):
+        self._rfile, self._write = rfile, write
+        self._code, self._closed, self._msg = 0, False, b''
+        if compressed:
+            self._enc = zlib.compressobj(7, zlib.DEFLATED, -zlib.MAX_WBITS)
+            self._dec = zlib.decompressobj(-zlib.MAX_WBITS)
+        else:
+            self._enc = self._dec = None
+
+    def _read_unpack(self, fmt):
+        size = fmt if isinstance(fmt, int) else struct.calcsize(fmt)
+        data = self._rfile.read(size)
+        if len(data) != size:
+            raise WebSocketError('Unexpected EOF while reading')
+        return data if size is fmt else struct.unpack(fmt, data)
+
+    def _recv_frame(self):
+        buf = self._read_unpack('>BB')
+        fin = buf[0] & 0x80
+        rsv123 = buf[0] & 0x70
+        opcode = buf[0] & 0x0F
+        ismask = buf[1] & 0x80
+        length = buf[1] & 0x7F
+        if opcode > 0x07:
+            if not fin:
+                raise WebSocketError('Fragmented control frame')
+            if length > 125:
+                raise WebSocketError('Error length control frame')
+        if length == 126:
+            length = self._read_unpack('>H')[0]
+        elif length == 127:
+            length = self._read_unpack('>Q')[0]
+        if ismask:
+            mask = self._read_unpack('>BBBB')
+        if self._enc and (rsv123 & 0x40):  # RSV1
+            rsv123 &= ~0x40
+            compressed = True
+        else:
+            compressed = False
+        if rsv123:
+            raise WebSocketError('Invalid RSV value: %s' % rsv123)
+        payload = self._read_unpack(length)
+        if ismask:
+            payload = bytes(mask[i % 4] ^ c for i, c in enumerate(payload))
+        if compressed:
+            payload = (
+                self._dec.decompress(payload) +
+                self._dec.decompress(b'\x00\x00\xff\xff') +
+                self._dec.flush()
+            )
+        return fin, opcode, payload
+
+    def _handle_frame(self, fin, opcode, payload):
+        if opcode == 0x00:                              # OPCODE_CONTINUATION
+            if not self._code:
+                raise WebSocketError('Unexpected frame with OPCODE_CONTINUE')
+        elif opcode in [0x01, 0x02]:                    # OPCODE_TEXT|BINARY
+            if self._code:
+                raise WebSocketError('The opcode in non-fin frame is non-zero')
+            self._code = opcode
+        elif opcode == 0x08:                            # OPCODE_CLOSE
+            if not payload:
+                return self.close()
+            if len(payload) < 2:
+                raise WebSocketError('Invalid close frame: %s' % payload)
+            code, msg = struct.unpack('>H%ds' % (len(payload) - 2), payload)
+            if (code < 1000 or 1004 <= code <= 1006 or 1012 <= code <= 1016 or
+               code == 1100 or 2000 <= code <= 2999):
+                raise WebSocketError('Invalid close code %d' % code)
+            return self.close(code, msg)
+        elif opcode == 0x09:                            # OPCODE_PING
+            return self._send_frame(0x0A, payload)      # OPCODE_PONG
+        elif opcode == 0x0A:                            # OPCODE_PONG
+            return
+        else:
+            raise WebSocketError('Unexpected opcode = %d' % opcode)
+        self._msg += payload
+        if not fin:
+            return
+        opcode, msg, self._code, self._msg = self._code, self._msg, 0, b''
+        return msg if opcode == 0x02 else msg.decode('utf8')
+
+    def _send_frame(self, opcode, payload, compress=False, mask=b'', fin=True):
+        rsv123 = 0
+        if self._enc and compress:
+            payload = self._enc.compress(payload)
+            payload += self._enc.flush(zlib.Z_SYNC_FLUSH)
+            if payload.endswith(b'\x00\x00\xff\xff'):
+                payload = payload[:-4]
+            rsv123 = 0x40  # RSV1
+        if len(mask) == 4:
+            payload = bytes(mask[i % 4] ^ c for i, c in enumerate(payload))
+        elif mask:
+            raise WebSocketError('Invalid mask to use: %s' % mask)
+        length = len(payload)
+        if length <= 125:
+            extra = b''
+        elif length <= 0xFFFF:
+            extra = struct.pack('>H', length)
+            length = 126
+        elif length <= 0xFFFFFFFFFFFFFFFF:
+            extra = struct.pack('>Q', length)
+            length = 127
+        else:
+            raise WebSocketError('Frame too large: %d Bytes' % length)
+        try:
+            self._write(bytes([
+                (0x80 if fin else 0) | (rsv123 & 0x70) | (opcode & 0x0F),
+                (0x80 if mask else 0) | (length & 0x7F)
+            ]) + extra + mask + payload)
+        except socket.error as e:
+            raise WebSocketError(e)
+
+    closed = property(lambda self: self._closed)
+
+    def close(self, code=1000, msg=b''):
+        if self._closed:
+            return
+        if not isinstance(msg, (bytes, bytearray)):
+            msg = str(msg).encode('utf8')
+        payload = struct.pack('>H%ds' % len(msg), code, msg)
+        self._send_frame(0x08, payload)  # OPCODE_CLOSE
+        self._closed = True
+
+    def recv(self, timeout=1):
+        if self._closed:
+            raise WebSocketError('WebSocket already closed')
+        try:
+            while True:
+                if not select.select([self._rfile], [], [], timeout)[0]:
+                    return
+                msg = self._handle_frame(*self._recv_frame())
+                if msg is not None:
+                    return msg
+        except WebSocketError as e:
+            self.close(1002, e)
+        except UnicodeError as e:
+            self.close(1007, e)
+        except socket.error as e:
+            self.close(msg=e)
+
+    def send(self, msg, binary=False, compress=False):
+        if self._closed:
+            raise WebSocketError('WebSocket already closed')
+        if not isinstance(msg, (bytes, bytearray)):
+            msg = str(msg).encode('utf8')
+        self._send_frame(0x02 if binary else 0x01, msg, compress=compress)
+
+
+class Server(ThreadingMixIn, WSGIServer):
+    '''
+    Call stack of WSGI applications:
+        1. WSGIServer.serve_forever()
+        2. WSGIServer.get_request() => ssl.wrap_socket()
+        3. WSGIServer.process_request() => threading.Thread()
+        4. WSGIServer.finish_request()
+        5. WSGIRequestHandler.handle()
+        6. ServerHandler.run() => app(env, start_response)
+        7. ServerHandler.finish_response()
+
+    Patch WSGIServer.get_request to handle both HTTP and HTTPS (SSL Socket)
+    Patch WSGIServer.process_request by ThreadingMixIn for Multithread
+    Patch WSGIServer.set_app and Bottle.wsgi to add support for WebSocket
+    '''
+
+    def __init__(self, *a, **k):
+        super().__init__(*a, **k)
+        self.base_environ['WS_VERSIONS'] = [str(v) for v in (13, 8, 7)]
+        self.base_environ['WS_PROTOCOL'] = set()
+        if bottle.Bottle.wsgi != self.patch_wsgi:
+            bottle.Bottle.wsgi = self.patch_wsgi
+
     def get_request(self):
         client, addr = self.socket.accept()
         if client.recv(1, socket.MSG_PEEK) == b'\x16':  # TLS client hello
@@ -926,14 +1189,76 @@ class SSLServer(WSGIServer):
         else:
             self.base_environ['HTTPS'] = 'no'
         self.base_environ['REMOTE_PORT'] = addr[1]
+        self.base_environ['REMOTE_HOST'] = '%s:%d' % addr
+        self.base_environ['REQUEST_START'] = time.time()
         return client, addr
+
+    def set_app(self, app):
+        self.application = app
+        app.server = self
+
+    @staticmethod
+    def patch_wsgi(app, environ, start_response, origin=bottle.Bottle.wsgi):
+        environ['wsgi.multithread'] = True
+        environ['wsgi.multiprocess'] = False
+        def get(key, default=''): return environ.get(key, default)
+        if (get('REQUEST_METHOD') != 'GET' or get('wsgi.websocket')) or (
+            get('HTTP_UPGRADE').lower() != 'websocket' and
+            get('HTTP_CONNECTION').lower() != 'upgrade'
+        ) or not isinstance(getattr(app, 'server'), Server):
+            return origin(app, environ, start_response)
+        version = get('HTTP_SEC_WEBSOCKET_VERSION')
+        if not version or version not in get('WS_VERSIONS'):
+            header = {'Sec-Websocket-Version': ', '.join(get('WS_VERSIONS'))}
+            resp = bottle.HTTPError(400 if version else 426, **header)
+            start_response(resp._wsgi_status_line(), resp.headerlist)
+            return [b'Invalid Sec-Websocket-Version']
+        try:
+            keyb = get('HTTP_SEC_WEBSOCKET_KEY').encode('latin-1')
+            if len(base64.b64decode(keyb)) != 16:
+                raise
+        except Exception:
+            start_response('400 Bad Request', [])
+            return [b'Invalid Sec-Websocket-Key']
+        prot = get('HTTP_SEC_WEBSOCKET_PROTOCOL').split(',')
+        prot = get('WS_PROTOCOL').union(filter(None, map(str.strip, prot)))
+        exts = get('HTTP_SEC_WEBSOCKET_EXTENSIONS').split(',')
+        exts = set(filter(None, (i.split(';')[0].strip() for i in exts)))
+        compress = 'premessage-deflate' in exts
+        headers = {
+            'Upgrade': 'websocket',
+            'Connection': 'Upgrade',
+            'Sec-Websocket-Accept': base64.b64encode(hashlib.sha1(
+                keyb + b'258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
+            ).digest()).decode('latin-1'),
+        }
+        if prot:
+            headers['Sec-Websocket-Protocol'] = ', '.join(prot)
+        if compress:
+            headers['Sec-Websocket-Extensions'] = 'premessage-deflate'
+        resp = bottle.HTTPError(101, **headers)
+        try:
+            write = start_response(resp._wsgi_status_line(), resp.headerlist)
+        except AssertionError:  # fix wsgiref.handlers.is_hop_by_hop
+            try:
+                write = start_response.__self__.write
+            except Exception:
+                start_response('500 Internal Server Error', [])
+                return [b'Could not patch ServerHandler.start_response']
+        environ.update({
+            'wsgi.websocket': WebSocket(get('wsgi.input'), write, compress),
+            'wsgi.websocket_version': version,
+        })
+        write(b'')
+        origin(app, environ, lambda *a, **k: None)  # return value ignored
+        return []
 
 
 def webserver(args):
     '''
     bottle BaseRequest arguments outline:
 
-                    [CGI FieldStorage]
+            [url-encoded or multipart/form-data]
                              |
                              V
                     bottle.request.POST
@@ -942,7 +1267,7 @@ def webserver(args):
         bottle.request.files  bottle.request.forms
                                       |
                                       +---> bottle.request.params
-                                      V
+                                      |
         [URL Query String] -> bottle.request.query
     '''
     try:
@@ -967,17 +1292,16 @@ def webserver(args):
         return True
 
     api = bottle.Bottle()
+    api.route('/ws', 'ANY', on_websocket)
     api.route('/alive', 'GET', redirect_esp32(args.esphost))
     api.route('/exec', 'POST', redirect_esp32(args.esphost))
+    api.route('/media', ['GET', 'POST'], on_media)
     api.route('/edit', 'GET', lambda: on_edit(args.root))
-    api.route('/editu', 'POST', on_editu)
-    api.route('/editc', ['GET', 'POST', 'PUT'], on_editc)
-    api.route('/editd', ['GET', 'POST', 'DELETE'], on_editd)
+    api.route('/edit', ['POST', 'PUT', 'DELETE'], on_edit_extra)
     api.route('/config', ['GET', 'POST'], on_config)
     api.route('/update', 'GET', on_update)
-    api.route('/update', 'POST', on_editu)
+    api.route('/update', 'POST', on_edit_extra)
     api.route('/apmode', 'GET', lambda: 'AP interface only')
-    api.route('/media', 'GET', on_media)
 
     if args.test:
         return test_apis([
@@ -986,22 +1310,26 @@ def webserver(args):
         ])
 
     if not args.quiet:
-        print('WebServer running at `%s`' % relpath(args.root, strip=True))
-        if not args.static and args.esphost:
+        print('WebServer running at', relpath(args.root))
+    if not args.quiet and not args.static:
+        if args.esphost:
             print('Redirect requests to alive ESP32 at', args.esphost)
-        elif not args.static:
-            print('Simulate ESP32 APIs: cmd/edit/config/update etc.')
+        else:
+            print('Simulate ESP32 APIs: exec/edit/config/update etc.')
+
     app = bottle.Bottle()
     if op.exists(args.certfile):
         app.ssl_opt = {'server_side': True, 'certfile': args.certfile}
     if not args.static:
-        app.mount('/api', api)
+        app.mount('/api/', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/auth', ['GET', 'POST'], bottle.auth_basic(check)(lambda: ''))
-    app.route('/<filename:path>', 'GET', static_factory(args.root))
+    app.route('/<filename:path>', 'ANY', static_factory(args.root))
     app.error(404)(error_factory(args.root))
+    app.add_hook('before_request', lambda: bottle.response.set_header(
+        'Access-Control-Allow-Origin', '*'))
     bottle.run(app, host=args.host, port=args.port, quiet=args.quiet,
-               debug=True, server='wsgiref', server_class=SSLServer)
+               debug=True, server='wsgiref', server_class=Server)
 
 
 def make_parser():
@@ -1024,19 +1352,23 @@ def make_parser():
     sparser = subparsers.add_parser(
         'serve', help='Python implemented WebServer to debug (see server.h)')
     sparser.add_argument(
-        '-H', '--host', default='0.0.0.0', help='host address to listen on')
+        '-H', '--host', default='0.0.0.0',
+        help='host to listen on [default 0.0.0.0]')
     sparser.add_argument(
-        '-P', '--port', type=int, default=PORT, help='default %d' % PORT)
+        '-P', '--port', type=int, default=PORT,
+        help='port to listen on [default %d]' % PORT)
     sparser.add_argument(
-        '--certfile', default=certpem, help='cert file for HTTPS server')
+        '--certfile', default=certpem,
+        help='cert file for HTTPS server [default %s]' % relpath(certpem))
     sparser.add_argument(
-        '--esphost', type=str, help='IP address of ESP chip')
+        '--esphost', type=str, help='IP address of alive ESP board')
+    sparser.add_argument(
+        '--static', action='count', help='only serve HTMLs without ESP32 API')
     sparser.add_argument(
         '--test', action='store_true', help='run API compatible test')
     sparser.add_argument(
-        '--static', action='count', help='disable ESP32 API, only statics')
-    sparser.add_argument(
-        'root', nargs='?', default=distdir, help='path to static files')
+        'root', nargs='?', default=distdir,
+        help='path to static files [default %s]' % relpath(distdir))
     sparser.set_defaults(func=webserver)
 
     sparser = subparsers.add_parser(
@@ -1048,15 +1380,17 @@ def make_parser():
     sparser.set_defaults(func=blame)
 
     sparser = subparsers.add_parser(
-        'search', help='Query mDNS (UDP multicast) to find alive ESP32 chip')
+        'search', help='Query mDNS (UDP multicast) to find alive ESP board')
     sparser.add_argument(
         '--all', action='store_true', help='print all founded mDNS records')
     sparser.add_argument(
-        '--service', default='id', help='service name of records to query')
-    sparser.add_argument(
         '--oneshot', action='store_true', help='stop search after found one')
     sparser.add_argument(
-        '--timeout', type=float, default=3, help='search duration in sec')
+        '--service', default='id',
+        help='service name of records to query [default id]')
+    sparser.add_argument(
+        '--timeout', type=float, default=3,
+        help='search duration in seconds [default 3]')
     sparser.set_defaults(func=search)
 
     nvsfile = fromroot('nvs_flash.csv')
@@ -1064,29 +1398,36 @@ def make_parser():
     sparser = subparsers.add_parser(
         'gencfg', help='Generate unique ID with NVS flash template')
     sparser.add_argument(
-        '--tpl', default=nvsfile, help='render nvs from template')
+        '-l', '--len', type=int, default=6,
+        help='length of generated UID [default 6]')
     sparser.add_argument(
-        '--pack', default=nvsdist, help='package into nvs binary file')
+        '--tpl', default=nvsfile,
+        help='render nvs text from template [default %s]' % relpath(nvsfile))
     sparser.add_argument(
-        '--flash', metavar='COM', help='flash NVS binary to specified port')
+        '--pack', default=nvsdist,
+        help='encode nvs text into binary [default %s]' % relpath(nvsdist))
     sparser.add_argument(
-        '--offset', type=str, help='nvs partition offset')
+        '--size', type=str, help='nvs partition size [auto]')
     sparser.add_argument(
-        '--size', type=str, help='nvs partition size')
+        '--offset', type=str, help='nvs partition offset [auto]')
     sparser.add_argument(
-        '-l', '--len', type=int, default=6, help='length of UID')
+        '--flash', metavar='COM', help='flash nvs binary to specified port')
     sparser.add_argument(
-        '-o', '--out', default=sys.stdout, help='write to file if specified')
+        '--output', metavar='DEST', default=sys.stdout,
+        help='write nvs text to file [default STDOUT]')
     sparser.set_defaults(func=gencfg)
 
     sparser = subparsers.add_parser(
         'genfont', help='Scan .c files and tree-shake fonts for LVGL')
     sparser.add_argument('font', help='input font file (TTF/WOFF)')
-    sparser.add_argument('--bin', action='store_true', help='output binary')
-    sparser.add_argument('--bpp', type=int, default=1, help='bits per pixel')
+    sparser.add_argument('--bin', action='store_true', help='output as binary')
     sparser.add_argument(
-        '-s', '--size', type=int, default=12, help='font size in pixels')
-    sparser.add_argument('-o', '--out', help='output font path')
+        '--bpp', type=int, default=1, help='bits per pixel [default 1]')
+    sparser.add_argument(
+        '--size', type=int, default=12,
+        help='font size in pixels [default 12]')
+    sparser.add_argument(
+        '--output', metavar='PATH', help='dest font file [auto]')
     sparser.set_defaults(func=genfont)
 
     sparser = subparsers.add_parser(

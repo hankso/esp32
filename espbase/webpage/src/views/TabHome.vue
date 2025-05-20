@@ -5,17 +5,16 @@
 </template>
 
 <script setup>
-import { name } from '@/../package.json'
-
 import { getConfig, getCommands, execCommand } from '@/apis'
 
 const notify = inject('notify', console.log)
 
-const title = name + ' Console'
+const title = `${process.env.PROJECT_NAME} Console`
+
 const welcome = `
 This terminal emulator is connected to the HTTP server running on the
-<span class="text-cyan font-weight-bold">ESP32 chip</span>.
-Any commands typed here will be sent to backend and parsed by
+<span class="text-cyan font-weight-bold">ESP32 chip</span>.<br>
+Commands typed here will be sent to the backend and parsed by
 <span class="text-cyan font-weight-bold">argtable3</span>.
 `
 

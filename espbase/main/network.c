@@ -198,10 +198,38 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
     return ip.ip.addr;
 }
 
-static void wifi_print_ipaddr(esp_netif_t * if_ptr, FILE *stream) {
+static void wifi_print_dnsinfo(esp_netif_t * if_ptr, FILE *stream) {
+    const char *types[] = { "main", "backup", "fallback" };
+    const char *desc = esp_netif_get_desc(if_ptr), *tstr;
+    esp_netif_dns_info_t dns;
+    LOOPN(type, ESP_NETIF_DNS_MAX) {
+        if (esp_netif_get_dns_info(if_ptr, type, &dns)) continue;
+        if (ip_addr_isany(&dns.ip)) continue;
+        tstr = type < LEN(types) ? types[type] : "unknown";
+        if (IP_IS_V4(&dns.ip)) {
+            if (stream) {
+                fprintf(stream, "IF %s DNS %s " IPSTR "\n",
+                        desc, tstr, IP2STR(&dns.ip.u_addr.ip4));
+            } else {
+                ESP_LOGI(TAG, "IF %s DNS %s " IPSTR,
+                        desc, tstr, IP2STR(&dns.ip.u_addr.ip4));
+            }
+        } else if (IP_IS_V6(&dns.ip)) {
+            if (stream) {
+                fprintf(stream, "IF %s DNS %s " IPV6STR "\n",
+                        desc, tstr, IPV62STR(dns.ip.u_addr.ip6));
+            } else {
+                ESP_LOGI(TAG, "IF %s DNS %s " IPV6STR,
+                        desc, tstr, IPV62STR(dns.ip.u_addr.ip6));
+            }
+        }
+    }
+}
+
+static void wifi_print_ipinfo(esp_netif_t * if_ptr, FILE *stream) {
+    const char *desc = esp_netif_get_desc(if_ptr);
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(if_ptr, &ip);
-    const char *desc = esp_netif_get_desc(if_ptr);
     if (stream) {
         fprintf(stream, "IF %s IP " IPSTR ", GW " IPSTR ", Mask " IPSTR "\n",
                 desc, IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
@@ -209,6 +237,27 @@ static void wifi_print_ipaddr(esp_netif_t * if_ptr, FILE *stream) {
         ESP_LOGI(TAG, "IF %s IP " IPSTR ", GW " IPSTR ", Mask " IPSTR,
                 desc, IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
     }
+#if CONFIG_LWIP_IPV6
+    const char *tstr;
+    esp_ip6_addr_t ip6s[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
+    LOOPN(i, esp_netif_get_all_ip6(if_ptr, ip6s)) {
+        switch (esp_netif_ip6_get_addr_type(ip6s + i)) {
+        case ESP_IP6_ADDR_IS_GLOBAL:        tstr = "global"; break;
+        case ESP_IP6_ADDR_IS_LINK_LOCAL:    tstr = "link-local"; break;
+        case ESP_IP6_ADDR_IS_SITE_LOCAL:    tstr = "site-local"; break;
+        case ESP_IP6_ADDR_IS_UNIQUE_LOCAL:  tstr = "unique-local"; break;
+        default: continue;
+        }
+        if (stream) {
+            fprintf(stream, "IF %s IP " IPV6STR " (%s)\n",
+                    desc, IPV62STR(ip6s[i]), tstr);
+        } else {
+            ESP_LOGI(TAG, "IF %s IP " IPV6STR " (%s)",
+                    desc, IPV62STR(ip6s[i]), tstr);
+        }
+    }
+#endif
+    wifi_print_dnsinfo(if_ptr, stream);
 }
 
 static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
@@ -268,7 +317,7 @@ static esp_err_t wifi_get_ap_records() {
     return err;
 }
 
-static esp_err_t UNUSED wifi_find_ap_record(
+static UNUSED esp_err_t wifi_find_ap_record(
     const char *ssid, uint8_t *bssid, bool scan, wifi_ap_record_t *record
 ) {
     bool found = false;
@@ -305,16 +354,21 @@ static esp_err_t wifi_mode_check(wifi_interface_t interface) {
     return err;
 }
 
-static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
+static void cb_network(
+    void *if_ptr, esp_event_base_t base, int32_t id, void *data
+) {
     static int retry = 0;
     if (base == IP_EVENT) {
         if (id == IP_EVENT_STA_GOT_IP) {
             ip_event_got_ip_t *evt = data;
-            if (evt->ip_changed) wifi_print_ipaddr(evt->esp_netif, NULL);
+            if (evt->ip_changed) wifi_print_ipinfo(evt->esp_netif, NULL);
             setBits(WIFI_CONNECTED_BIT);
             clearBits(WIFI_FAILURE_BIT | WIFI_DISCONNECT_BIT);
             if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
             if (strbool(Config.app.SNTP_RUN)) sntp_control("sync");
+        } else if (id == IP_EVENT_GOT_IP6) {
+            ip_event_got_ip6_t *evt = data;
+            wifi_print_ipinfo(evt->esp_netif, NULL);
         } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
             ip_event_ap_staipassigned_t *evt = data;
             ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
@@ -611,7 +665,7 @@ esp_err_t wifi_sta_list_ap() {
         puts("failed");
     } else if (getBits(WIFI_CONNECTED_BIT)) {
         puts("connected");
-        wifi_print_ipaddr(if_sta, stdout);
+        wifi_print_ipinfo(if_sta, stdout);
         wifi_ap_record_t info;
         if (s_nap) {
             wifi_print_apinfo(s_aps, s_nap);
@@ -629,7 +683,7 @@ esp_err_t wifi_ap_list_sta() {
     if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
     if (err) return err;
     printf("AP SSID %s Channel %d\n", config_ap.ap.ssid, config_ap.ap.channel);
-    wifi_print_ipaddr(if_ap, stdout);
+    wifi_print_ipinfo(if_ap, stdout);
 
     uint16_t aid;
     wifi_sta_list_t wifi_sta_list;

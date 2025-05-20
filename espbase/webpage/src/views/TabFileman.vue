@@ -1,9 +1,10 @@
 <script setup>
-import { type, rules, debounce } from '@/utils'
+import { type, rules } from '@/utils'
 import { listDir, readFile, uploadFile, createPath, deletePath } from '@/apis'
 
 import {
     mdiUpload,
+    mdiDownload,
     mdiDeleteOutline as mdiDelete,
     mdiPencilBoxOutline as mdiPencilBox,
     mdiFolderPlusOutline as mdiFolderPlus,
@@ -47,8 +48,10 @@ const prompt = computed(() => {
     let arr = toValue(select)
     if (!arr.length) return
     if (arr.length === 1) return `Delete ${arr[0]} permanently?`
-    return ['Delete these files permanently?', ...arr].join('\n - ')
+    return ['Delete these paths permanently?', ...arr].join('\n - ')
 })
+
+const sfiles = computed(() => toValue(select).filter(isfile))
 
 const folders = computed(() => {
     let nodes = ['/']
@@ -56,7 +59,7 @@ const folders = computed(() => {
         for (let node of arr) {
             if (node.type === 'dir') {
                 nodes.push(node.link)
-                findFolder(node.children || [])
+                findFolder(node.childs ?? [])
             }
         }
     })(toValue(items))
@@ -72,8 +75,8 @@ function refresh(path, target, parent) {
         if ((parent.id || '').split('-').length > 5)
             return notify('Too deep into subfolders. Maybe recursive loop?')
         path = parent.link
-        parent.children ??= [] // let vue track this new array
-        target = parent.children
+        parent.childs ??= [] // let vue track this new array
+        target = parent.childs
     } else if (type(path) !== 'string') {
         return
     }
@@ -95,12 +98,23 @@ function pop(arr, item) {
     if (idx >= 0) return arr.splice(idx, 1)
 }
 
-// TODO: createPath & deletePath need argument `isdir=<BOOL>`
+function isfile(path) {
+    let bool = false
+    ;(function findPath(arr) {
+        for (let node of arr) {
+            if ((node.link ?? node.name) === path)
+                return (bool = node.type === 'file')
+            if (node.type === 'dir') findPath(node.childs ?? [])
+        }
+    })(toValue(items))
+    return bool
+}
+
 function remove(arr) {
     let len = arr.length
     loading.value = true
     arr.forEach(path =>
-        deletePath(path)
+        deletePath(path, !isfile(path))
             .then(() => pop(arr, path))
             .catch(({ message }) => notify(message))
             .finally(() => {
@@ -147,13 +161,10 @@ async function upload(e) {
     })
 }
 
-watch(
-    select,
-    debounce(arr => {
-        if (props.useLink) location.hash = arr.length !== 1 ? '' : arr[0]
-    }),
-    { deep: true }
-)
+watchEffect(() => {
+    let arr = toValue(select)
+    location.hash = props.useLink && arr.length === 1 ? arr[0] : ''
+})
 
 onMounted(refresh)
 </script>
@@ -265,7 +276,7 @@ onMounted(refresh)
         >
             <span class="px-3 me-auto">{{ title }}</span>
 
-            <v-scale-transition :group="true" leave-absolute>
+            <v-scale-transition group leave-absolute>
                 <v-btn icon v-if="!select.length" @click="form.create = true">
                     <v-icon :icon="mdiFolderPlus"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -280,11 +291,11 @@ onMounted(refresh)
                 </v-btn>
             </v-scale-transition>
 
-            <v-scale-transition :group="true">
+            <v-scale-transition group>
                 <v-btn
                     icon
-                    v-if="select.length==1"
-                    @click="readFile(select[0], true)"
+                    v-if="sfiles.length === 1"
+                    @click="readFile(sfiles[0], true)"
                 >
                     <v-icon :icon="mdiDownload"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -293,9 +304,9 @@ onMounted(refresh)
                 </v-btn>
                 <v-btn
                     icon
-                    v-if="select.length === 1"
+                    v-if="sfiles.length === 1"
                     :target="useLink ? '_blank' : ''"
-                    :href="`${useLink ? 'editor' : ''}#${select[0]}`"
+                    :href="`${useLink ? 'editor' : ''}#${sfiles[0]}`"
                 >
                     <v-icon :icon="mdiPencilBox"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -318,7 +329,7 @@ onMounted(refresh)
             </v-scale-transition>
         </v-toolbar>
 
-        <TreeView v-model:selection="select" :items auto-icon />
+        <TreeView v-model:select="select" :items />
     </v-sheet>
 </template>
 
