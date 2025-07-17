@@ -27,7 +27,22 @@ uint64_t asleep(uint32_t ms, uint64_t next) {
     } else if (curr < next) {
         vTaskDelay(next - curr);
     }
-    return next + ms * portTICK_PERIOD_MS;
+    return next + TIMEOUT(ms);
+}
+
+int stridx(const char *str, const char *tpl) {
+    size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
+    if (!slen || !tlen) return -1;
+    size_t cnt = strcnt(tpl, ",;/\\|", -1);
+    int idx, ret = parse_int(str, &idx);            // case 1: number as index
+    if (ret && idx >= 0 && idx < MIN(cnt ?: tlen, tlen)) return idx;
+    const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
+    if (tmp && cnt) return strcnt(tpl, ",;/\\|", tmp - tpl);
+    if (tmp && slen == 1) return tmp - tpl;         // case 3: "ABC"
+    if (slen > 1 && !cnt && ( tmp = strchr(tpl, str[0]) ))
+        return tmp - tpl;                           // case 4: match first char
+    printf("Invalid `%s`: choose from `%s`\n", str, tpl);
+    return -1;
 }
 
 bool strbool(const char *str) {
@@ -35,11 +50,10 @@ bool strbool(const char *str) {
     return !strcmp(str, "1") || !strcasecmp(str, "y") || !strcasecmp(str, "on");
 }
 
-size_t strcnt(const char *str, char want, size_t slen) {
-    size_t cnt = 0, idx = 0;
-    while (idx < strnlen(str, slen)) {
-        if (str[idx++] == want) cnt++;
-    }
+size_t strcnt(const char *str, const char *wants, size_t slen) {
+    if (!strlen(wants ?: "")) return 0;
+    size_t cnt = 0, idx = 0, len = strnlen(str ?: "", slen);
+    while (idx < len) { if (strchr(wants, str[idx++])) cnt++; }
     return cnt;
 }
 
@@ -309,28 +323,25 @@ const char * format_sha256(const void *src, size_t len) {
     return hexdumps(src, buf, len, sizeof(buf));
 }
 
-const char * format_binary(uint64_t num, size_t bytes) {
+const char * format_binary(uint64_t val, size_t maxbits) {
     static char buf[64 + 1];
-    size_t bits = MIN(bytes, sizeof(num)) * 8;
+    size_t bits = MIN(maxbits, sizeof(val) * 8);
     LOOPN(i, bits) {
-        buf[bits - i - 1] = (num & (1 << i)) ? '1' : '0';
+        buf[bits - i - 1] = (val & (1 << i)) ? '1' : '0';
     }
     buf[bits] = '\0';
     return buf;
 }
 
-const char * format_size(uint64_t bytes, bool inbit) {
+const char * format_size(double bytes) {
+    static const int dems[] = { 0, 1, 2, 3, 3, 4 };
     static char buf[16]; // xxxx.xx u\0
-    if (!bytes) return inbit ? "0 b" : "0 B";
-    const int Bdems[] = { 0, 1, 2, 3, 3, 4 }, bdems[] = { 0, 2, 3, 3, 4, 7 };
-    double val = bytes * (inbit ? 8 : 1), base = 1024;
     int exp = 0;
-    while (exp < LEN(Bdems) && val > base) {
-        val /= base;
+    while (exp < LEN(dems) && bytes > 1024) {
+        bytes /= 1024;
         exp++;
     }
-    snprintf(buf, sizeof(buf), "%.*f %c%c",
-             inbit ? bdems[exp] : Bdems[exp], val, " KMGTP"[exp], "Bb"[inbit]);
+    snprintf(buf, sizeof(buf), "%.*f %cB", dems[exp], bytes, " KMGTP"[exp]);
     return buf;
 }
 
@@ -431,7 +442,7 @@ void task_info(uint8_t sort_attr) {
                taskname, tasks[i].uxCurrentPriority,
                tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
                100 * tasks[i].ulRunTimeCounter / (ulTotalRunTime ?: 1),
-               format_size(tasks[i].usStackHighWaterMark, false));
+               format_size(tasks[i].usStackHighWaterMark));
     }
     vPortFree(tasks);
 #else
@@ -466,8 +477,8 @@ void memory_info() {
         size_t tfree = info.total_free_bytes;
         size_t tfrag = tfree - info.largest_free_block;
         size_t total = tfree + info.total_allocated_bytes;
-        printf("%-7s %8s ", names[i], format_size(total, false));
-        printf("%8s ", format_size(tfree, false));
+        printf("%-7s %8s ", names[i], format_size(total));
+        printf("%8s ", format_size(tfree));
         printf("%3d%% ", total ? 100 * info.total_allocated_bytes / total : 0);
         printf("%3d%% ", tfree ? 100 * tfrag / tfree : 0);
         printf("0x%08x\n", caps[i]);
@@ -510,7 +521,7 @@ void hardware_info() {
         Config.info.NAME, Config.info.UID,
         chip_model_str(info.model), info.cores,
         info.revision, info.full_revision % 100, // full = major * 100 + minor
-        format_size(spi_flash_get_chip_size(), false),
+        format_size(spi_flash_get_chip_size()),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
         info.features & CHIP_FEATURE_EMB_PSRAM ? " | Embedded PSRAM" : "",
         info.features & CHIP_FEATURE_WIFI_BGN ? " | WiFi 802.11bgn" : "",

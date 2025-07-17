@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <assert.h>
 #include <unistd.h>
 
 #include "sdkconfig.h"
@@ -34,6 +35,7 @@
 #define STR(x)              STR_(x)
 #define CASESTR(x, l)       case x: return #x + l
 #define CASESTRV(v, x, l)   case x: (v) = #x + l; break
+#define SIZEOF(s, a)        sizeof(((s *)0)->a)
 #define LEN(arr)            ( sizeof(arr) / sizeof(*arr) )
 #define LOOP(x, l, h)       for (int x = (l); x < (h); x++)
 #define LOOPD(x, h, l)      for (int x = (h); x > (l); x--)
@@ -81,28 +83,45 @@
 #ifndef BIT
 #   define BIT(n)           ( 1UL << (n) )
 #endif
+
 #ifndef ABS
 #   define ABS(x)           ({ typeof(x) X_ = (x); X_ < 0 ? -X_ : X_; })
 #endif
+
 #ifndef ABSDIFF
 #   define ABSDIFF(a, b)    ({ typeof(a) A_ = (a), B_ = (b);                \
-                                A_ > B_ ? A_ - B_ : B_ - A_; })
+                               A_ > B_ ? A_ - B_ : B_ - A_; })
 #endif
+
+#ifndef MOD
+#   define MOD(a, b)        ({ typeof(a) A_ = (a), B_ = (b), M_ = A_ % B_;  \
+                               M_ < 0 ? M_ + B_ : M_; })
+#endif
+
 #ifndef CDIV
 #   define CDIV(a, b)       ({ typeof(a) A_ = (a), B_ = (b);                \
-                                B_ ? (A_ + B_ - 1) / B_ : 0; })
+                               B_ ? (A_ + B_ - 1) / B_ : 0; })
 #endif
+
 #ifndef MAX
 #   define MAX(a, b)        ({ typeof(a) A_ = (a), B_ = (b);                \
-                                A_ > B_ ? A_ : B_; })
+                               A_ > B_ ? A_ : B_; })
 #   define MIN(a, b)        ({ typeof(a) A_ = (a), B_ = (b);                \
-                                A_ > B_ ? B_ : A_; })
+                               A_ > B_ ? B_ : A_; })
 #endif
+
 #ifndef CONS
 #   define CONS(x, l, h)    MAX((l), MIN((x), (h)))
 #endif
+
 #ifndef STATIC_ASSERT
 #   define STATIC_ASSERT(c) extern char CONCAT(p, __LINE__)[(c) ? 1 : -1]
+#endif
+
+#ifndef bitread
+#   define bitsread(v, o, m)   ( ((v) >> (o)) & (m) )
+#   define bitnread(v, o, n)   bitsread((v), (o), BIT(n) - 1)
+#   define bitread(v, o)       bitsread((v), (o), 1)
 #endif
 
 // Version aliases
@@ -123,8 +142,9 @@ extern "C" {
 void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
 
+int stridx(const char *str, const char *tpl);
 bool strbool(const char *str);
-size_t strcnt(const char *str, char want, size_t slen);
+size_t strcnt(const char *str, const char *wants, size_t slen);
 char * strtrim(char *str, const char *chars);
 
 char * b64encode(const char *src, char *dst, size_t slen);
@@ -163,9 +183,9 @@ size_t gbk2unicode(FILE *, const char *, uint32_t *);
 size_t gbk2str_r(const char *src, char *dst, size_t dlen);
 char * gbk2str(const char *src);
 
-const char * format_size(uint64_t, bool);
-const char * format_sha256(const void *, size_t);
-const char * format_binary(uint64_t, size_t);
+const char * format_size(double bytes);
+const char * format_sha256(const void *buf, size_t len);
+const char * format_binary(uint64_t val, size_t maxbits);
 
 void * setTimeout(uint32_t ms, void (*func)(void *), void *arg);
 void * setInterval(uint32_t ms, void (*func)(void *), void *arg);

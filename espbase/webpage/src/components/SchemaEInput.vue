@@ -38,8 +38,8 @@ const isNumber = computed(() =>
 )
 
 const proxy = computed({
-    get: () => (toValue(isNumber) ? parseNum(props.value) : props.value),
-    set: debounce(val => props.update(toValue(isNumber) ? parseNum(val) : val)),
+    get: () => (isNumber.value ? parseNum(props.value) : props.value),
+    set: debounce(val => props.update(isNumber.value ? parseNum(val) : val)),
 })
 
 function validator() {

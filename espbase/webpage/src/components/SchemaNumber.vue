@@ -38,7 +38,7 @@ const isNumber = computed(() =>
 
 const proxy = computed({
     get: () => parseNum(props.value),
-    set: val => props.update(toValue(isNumber) ? parseNum(val) : val),
+    set: val => props.update(isNumber.value ? parseNum(val) : val),
 })
 
 function validator() {

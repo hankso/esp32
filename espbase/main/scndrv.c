@@ -5,7 +5,7 @@
  */
 
 #include "screen.h"
-#include "drivers.h"
+#include "drivers.h"            // for I2C_XXX && PIN_XXX
 
 #ifdef CONFIG_BASE_USE_SCREEN
 
@@ -231,11 +231,16 @@ static void screen_lvgl_init() {
     const lvgl_port_display_cfg_t disp_conf = {
         .io_handle = ctx.io,
         .panel_handle = ctx.hdl,
-        .buffer_size = SCREEN_WIDTH * SCREEN_HEIGHT * SCREEN_DEPTH / 8,
+#       if SCREEN_DEPTH == 1
+        .double_buffer = false,
+        .buffer_size = SCREEN_WIDTH * SCREEN_HEIGHT,
+        .monochrome = true,
+#       else
         .double_buffer = true,
+        .buffer_size = SCREEN_WIDTH * SCREEN_HEIGHT * SCREEN_DEPTH / 8,
+#       endif
         .hres = SCREEN_WIDTH,
         .vres = SCREEN_HEIGHT,
-        .monochrome = SCREEN_DEPTH == 1,
 #       if LVGL_VERSION_MAJOR >= 9
         .color_format = LV_COLOR_FORMAT_RGB565,
 #       endif

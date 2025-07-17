@@ -150,7 +150,7 @@ function genItem(obj) {
             value: obj[key],
             schema: props.schema?.properties?.[key],
             update(val) {
-                if (!toValue(data)) return
+                if (!data.value) return
                 if (val?.trim) val = val.trim()
                 data.value[key] = val ?? props.nullVal
                 if (props.backup && props.backup[key] != data.value[key])
@@ -162,7 +162,7 @@ function genItem(obj) {
     return rst
 }
 
-const items = computed(() => genItem(toValue(data) ?? scaffold(props.schema)))
+const items = computed(() => genItem(data.value ?? scaffold(props.schema)))
 </script>
 
 <style scoped>

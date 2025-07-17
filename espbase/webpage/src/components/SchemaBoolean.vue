@@ -34,7 +34,7 @@ const isBoolean = computed(
 
 const proxy = computed({
     get: () => (parseBool(props.value) ? '1' : '0'),
-    set: val => props.update(toValue(isBoolean) ? parseBool(val) : val),
+    set: val => props.update(isBoolean.value ? parseBool(val) : val),
 })
 </script>
 

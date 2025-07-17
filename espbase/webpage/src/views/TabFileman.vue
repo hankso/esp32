@@ -27,7 +27,7 @@ const items = ref([])
 const select = ref(route.hash ? [route.hash.slice(1)] : [])
 
 const loading = ref(false)
-const form = ref({
+const form = reactive({
     create: false,
     fileName: '',
     fileList: [],
@@ -38,20 +38,20 @@ const form = ref({
 })
 
 const title = computed(() => {
-    let arr = toValue(select)
-    if (!arr.length) return `Files under ${toValue(root)}`
+    let arr = select.value
+    if (!arr.length) return `Files under ${root.value}`
     if (arr.length === 1) return arr[0]
     return `Selected ${arr.length} files`
 })
 
 const prompt = computed(() => {
-    let arr = toValue(select)
+    let arr = select.value
     if (!arr.length) return
     if (arr.length === 1) return `Delete ${arr[0]} permanently?`
     return ['Delete these paths permanently?', ...arr].join('\n - ')
 })
 
-const sfiles = computed(() => toValue(select).filter(isfile))
+const sfiles = computed(() => select.value.filter(isfile))
 
 const folders = computed(() => {
     let nodes = ['/']
@@ -62,13 +62,13 @@ const folders = computed(() => {
                 findFolder(node.childs ?? [])
             }
         }
-    })(toValue(items))
+    })(items.value)
     return nodes
 })
 
 function refresh(path, target, parent) {
-    path ??= toValue(root)
-    target ??= toValue(items)
+    path ??= root.value
+    target ??= items.value
     if (type(path) === 'object') {
         parent = path
         if (parent.type === 'file') return
@@ -106,7 +106,7 @@ function isfile(path) {
                 return (bool = node.type === 'file')
             if (node.type === 'dir') findPath(node.childs ?? [])
         }
-    })(toValue(items))
+    })(items.value)
     return bool
 }
 
@@ -128,41 +128,39 @@ function remove(arr) {
 
 async function create(e) {
     if (e && !(await e).valid) return
-    let data = toValue(form)
     loading.value = true
-    createPath(resolve(data.folderRoot, data.folderName))
+    createPath(resolve(form.folderRoot, form.folderName))
         .then(() => notify('Created!'))
         .catch(({ message }) => notify(message))
         .finally(() => {
             loading.value = false
-            form.value.create = false
+            form.create = false
             refresh()
         })
 }
 
 async function upload(e) {
     if (e && !(await e).valid) return
-    let data = toValue(form)
-    let len = data.fileList.length
+    let len = form.fileList.length
     loading.value = true
-    data.fileList.forEach(file => {
+    form.fileList.forEach(file => {
         let filename = file.name
-        if (data.fileList.length === 1 && data.fileName)
-            filename = data.fileName
-        uploadFile(resolve(data.folderRoot, filename), file)
-            .then(() => pop(data.fileList, file))
+        if (form.fileList.length === 1 && form.fileName)
+            filename = form.fileName
+        uploadFile(resolve(form.folderRoot, filename), file)
+            .then(() => pop(form.fileList, file))
             .catch(({ message }) => notify(message))
             .finally(() => {
                 if (--len) return
                 loading.value = false
-                form.value.upload = false
+                form.upload = false
                 refresh()
             })
     })
 }
 
 watchEffect(() => {
-    let arr = toValue(select)
+    let arr = select.value
     location.hash = props.useLink && arr.length === 1 ? arr[0] : ''
 })
 

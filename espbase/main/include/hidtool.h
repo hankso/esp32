@@ -9,13 +9,10 @@
 #include "globals.h"
 #include "esp_bit_defs.h"
 
-#if __has_include("tusb.h")
-#   define WITH_TUSB
-#   ifndef DUAL_TUSB
-#       include "tusb.h"
-#   endif
-#else
+#ifndef HID_KEY_NONE
 #   define HID_KEY_NONE                     0x00
+#   define HID_KEY_OVF                      0x01
+#   define HID_KEY_FAIL                     0x02
 #   define HID_KEY_A                        0x04
 #   define HID_KEY_B                        0x05
 #   define HID_KEY_C                        0x06
@@ -185,18 +182,43 @@
 #   define HID_KEY_SHIFT_RIGHT              0xE5
 #   define HID_KEY_ALT_RIGHT                0xE6
 #   define HID_KEY_GUI_RIGHT                0xE7
-#endif // WITH_TUSB
+#endif // HID_KEY_NONE
 
 #ifndef HID_KEY_ERROR_UNDEFINED
 #   define HID_KEY_ERROR_UNDEFINED          0x03
 #endif
 
-#if !defined(WITH_TUSB) || defined(DUAL_TUSB)
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/* HID Keyboard & Mouse Input Report for Boot Interfaces
- * See B.1, p.60 of Device Class Definition for Human Interface Devices (HID)
- * Version 1.11
- */
+typedef struct {
+    uint8_t modifier;
+#define KEYBD_MOD_LCTRL                     BIT0
+#define KEYBD_MOD_LSHIFT                    BIT1
+#define KEYBD_MOD_LALT                      BIT2
+#define KEYBD_MOD_LGUI                      BIT3
+#define KEYBD_MOD_RCTRL                     BIT4
+#define KEYBD_MOD_RSHIFT                    BIT5
+#define KEYBD_MOD_RALT                      BIT6
+#define KEYBD_MOD_RGUI                      BIT7
+#define KEYBD_MOD_HAS_SHIFT(mod)            ( (mod) & (BIT1 | BIT5) )
+#define KEYBD_MOD_ADD_SHIFT(mod)            ( (mod) | (BIT1 | BIT5) )
+#define KEYBD_MOD_DEL_SHIFT(mod)            ( (mod) & ~(BIT1 | BIT5) )
+    uint8_t reserved;
+    uint8_t keycode[6];                             // array of HID_KEY_XXX
+} PACKED hid_keybd_report_t;
+
+typedef struct {
+    uint8_t numlock : 1;
+    uint8_t capslock : 1;
+    uint8_t scrolllock : 1;
+    uint8_t compose : 1;
+    uint8_t kana : 1;
+    uint8_t : 3;
+} PACKED hid_keybd_output_t;
+
+#if !defined(WITH_TUSB) || defined(DUAL_TUSB)
 typedef struct {
     uint8_t buttons;
 #   define MOUSE_BUTTON_LEFT                BIT0
@@ -206,92 +228,134 @@ typedef struct {
 #   define MOUSE_BUTTON_FORWARD             BIT4
     int8_t x, y, wheel, pan;
 } PACKED hid_mouse_report_t;
+#endif
 
 typedef struct {
-    uint8_t modifier;
-#   define KEYBOARD_MODIFIER_LEFTCTRL       BIT0
-#   define KEYBOARD_MODIFIER_LEFTSHIFT      BIT1
-#   define KEYBOARD_MODIFIER_LEFTALT        BIT2
-#   define KEYBOARD_MODIFIER_LEFTGUI        BIT3
-#   define KEYBOARD_MODIFIER_RIGHTCTRL      BIT4
-#   define KEYBOARD_MODIFIER_RIGHTSHIFT     BIT5
-#   define KEYBOARD_MODIFIER_RIGHTALT       BIT6
-#   define KEYBOARD_MODIFIER_RIGHTGUI       BIT7
-    uint8_t reserved;
-    uint8_t keycode[6]; // array of HID_KEY_XXX
-} PACKED hid_keyboard_report_t;
+    int16_t lx, ly, rx, ry;                         // -32767~32767
+    uint8_t lt, rt;                                 // 0~255
+    uint8_t dpad;                                   // 0~8 4-bit hat x 2
+    uint16_t btns;
+#define GMPAD_BUTTON_A                      BIT0
+#define GMPAD_BUTTON_B                      BIT1
+#define GMPAD_BUTTON_X                      BIT2
+#define GMPAD_BUTTON_Y                      BIT3
+#define GMPAD_BUTTON_LB                     BIT4    // L2 of left shoulder
+#define GMPAD_BUTTON_RB                     BIT5    // R2 of right shoulder
+#define GMPAD_BUTTON_LS                     BIT6    // L3 of left joystick
+#define GMPAD_BUTTON_RS                     BIT7    // R3 of right joystick
+#define GMPAD_BUTTON_PREV                   BIT8    // back / select
+#define GMPAD_BUTTON_NEXT                   BIT9    // start
+#define GMPAD_BUTTON_HOME                   BIT10   // xbox
+#define GMPAD_BUTTON_SHARE                  BIT11
+#define GMPAD_BUTTON_U                      BIT12
+#define GMPAD_BUTTON_R                      BIT13
+#define GMPAD_BUTTON_D                      BIT14
+#define GMPAD_BUTTON_L                      BIT15
+} hid_gmpad_data_t; // used to generate hid_gmpad_report_t according to layout
 
-#endif // !defined(WITH_TUSB) || defined(DUAL_TUSB)
+typedef union {
+    struct {
+        int8_t lx, ly, lz, rx, ry, rz;              // -127~127
+        uint8_t dpad;
+        uint16_t btns;
+    } PACKED general;
+    struct {
+        uint16_t lx, ly, rx, ry;                    // 0~65535
+        uint16_t lt, rt;                            // 0~1023 + 6-bit padding
+        uint8_t dpad;                               // 1~8    + 4-bit padding
+        uint16_t btns;                              // 11 btn + 5-bit padding
+        uint8_t share;                              // 1 btn  + 7-bit padding
+    } PACKED xinput;
+    struct {
+        uint16_t btns;                              // 14 btn + 2-bit padding
+        uint8_t dpad;                               // 1~8    + 4-bit padding
+        uint16_t lx, ly, rx, ry;                    // 0~65535
+    } PACKED nswitch;
+    struct {
+        uint8_t lx, ly, rx, ry;                     // 0~255
+        uint8_t dpad;                               // 1~8    + 4-bit ABXY
+        uint16_t btns;                              // 10 btn + 6-bit padding
+        uint8_t lt, rt;                             // 0~255
+    } PACKED dsense;
+} hid_gmpad_report_t;
 
-#define MOD_SHIFT ( KEYBOARD_MODIFIER_LEFTSHIFT | KEYBOARD_MODIFIER_RIGHTSHIFT )
-#define HAS_SHIFT(mod) ( (mod) & MOD_SHIFT )
-#define ADD_SHIFT(mod) ( (mod) |= MOD_SHIFT )
-#define DEL_SHIFT(mod) ( (mod) &= ~MOD_SHIFT )
-
-#define hid_keybd_report_t hid_keyboard_report_t // alias
-
-#ifdef __cplusplus
-extern "C" {
-#endif
+typedef struct {
+    uint8_t enabled;                                // 0 or 1
+    uint8_t mag_left;                               // 0~100
+    uint8_t mag_right;
+    uint8_t mag_strong;
+    uint8_t mag_weak;
+    uint8_t duration;                               // 0~255 unit: 10ms
+    uint8_t start_delay;                            // 0~255 unit: 10ms
+    uint8_t loop_count;                             // 0~255
+} PACKED hid_gmpad_output_xinput_t;
 
 enum {
     REPORT_ID_KEYBD = 1,
     REPORT_ID_MOUSE,
-    REPORT_ID_DIAL,
+    REPORT_ID_GMPAD,
+    REPORT_ID_SCTRL,
+    REPORT_ID_SDIAL,
+    REPORT_ID_MAX
 };
 
 typedef struct {
-    uint8_t id; // REPORT_ID_XXX
+    uint8_t pad;                                    // hid_gmpad_layout_t
+    uint8_t rlen[REPORT_ID_MAX];                    // report packet length
+    uint8_t desc[512];                              // HID descriptor
+    uint16_t dlen;                                  // HID descriptor length
+    uint16_t vid, pid, ver;                         // vendor, product, version
+    const char *dstr;                               // device descriptor
+    const char *vendor, *serial;                    // manufacturer, device uuid
+} hidtool_t;
+
+extern hidtool_t HIDTool;
+
+void hidtool_initialize();  // calculate HIDTool from Config.app.HID_MODE
+
+typedef enum {
+    HID_TARGET_USB,     // USB Device | USB Host
+    HID_TARGET_BLE,     // BT Device | BT Host
+    HID_TARGET_SCN,     // Screen input device
+    HID_TARGET_ALL,
+    HID_TARGET_MAX
+} hid_target_t;         // interface the HID report is sent to or received from
+
+typedef struct {
     union {
-        uint8_t dial[2];
-        hid_mouse_report_t mouse;
         hid_keybd_report_t keybd;
+        hid_mouse_report_t mouse;
+        hid_gmpad_report_t gmpad;
+        uint8_t sctrl;
+        uint8_t sdial[2];
     };
+    uint8_t id, size;
+#define HID_VALID_REPORT(p)                                                 \
+    ( (p) && (p)->size && (p)->id && (p)->id < REPORT_ID_MAX )
 } hid_report_t;
 
-extern const uint8_t hid_descriptor_report[];
-extern const size_t hid_descriptor_report_len;
+bool hid_report_send(hid_target_t, hid_report_t *);
 
-uint16_t     hid_desc_version(uint16_t *);
-const char * hid_desc_vendor(const char **);
-const char * hid_desc_serial(const char **);
+/*
+ * Keyboard
+ */
 
-// Mouse button
-uint8_t str2btncode(const char *str);
-const char * btncode2str(uint8_t bit);
-const char * hid_btncode_str(uint8_t bits);
-
-// Keyboard keycode & modifier
 uint8_t str2modifier(const char *str);
 const uint8_t * str2keycodes(const char *str, uint8_t *modifier);
 const char * keycode2str(uint8_t keycode, uint8_t modifier);
 const char * hid_modifier_str(uint8_t modifier);
 const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycodes[6]);
 
-typedef enum {
-    HID_TARGET_USB, // USB Device | USB Host
-    HID_TARGET_BLE, // BT Device | BT Host
-    HID_TARGET_SCN, // Screen input device
-    HID_TARGET_ALL,
-    HID_TARGET_CNT
-} hid_target_t;     // interface the HID report is sent to or received from
+bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
+bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
 
-typedef void (*hid_key_cb)(uint8_t keycode, bool pressed);
-typedef void (*hid_pos_cb)(int x, int y, int8_t dx, int8_t dy);
-void hid_handle_mouse(hid_target_t, hid_mouse_report_t *, hid_key_cb, hid_pos_cb);
-void hid_handle_keybd(hid_target_t, hid_keybd_report_t *, hid_key_cb);
+/*
+ * Mouse
+ */
 
-typedef enum {
-    DIAL_UP = 0x00, // button release
-    DIAL_DN = 0x01, // button press
-    DIAL_L  = 0x38, // knob rotate ccw
-    DIAL_R  = 0xC8, // knob rotate cw
-} hid_dial_keycode_t;
-
-bool hid_report_send(hid_target_t, hid_report_t *);
-
-bool hid_report_dial(hid_target_t, hid_dial_keycode_t);
-bool hid_report_dial_button(hid_target_t, uint32_t ms);
+uint8_t str2btncode(const char *str);
+const char * btncode2str(uint8_t bit);
+const char * hid_btncode_str(uint8_t bits);
 
 bool hid_report_mouse(hid_target_t, uint8_t, int8_t, int8_t, int8_t, int8_t);
 bool hid_report_mouse_click(hid_target_t, const char *str, uint32_t ms);
@@ -299,8 +363,90 @@ bool hid_report_mouse_click(hid_target_t, const char *str, uint32_t ms);
 #define hid_report_mouse_scroll(t, v, h) hid_report_mouse((t), 0, 0, 0, (v), (h))
 #define hid_report_mouse_button(t, btn)  hid_report_mouse((t), (btn), 0, 0, 0, 0)
 
-bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
-bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
+/*
+ * Gamepad
+ */
+
+typedef enum {
+    GMPAD_GENERAL = 1,  // 16 buttons + 2 dpads + 6 axes
+    GMPAD_XINPUT,       // 16 buttons + 1 dpad + 2 triggers + 4 axes
+    GMPAD_SWITCH,
+    GMPAD_DSENSE,
+} hid_gmpad_layout_t;
+
+typedef enum {
+    GMPAD_DPAD_NONE,
+    GMPAD_DPAD_U,
+    GMPAD_DPAD_UR,
+    GMPAD_DPAD_R,
+    GMPAD_DPAD_DR,
+    GMPAD_DPAD_D,
+    GMPAD_DPAD_DL,
+    GMPAD_DPAD_L,
+    GMPAD_DPAD_UL,
+    GMPAD_DPAD_MAX,
+} hid_gmpad_dpad_t;
+
+bool hid_report_gmpad_dpad(hid_target_t, hid_gmpad_dpad_t, hid_gmpad_dpad_t);
+bool hid_report_gmpad_trig(hid_target_t, uint8_t lt, uint8_t rt);
+bool hid_report_gmpad_joyst(hid_target_t, int16_t, int16_t, int16_t, int16_t);
+bool hid_report_gmpad_click(hid_target_t, const char *str, uint32_t ms);
+bool hid_report_gmpad_button(hid_target_t, uint16_t btn, uint8_t action);
+#define hid_report_gmpad_btn_del(t, btn) hid_report_gmpad_button((t), (btn), 0)
+#define hid_report_gmpad_btn_add(t, btn) hid_report_gmpad_button((t), (btn), 1)
+#define hid_report_gmpad_btn_tog(t, btn) hid_report_gmpad_button((t), (btn), 2)
+#define hid_report_gmpad_btn_set(t, btn) hid_report_gmpad_button((t), (btn), 3)
+
+/*
+ * System control
+ */
+
+typedef enum {
+    SCTRL_PWDN  = 0x01, // shutdown
+    SCTRL_SLEEP = 0x02, // sleep
+    SCTRL_WAKE  = 0x03, // wakeup
+    SCTRL_MCTX  = 0x04, // menu context
+    SCTRL_MMAIN = 0x05, // menu main
+    SCTRL_MAPP  = 0x06, // menu app
+    SCTRL_MHELP = 0x07, // menu help
+    SCTRL_MEXIT = 0x08, // menu exit
+    SCTRL_MSEL  = 0x09, // menu select
+    SCTRL_MRT   = 0x0A, // menu left
+    SCTRL_MLT   = 0x0B, // menu right
+    SCTRL_MUP   = 0x0C, // menu up
+    SCTRL_MDN   = 0x0D, // menu down
+    SCTRL_RCOLD = 0x0E, // cold restart
+    SCTRL_RWARM = 0x0F, // warm restart
+    SCTRL_DPADU = 0x10, // dpad up
+    SCTRL_DPADD = 0x11, // dpad down
+    SCTRL_DPADR = 0x12, // dpad right
+    SCTRL_DPADL = 0x13, // dpad left
+} hid_sctrl_keycode_t;
+
+bool hid_report_sctrl(hid_target_t, hid_sctrl_keycode_t);
+
+/*
+ * Surface Dial
+ */
+
+typedef enum {
+    SDIAL_U = 0x00,     // button release
+    SDIAL_D = 0x01,     // button press
+    SDIAL_L = 0x38,     // knob rotate ccw
+    SDIAL_R = 0xC8,     // knob rotate cw
+} hid_sdial_keycode_t;
+
+bool hid_report_sdial(hid_target_t, hid_sdial_keycode_t);
+bool hid_report_sdial_click(hid_target_t, uint32_t ms);
+
+/*
+ * Callback functions
+ */
+
+typedef void (*hid_key_cb)(uint8_t keycode, bool pressed);
+typedef void (*hid_pos_cb)(int x, int y, int8_t dx, int8_t dy);
+void hid_handle_mouse(hid_target_t, hid_mouse_report_t *, hid_key_cb, hid_pos_cb);
+void hid_handle_keybd(hid_target_t, hid_keybd_report_t *, hid_key_cb);
 
 #ifdef __cplusplus
 }

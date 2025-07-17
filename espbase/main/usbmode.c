@@ -142,7 +142,8 @@ esp_err_t usbmode_switch(usbmode_t mode, bool restart) {
 
 void usbmode_initialize() {
     LOOPN(i, LEN(modes)) {
-        if (strcmp(usbmode_str(modes[i].mode), Config.sys.USB_MODE)) continue;
+        if (strcasecmp(usbmode_str(modes[i].mode), Config.sys.USB_MODE))
+            continue;
         usbmode_switch(modes[i].mode, false);
         return;
     }

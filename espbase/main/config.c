@@ -54,6 +54,7 @@ config_t Config = {
         .SNTP_HOST = "pool.ntp.org",
         .OTA_AUTO  = "1",
         .OTA_URL   = "",
+        .HID_MODE  = "GENERAL",
         .TIMEZONE  = "CST-8",   // China Standard Time
         .PROMPT    = "esp32> ",
     },
@@ -107,6 +108,7 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
     {"app.sntp.host",   &Config.app.SNTP_HOST,  NULL},
+    {"app.hid.mode",    &Config.app.HID_MODE,   NULL},
     {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
     {"app.timezone",    &Config.app.TIMEZONE,   NULL},
@@ -157,7 +159,7 @@ static esp_err_t config_set_safe(
 bool config_set(const char *key, const char *value) {
     int16_t idx = config_index(key);
     if (idx == -1) return false;
-    return config_set_safe(rwlst + idx, value ? value : "", true) == ESP_OK;
+    return config_set_safe(rwlst + idx, value ?: "", true) == ESP_OK;
 }
 
 const char * config_get(const char *key) {
@@ -231,11 +233,10 @@ bool config_loads(const char *json) {
     if (!obj) {
         ESP_LOGE(TAG, "Could not parse JSON: %s", cJSON_GetErrorPtr());
         return false;
-    } else {
-        json_parse_object_recurse(obj, &set_config_callback, "");
-        cJSON_Delete(obj);
-        return true;
     }
+    json_parse_object_recurse(obj, &set_config_callback, "");
+    cJSON_Delete(obj);
+    return true;
 }
 
 char * config_dumps() {
@@ -331,9 +332,6 @@ esp_err_t config_nvs_init() {
         ctx.init = true;
         return ctx.error = ESP_ERR_NOT_FOUND;
     }
-#ifdef CONFIG_AUTOSTART_ARDUINO
-    nvs_flash_deinit();
-#endif
     esp_err_t err;
     bool enc = false;
 #ifdef CONFIG_NVS_ENCRYPT
@@ -523,7 +521,7 @@ void config_nvs_stats() {
         "NVS Partition Size: %s\n"
         "  Namespaces: %d\n"
         "  Entries: %d/%d (%.2f %% free)\n",
-        format_size(ctx.part->size, false), stat.namespace_count,
+        format_size(ctx.part->size), stat.namespace_count,
         stat.used_entries, stat.total_entries,
         100.0 * stat.free_entries / (stat.total_entries ?: 1)
     );

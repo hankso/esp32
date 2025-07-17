@@ -117,8 +117,10 @@ static bool parse_noerror(int argc, char **argv, void **argtable) {
                 return ESP_ERR_CONSOLE_ARGPARSE;                            \
         } while (0)
 
-static void register_commands(const esp_console_cmd_t * cmds, size_t ncmd) {
-    LOOPN(i, ncmd) { ESP_ERROR_CHECK( esp_console_cmd_register(cmds + i) ); }
+static esp_err_t register_commands(const esp_console_cmd_t *cmds, size_t num) {
+    esp_err_t err = ESP_OK;
+    LOOPN(i, num) { if (!err) err = esp_console_cmd_register(cmds + i); }
+    return err;
 }
 
 #define ARG_STR(p, v)   ((p)->count ? (p)->sval[0] : (v))
@@ -396,7 +398,7 @@ static esp_err_t sys_exec(int argc, char **argv) {
 }
 #endif // CONSOLE_SYS_EXEC
 
-static void register_sys() {
+static esp_err_t register_sys() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_SYS_RESTART
         ESP_CMD_ARG(sys, restart, "Software reset of ESP32"),
@@ -411,7 +413,7 @@ static void register_sys() {
         ESP_CMD_ARG(sys, exec, "Load and execute ELF files"),
 #endif
     };
-    register_commands(cmds, LEN(cmds));
+    return register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -471,18 +473,14 @@ static struct {
 
 static int drv_usb(int argc, char **argv) {
     ARG_PARSE(argc, argv, &drv_usb_args);
-    esp_err_t err = ESP_OK;
-    bool reboot = drv_usb_args.now->count;
-    const char *choices = "CcMmHhS", *c;
     const char *mode = ARG_STR(drv_usb_args.mode, NULL);
+    int idx = stridx(mode, "CcMmHhS");
+    esp_err_t err = ESP_OK;
     if (!mode) {
         usbmode_status();
-    } else if ('0' <= mode[0] && mode[0] <= '6') {
-        err = usbmode_switch((usbmode_t)(mode[0] - '0'), reboot);
-    } else if (( c = strchr(choices, mode[0]) )) {
-        err = usbmode_switch((usbmode_t)(c - choices), reboot);
+    } else if (idx >= 0) {
+        err = usbmode_switch((usbmode_t)idx, drv_usb_args.now->count);
     } else {
-        printf("Invalid mode to set: `%s`\n", mode);
         err = ESP_ERR_INVALID_ARG;
     }
     return err;
@@ -776,7 +774,7 @@ static int drv_pwm(int argc, char **argv) {
 }
 #endif // CONSOLE_DRV_PWM
 
-static void register_drv() {
+static esp_err_t register_drv() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_DRV_GPIO
         ESP_CMD_ARG(drv, gpio, "Set / get GPIO pin level"),
@@ -800,7 +798,7 @@ static void register_drv() {
         ESP_CMD_ARG(drv, pwm, "Control rotation of servo by PWM"),
 #endif
     };
-    register_commands(cmds, LEN(cmds));
+    return register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -968,29 +966,54 @@ static struct {
 
 static int util_logging(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_logging_args);
-    const char *choices = "NEWIDV", *c;
+    const char *lvls = "NEWIDV";
     const char *tag = ARG_STR(util_logging_args.tag, "*");
     const char *lvl = ARG_STR(util_logging_args.lvl, NULL);
     if (lvl) {
-        if (!strcmp(tag, "*")) {
-            printf("Invalid tag to set: `%s`\n", tag);
-            return ESP_ERR_INVALID_ARG;
-        }
-        if ('0' <= lvl[0] && lvl[0] <= '5') {
-            esp_log_level_set(tag, (esp_log_level_t)(lvl[0] - '0'));
-        } else if (( c = strchr(choices, lvl[0]) )) {
-            esp_log_level_set(tag, (esp_log_level_t)(c - choices));
-        } else {
-            printf("Invalid level to set: `%s`\n", lvl);
-            return ESP_ERR_INVALID_ARG;
+        int idx = stridx(lvl, lvls);
+        if (idx >= 0) esp_log_level_set(tag, (esp_log_level_t)idx);
+    }
+    if (strlen(tag) > 16) {
+        printf("Logging tag too long to test: %s\n", tag);
+        return ESP_OK;
+    }
+    /* Hotfix for logging: tags passed to esp_log_level_set/get will be
+     * cached as pointer for faster access. Even the content pointed by
+     * tags have changed, they still hit the cache. E.g.:
+     *
+     *      char tag[10] = "FOO";
+     *      esp_log_level_set(tag, ESP_LOG_ERROR);
+     *
+     *      int lvl = esp_log_level_get(tag);
+     *      printf("level of %s: %d", tag, lvl);    // -> level of FOO: 1
+     *
+     *      strcpy(tag, "BAR");
+     *      lvl = esp_log_level_get(tag);
+     *      printf("level of %s: %d", tag, lvl);    // -> level of BAR: 1
+     *
+     *      lvl = esp_log_level_get("BAR");
+     *      printf("level of %s: %d", tag, lvl);    // -> level of BAR: 3
+     *
+     * Default TAG_CACHE_SIZE is 31 in esp-idf-v4.4/components/log/log.c
+     */
+    static char *skip_cache[32];
+    static uint8_t idx = 0, val;
+    if (!strcmp(tag, "*")) {
+        val = esp_log_level_get("*");
+    } else {
+        char *dup = strdup(tag);
+        if (!dup) return ESP_ERR_NO_MEM;
+        TRYFREE(skip_cache[idx]);
+        tag = skip_cache[idx] = dup;
+        idx = (idx + 1) % LEN(skip_cache);
+        val = esp_log_level_get(tag);
+        if (util_logging_args.log->count) {
+            LOOP(i, 1, strlen(lvls)) {
+                ESP_LOG_LEVEL(i, tag, "Logging at %c", lvls[i]);
+            }
         }
     }
-    printf("Logging level of %s is %c\n", tag, choices[esp_log_level_get(tag)]);
-    if (util_logging_args.log->count && strcmp(tag, "*")) {
-        for (int i = 1; i < strlen(choices); i++) {
-            ESP_LOG_LEVEL(i, tag, "Logging at %c", choices[i]);
-        }
-    }
+    printf("Logging level of %s is %c\n", tag, lvls[val]);
     return ESP_OK;
 }
 #endif // CONSOLE_UTIL_LOGGING
@@ -1033,7 +1056,7 @@ static int util_hist(int argc, char **argv) {
 }
 #endif // CONSOLE_UTIL_HISTORY
 
-static void register_util() {
+static esp_err_t register_util() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_UTIL_VERSION
         ESP_CMD(util, version, "Get version of firmware and SDK"),
@@ -1063,7 +1086,7 @@ static void register_util() {
         ESP_CMD_ARG(util, hist, "Dump / load console history from flash"),
 #endif
     };
-    register_commands(cmds, LEN(cmds));
+    return register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -1154,12 +1177,11 @@ static struct {
 
 static int net_bt(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_bt_args);
-    esp_err_t err = ESP_OK;
-    bool reboot = net_bt_args.now->count;
-    int bat = ARG_INT(net_bt_args.bat, -1);
-    const char *choices = "dDH", *c;
     const char *name = ARG_STR(net_bt_args.dev, NULL);
     const char *mode = ARG_STR(net_bt_args.mode, NULL);
+    int bat = ARG_INT(net_bt_args.bat, -1);
+    int idx = stridx(mode, "dDH");
+    esp_err_t err = ESP_OK;
     if (net_bt_args.scan->count) {
         err = btmode_scan(ARG_INT(net_bt_args.tout, 0));
     } else if (bat != -1) {
@@ -1168,12 +1190,9 @@ static int net_bt(int argc, char **argv) {
         err = btmode_connect(name, NULL);
     } else if (!mode) {
         btmode_status();
-    } else if ('0' <= mode[0] && mode[0] <= '2') {
-        err = btmode_switch((btmode_t)(mode[0] - '0'), reboot);
-    } else if (( c = strchr(choices, mode[0]) )) {
-        err = btmode_switch((btmode_t)(c - choices), reboot);
+    } else if (idx >= 0) {
+        err = btmode_switch((btmode_t)idx, net_bt_args.now->count);
     } else {
-        printf("Invalid mode to set: `%s`\n", mode);
         err = ESP_ERR_INVALID_ARG;
     }
     return err;
@@ -1372,7 +1391,7 @@ static int net_tsync(int argc, char **argv) {
 }
 #endif
 
-static void register_net() {
+static esp_err_t register_net() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_NET_STA
         ESP_CMD_ARG(net, sta, "Query / Scan / Connect / Disconnect APs"),
@@ -1402,7 +1421,7 @@ static void register_net() {
         ESP_CMD_ARG(net, tsync, "TimeSync protocol daemon and client"),
 #endif
     };
-    register_commands(cmds, LEN(cmds));
+    return register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
@@ -1414,70 +1433,45 @@ static struct {
     arg_str_t *key;
     arg_str_t *str;
     arg_str_t *mse;
+    arg_str_t *pad;
+    arg_str_t *ctrl;
     arg_str_t *dial;
     arg_int_t *tout;
     arg_dbl_t *tevt;
     arg_str_t *tgt;
     arg_end_t *end;
 } app_hid_args = {
-    .key  = arg_str0("k", NULL, "CODE", "HID report keypress"),
-    .str  = arg_str0("s", NULL, "STR", "HID report type in"),
-    .mse  = arg_str0("m", NULL, "B|XYVH", "HID report mouse"),
-    .dial = arg_str0("d", NULL, "BLRUD", "HID report S-Dial"),
+    .key  = arg_str0("k", NULL, "CODE", "report keypress"),
+    .str  = arg_str0("s", NULL, "STR", "report type in"),
+    .mse  = arg_str0("m", NULL, "B|XYVH", "report mouse"),
+    .pad  = arg_str0("p", NULL, "BTXYXY", "report gamepad"),
+    .ctrl = arg_str0("c", NULL, "1-15", "report system control"),
+    .dial = arg_str0("d", NULL, "LRUD", "report S-Dial"),
     .tout = arg_int0("t", NULL, "0-65535", "event timeout in ms"),
     .tevt = arg_dbl0(NULL, "ts", "MSEC", "event unix timestamp in ms"),
     .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BT/SCN"),
-    .end  = arg_end(7)
+    .end  = arg_end(9)
 };
 
 static int app_hid(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_hid_args);
-    esp_err_t err = ESP_OK;
-    const char *choices = "UBS", *c;
     const char *typein = ARG_STR(app_hid_args.str, NULL);
-    const char *press = ARG_STR(app_hid_args.key, NULL);
+    const char *keybd = ARG_STR(app_hid_args.key, NULL);
     const char *mouse = ARG_STR(app_hid_args.mse, NULL);
-    const char *dial = ARG_STR(app_hid_args.dial, NULL);
+    const char *gmpad = ARG_STR(app_hid_args.pad, NULL);
+    const char *sctrl = ARG_STR(app_hid_args.ctrl, NULL);
+    const char *sdial = ARG_STR(app_hid_args.dial, NULL);
     const char *tstr = ARG_STR(app_hid_args.tgt, NULL);
     uint16_t tout_ms = ARG_INT(app_hid_args.tout, 50);
-    uint32_t tevt_ms = ARG_DBL(app_hid_args.tevt, 0);
+    double tevt_ms = ARG_DBL(app_hid_args.tevt, 0);
+    int idx = stridx(tstr, "UBS");
+    esp_err_t err = ESP_OK;
 
-    hid_target_t to = HID_TARGET_ALL;
-    if (tstr) {
-        if ('0' <= tstr[0] && tstr[0] <= '2') {
-            to = (hid_target_t)(tstr[0] - '0');
-        } else if (( c = strchr(choices, tstr[0]) )) {
-            to = (hid_target_t)(c - choices);
-        } else {
-            printf("Invalid target to send: `%s`\n", tstr);
-            return ESP_ERR_INVALID_ARG;
-        }
-    }
+    hid_target_t to = idx >= 0 ? (hid_target_t)idx : HID_TARGET_ALL;
+    if (tstr && idx < 0) return ESP_ERR_INVALID_ARG;
 
-    if (dial) {
-        switch (dial[0]) {
-        case 'l': FALLTH; case 'L': hid_report_dial(to, DIAL_L); break;
-        case 'r': FALLTH; case 'R': hid_report_dial(to, DIAL_R); break;
-        case 'u': FALLTH; case 'U': hid_report_dial(to, DIAL_UP); break;
-        case 'd': FALLTH; case 'D': hid_report_dial(to, DIAL_DN); break;
-        default: if (strbool(dial)) hid_report_dial_button(to, tout_ms);
-        }
-    } else if (mouse) {
-        int num, vals[4] = { 0 };
-        if (!strcasecmp(mouse, "square")) {
-            hid_report_mouse_move(to, 50, 0); msleep(250);
-            hid_report_mouse_move(to, 0, 50); msleep(250);
-            hid_report_mouse_move(to, -50, 0); msleep(250);
-            hid_report_mouse_move(to, 0, -50); msleep(250);
-        } else if (!( num = parse_all(mouse, vals, LEN(vals)) )) {
-            hid_report_mouse_click(to, mouse, tout_ms);
-        } else if (num == 1) {
-            hid_report_mouse_button(to, vals[0]);
-        } else {
-            hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
-        }
-    } else if (press) {
-        hid_report_keybd_press(to, press, tout_ms);
+    if (keybd) {
+        hid_report_keybd_press(to, keybd, tout_ms);
     } else if (typein) {
         char buf[2] = { 0, 0 };
         tout_ms = MAX(50, tout_ms) / 2;
@@ -1485,13 +1479,45 @@ static int app_hid(int argc, char **argv) {
             buf[0] = typein[i];
             hid_report_keybd_press(to, buf, tout_ms); msleep(tout_ms);
         }
+    } else if (mouse) {
+        int vals[4];
+        switch (parse_all(mouse, vals, LEN(vals))) {
+        case 0: hid_report_mouse_click(to, mouse, tout_ms); break;
+        case 1: hid_report_mouse_button(to, vals[0]); break;
+        case 2: hid_report_mouse_move(to, vals[0], vals[1]); break;
+        default: hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
+        }
+    } else if (gmpad) {
+        int vals[4];
+        switch (parse_all(gmpad, vals, LEN(vals))) {
+        case 0: hid_report_gmpad_click(to, gmpad, tout_ms); break;
+        case 1: idx = stridx(gmpad, "DATS"); if (idx < 0) break;
+                hid_report_gmpad_button(to, vals[0], idx); break;
+        case 2: hid_report_gmpad_trig(to, vals[0], vals[1]); break;
+        default: hid_report_gmpad_joyst(to, vals[0], vals[1], vals[2], vals[3]);
+        }
+    } else if (sctrl) {
+        const char *tpl = "|Pwdn|Sleep|Wake|mCtx|mMain|mApp|mHelp|meXit|msEl"
+                          "|mRt|mLt|mUp|mDn|rcOld|rwarM";
+        if (( idx = stridx(sctrl, tpl) ) >= 0) {
+            hid_report_sctrl(to, (hid_sctrl_keycode_t)idx);
+        } else {
+            err = ESP_ERR_INVALID_ARG;
+        }
+    } else if (sdial) {
+        switch (sdial[0]) {
+        case 'u': FALLTH; case 'U': hid_report_sdial(to, SDIAL_U); break;
+        case 'd': FALLTH; case 'D': hid_report_sdial(to, SDIAL_D); break;
+        case 'r': FALLTH; case 'R': hid_report_sdial(to, SDIAL_R); break;
+        case 'l': FALLTH; case 'L': hid_report_sdial(to, SDIAL_L); break;
+        default: if (strbool(sdial)) hid_report_sdial_click(to, tout_ms);
+        }
     }
 
     if (tevt_ms) {
-        uint32_t curr_ms = get_timestamp(0) * 1e3;
-        if (curr_ms > tevt_ms) {
-            ESP_LOGD(TAG, "event latency: %dms", curr_ms - tevt_ms);
-        }
+        double curr_ms = get_timestamp_us(0) * 1e3;
+        if (curr_ms > tevt_ms)
+            ESP_LOGD(TAG, "event latency: %.3fms", curr_ms - tevt_ms);
     }
     return err;
 }
@@ -1521,17 +1547,11 @@ static int app_scn(int argc, char **argv) {
     int rot = ARG_INT(app_scn_args.rot, -1);
     int fps = ARG_INT(app_scn_args.fps, -1);
     const char *font = ARG_STR(app_scn_args.font, NULL);
-    if (bar >= 0) {
-        return screen_command(SCN_PBAR, &bar);
-    } else if (btn >= 0) {
-        return screen_command(SCN_BTN, &btn);
-    } else if (rot >= 0) {
-        return screen_command(SCN_ROT, &rot);
-    } else if (fps >= 0) {
-        return screen_command(SCN_FPS, &fps);
-    } else if (font) {
-        return screen_command(SCN_FONT, font);
-    }
+    if (bar >= 0) return screen_command(SCN_PBAR, &bar);
+    if (btn >= 0) return screen_command(SCN_BTN, &btn);
+    if (rot >= 0) return screen_command(SCN_ROT, &rot);
+    if (fps >= 0) return screen_command(SCN_FPS, &fps);
+    if (font) return screen_command(SCN_FONT, font);
     screen_status();
     return ESP_OK;
 }
@@ -1550,20 +1570,18 @@ static struct {
 
 static int app_als(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_als_args);
-    const char *choices = "0123HVA", *c;
-    const char *method = ARG_STR(app_als_args.rlt, NULL);
+    const char *rlt = ARG_STR(app_als_args.rlt, NULL);
     int idx = ARG_INT(app_als_args.idx, -1);
     esp_err_t err = ESP_OK;
-    if (method) {
-        if (!( c = strchr(choices, method[0]) )) {
-            printf("Invalid tracking method: %s\n", method);
-            return ESP_ERR_INVALID_ARG;
-        }
-        int hdeg = -1, vdeg = -1;
-        if (!( err = als_tracking((als_track_t)(c - choices), &hdeg, &vdeg) ))
+    if (rlt) {
+        int track = stridx(rlt, "0123HVA"), hdeg = -1, vdeg = -1;
+        if (track < 0) {
+            err = ESP_ERR_INVALID_ARG;
+        } else if (!( err = als_tracking((als_track_t)track, &hdeg, &vdeg) )) {
             printf("ALS tracked to H: %d, V: %d\n", hdeg, vdeg);
-    } else if (idx < 4) {
-        LOOPN(i, 4) {
+        }
+    } else if (idx < ALS_NUM) {
+        LOOPN(i, ALS_NUM) {
             if (idx < 0 || i == idx) {
                 printf("Brightness of ALS %d is %.2f lux\n",
                         i, als_brightness(i));
@@ -1599,7 +1617,7 @@ static int app_avc(int argc, char **argv) {
     const char *target = ARG_STR(app_avc_args.tgt, "3");
     const char *itpl = app_avc_args.tgt->hdr.glossary;
     const char *istr = strstr(itpl, target);
-    uint8_t index = istr ? strcnt(itpl, '|', istr - itpl) : target[0] - '0';
+    uint8_t index = istr ? strcnt(itpl, "|", istr - itpl) : target[0] - '0';
     if (app_avc_args.cam->count) {
         if (app_avc_args.tgt->count) return CAMERA_LOADS(target);
         return CAMERA_PRINT(stdout);
@@ -1631,7 +1649,7 @@ static int app_sen(int argc, char **argv) {
     const char *sensor = ARG_STR(app_sen_args.sen, "0");
     const char *itpl = app_sen_args.sen->hdr.glossary;
     const char *istr = strstr(itpl, sensor);
-    uint8_t index = istr ? strcnt(itpl, '|', istr - itpl) : sensor[0] - '0';
+    uint8_t index = istr ? strcnt(itpl, "|", istr - itpl) : sensor[0] - '0';
     uint16_t intv_ms = CONS(ARG_INT(app_sen_args.intv, 500), 10, 1000);
     uint32_t tout_ms = ARG_INT(app_sen_args.tout, 0);
     uint64_t state = asleep(intv_ms, 0);
@@ -1667,7 +1685,12 @@ static int app_sen(int argc, char **argv) {
         } else if (index == 3) {
             uint16_t val = vlx_probe();
             if (val == UINT16_MAX) goto error;
-            fprintf(stderr, "\rDistance: range %6.3fm", val / 1e3);
+            fprintf(stderr, "\rDistance: range ");
+            if (val > 1000) {
+                fprintf(stderr, "%.3fm", val / 1e3);
+            } else {
+                fprintf(stderr, "%4dmm", val);
+            }
         } else if (index == 4) {
             gy39_data_t dat;
             if (gy39_measure(&dat)) goto error;
@@ -1693,7 +1716,7 @@ error:
 }
 #endif // CONSOLE_APP_SEN
 
-static void register_app() {
+static esp_err_t register_app() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_APP_HID
         ESP_CMD_ARG(app, hid, "Send HID report through USB / BT"),
@@ -1711,14 +1734,29 @@ static void register_app() {
         ESP_CMD_ARG(app, sen, "Get sensor values (TEMP, TPAD etc.)"),
 #endif
     };
-    register_commands(cmds, LEN(cmds));
+    return register_commands(cmds, LEN(cmds));
 }
 
 /******************************************************************************
- * Export register commands
+ * Register commands
  */
 
-static void optimize_datatype() {
+static int cli_cls(int c, char **v) { linenoiseClearScreen(); return ESP_OK; }
+
+static int cli_ctx(int c, char **v) {
+    console_register_prompt(NULL, c > 1 ? v[1] : "");
+    return ESP_OK;
+}
+
+static esp_err_t register_cli() {
+    const esp_console_cmd_t cmds[] = {
+        ESP_CMD(cli, cls, "Clean screen"),
+        ESP_CMD(cli, ctx, "Command prefix context"),
+    };
+    return register_commands(cmds, LEN(cmds));
+}
+
+extern "C" void console_register_commands() {
 #ifdef CONSOLE_SYS_SLEEP
     static char sb[6];
     snprintf(sb, sizeof(sb), "0-%d", GPIO_PIN_COUNT - 1);
@@ -1742,29 +1780,11 @@ static void optimize_datatype() {
 #   endif
     drv_gpio_args.pin->hdr.datatype = gb; NOTUSED(gs);
 #endif
-}
-
-// Put this variable into RTC memory to maintain the value during deep sleep
-RTC_DATA_ATTR static uint32_t boot_count = 0;
-
-extern "C" void console_register_commands() {
-    if (boot_count++) fputs("Woken up from deep sleep mode\n", stderr);
-    const esp_console_cmd_t clear = {
-        .command = "clear",
-        .help = "Clean screen",
-        .hint = NULL,
-        .func = [] (int c, char **v) -> int {
-            linenoiseClearScreen();
-            return ESP_OK;
-        },
-        .argtable = NULL
-    };
     ESP_ERROR_CHECK( esp_console_register_help_command() );
-    ESP_ERROR_CHECK( esp_console_cmd_register(&clear) );
-    optimize_datatype();
-    register_sys();
-    register_util();
-    register_drv();
-    register_net();
-    register_app();
+    ESP_ERROR_CHECK( register_cli() );
+    ESP_ERROR_CHECK( register_sys() );
+    ESP_ERROR_CHECK( register_util() );
+    ESP_ERROR_CHECK( register_drv() );
+    ESP_ERROR_CHECK( register_net() );
+    ESP_ERROR_CHECK( register_app() );
 }

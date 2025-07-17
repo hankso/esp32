@@ -515,27 +515,27 @@ static int screen_anim_init(screen_t *scr) {
 static int lvgl_ui_input(hid_report_t *rpt) {
     if (rpt->id == REPORT_ID_KEYBD) {
         hid_handle_keybd(HID_TARGET_SCN, &rpt->keybd, NULL);
-        bool shift = HAS_SHIFT(rpt->keybd.modifier);
+        bool shift = KEYBD_MOD_HAS_SHIFT(rpt->keybd.modifier);
         ITERV(key, rpt->keybd.keycode) {
             if (key <= HID_KEY_ERROR_UNDEFINED) continue;
             if (!ACQUIRE(ctx.mutex, 10)) continue;
             const char *str = keycode2str(key, rpt->keybd.modifier);
             switch (key) {
-            case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;   break;
-            case HID_KEY_ARROW_DOWN:  ctx.keypad.key = LV_KEY_DOWN; break;
-            case HID_KEY_ARROW_RIGHT: ctx.keypad.key = LV_KEY_RIGHT; break;
-            case HID_KEY_ARROW_LEFT:  ctx.keypad.key = LV_KEY_LEFT; break;
-            case HID_KEY_ESCAPE:      ctx.keypad.key = LV_KEY_ESC;  break;
-            case HID_KEY_DELETE:      ctx.keypad.key = LV_KEY_DEL;  break;
+            case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;       break;
+            case HID_KEY_ARROW_DOWN:  ctx.keypad.key = LV_KEY_DOWN;     break;
+            case HID_KEY_ARROW_RIGHT: ctx.keypad.key = LV_KEY_RIGHT;    break;
+            case HID_KEY_ARROW_LEFT:  ctx.keypad.key = LV_KEY_LEFT;     break;
+            case HID_KEY_ESCAPE:      ctx.keypad.key = LV_KEY_ESC;      break;
+            case HID_KEY_DELETE:      ctx.keypad.key = LV_KEY_DEL;      break;
             case HID_KEY_BACKSPACE:   ctx.keypad.key = LV_KEY_BACKSPACE; break;
-            case HID_KEY_HOME:        ctx.keypad.key = LV_KEY_HOME; break;
-            case HID_KEY_END:         ctx.keypad.key = LV_KEY_END;  break;
+            case HID_KEY_HOME:        ctx.keypad.key = LV_KEY_HOME;     break;
+            case HID_KEY_END:         ctx.keypad.key = LV_KEY_END;      break;
             case HID_KEY_TAB:   //       '\t'          '\x0B'
-                ctx.keypad.key = shift ? LV_KEY_PREV : LV_KEY_NEXT; break;
+                ctx.keypad.key = shift ? LV_KEY_PREV : LV_KEY_NEXT;     break;
             case HID_KEY_ENTER: //       '\n'
-                ctx.keypad.key = shift ? LV_KEY_ENTER : '\r';       break;
+                ctx.keypad.key = shift ? LV_KEY_ENTER : '\r';           break;
             default:
-                ctx.keypad.key = strlen(str) == 1 ? str[0] : 0;     break;
+                ctx.keypad.key = strlen(str) == 1 ? str[0] : 0;         break;
             }
             ctx.keypad.pressed = ctx.keypad.key != 0;
             RELEASE(ctx.mutex);
@@ -552,12 +552,12 @@ static int lvgl_ui_input(hid_report_t *rpt) {
             ctx.keypad.pressed = true;
         }
         RELEASE(ctx.mutex);
-    } else if (rpt->id == REPORT_ID_DIAL && ACQUIRE(ctx.mutex, 10)) {
-        switch (rpt->dial[0]) {
-        case DIAL_L:    ctx.encoder.left = true; break;
-        case DIAL_R:    ctx.encoder.right = true; break;
-        case DIAL_DN:   ctx.encoder.enter = true; break;
-        case DIAL_UP:   ctx.encoder.enter = false; break;
+    } else if (rpt->id == REPORT_ID_SDIAL && ACQUIRE(ctx.mutex, 10)) {
+        switch (rpt->sdial[0]) {
+        case SDIAL_L: ctx.encoder.left = true; break;
+        case SDIAL_R: ctx.encoder.right = true; break;
+        case SDIAL_D: ctx.encoder.enter = true; break;
+        case SDIAL_U: ctx.encoder.enter = false; break;
         }
         RELEASE(ctx.mutex);
     } else {

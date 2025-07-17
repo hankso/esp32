@@ -1,11 +1,13 @@
 <script setup>
 import { isAPmode } from '@/apis'
+import { debounce } from '@/utils'
 
-import { useDark, useToggle } from '@vueuse/core'
+import { useDark, useToggle, useFullscreen } from '@vueuse/core'
 import { useTheme, useDisplay } from 'vuetify'
 import {
     mdiConsole,
-    mdiUsbPort,
+    // mdiUsbPort,
+    mdiController,
     mdiKeyboardOutline,
     mdiFileTree,
     mdiPencilBoxMultiple,
@@ -15,35 +17,6 @@ import {
     mdiCompare,
     mdiMultimedia,
 } from '@mdi/js'
-
-const desc =
-    import.meta.env.MODE +
-    (process.env.BUILD_INFO?.SOURCE
-        ? `-${process.env.BUILD_INFO.SOURCE}`
-        : '') +
-    ` v${process.env.PROJECT_VERSION}`
-
-const { lg } = useDisplay()
-const theme = useTheme()
-const isDark = useDark({
-    onChanged(dark) {
-        theme.global.name.value = dark ? 'dark' : 'light'
-    },
-})
-const toggleDark = useToggle(isDark)
-
-provide('theme', { isDark, toggleDark })
-
-const title = `${process.env.PROJECT_NAME} WebUI`
-const apmode = ref(true)
-const drawer = ref(false)
-
-function updateAP() {
-    // unlock some features if http client is connected from AP
-    isAPmode()
-        .then(() => (apmode.value = true))
-        .catch(() => (apmode.value = false))
-}
 
 function parseLink(title, links) {
     return [
@@ -70,14 +43,43 @@ const aponly = parseLink('AP mode', [
 
 const staonly = parseLink('STA mode', [
     ['Web Console', '/home', mdiConsole],
-    ['Web Serial', '/serial', mdiUsbPort],
-    ['Web Socket', '/jsonrpc', mdiKeyboardOutline],
+    // ['Web Serial', '/serial', mdiUsbPort],
+    ['Web Gamepad', '/gamepad', mdiController],
+    ['Web Socket', '/socket', mdiKeyboardOutline],
     ['Web Stream', '/stream', mdiMultimedia],
 ])
 
-const progbar = ref(false)
+const desc =
+    import.meta.env.MODE +
+    (process.env.BUILD_INFO?.SOURCE
+        ? `-${process.env.BUILD_INFO.SOURCE}`
+        : '') +
+    ` v${process.env.PROJECT_VERSION}`
 
+const title = `${process.env.PROJECT_NAME} WebUI`
+const apmode = ref(true)
+const drawer = ref(false)
+
+const { lg } = useDisplay()
+const theme = useTheme()
+const isDark = useDark({
+    onChanged(dark) {
+        theme.global.name.value = dark ? 'dark' : 'light'
+    },
+})
+
+const progbar = ref(false)
 provide('progbar', progbar)
+
+const toggleDark = useToggle(isDark)
+provide('theme', { isDark, toggleDark })
+
+const { isFullscreen, toggle: toggleFullscreen } = useFullscreen()
+provide('fullscreen', { isFullscreen, toggleFullscreen })
+watch(
+    isFullscreen,
+    debounce(() => (drawer.value = false))
+)
 
 const snackbar = ref({
     show: false,
@@ -110,6 +112,13 @@ provide('confirm', function (msg, callback, persistent = false) {
     dialog.value.persist = persistent
     return (dialog.value.show = true)
 })
+
+function updateAP() {
+    // unlock some features if http client is connected from AP
+    isAPmode()
+        .then(() => (apmode.value = true))
+        .catch(() => (apmode.value = false))
+}
 
 onMounted(() => {
     // maybe redirected from other html subpages
@@ -166,7 +175,12 @@ onMounted(() => {
             <v-list nav :items="staonly.concat(apmode ? aponly : [])"></v-list>
         </v-navigation-drawer>
 
-        <v-app-bar border="b" elevation="0" density="comfortable" :title>
+        <v-app-bar
+            :title
+            v-if="!isFullscreen"
+            density="comfortable"
+            scroll-behavior="hide"
+        >
             <ProgressBar :loading="progbar" class="position-absolute" />
             <template #prepend>
                 <v-app-bar-nav-icon
@@ -176,13 +190,13 @@ onMounted(() => {
             </template>
             <template #append>
                 <v-btn
+                    class="px-2"
                     @click="updateAP"
                     variant="outlined"
                     :color="apmode ? 'success' : 'grey'"
                 >
                     AP mode
                 </v-btn>
-                <v-divider vertical class="mx-2"></v-divider>
                 <v-btn icon @click="toggleDark()">
                     <v-icon :icon="mdiCompare"></v-icon>
                     <v-tooltip activator="parent" location="bottom">
@@ -193,7 +207,7 @@ onMounted(() => {
         </v-app-bar>
 
         <v-main id="main-content">
-            <v-container class="h-100 position-relative">
+            <v-container class="h-100 d-flex flex-column position-relative">
                 <RouterView />
             </v-container>
         </v-main>

@@ -6,8 +6,8 @@
 
 #include "update.h"
 #include "config.h"
-#include "filesys.h"
-#include "network.h"
+#include "filesys.h"            // for filesys_xxx
+#include "network.h"            // for wifi_sta_wait
 
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -41,7 +41,7 @@ void update_initialize() {
         ctx.error = ESP_ERR_NOT_FOUND;
     }
     ctx.running = running;
-#if defined(CONFIG_APP_ROLLBACK_ENABLE) && !defined(CONFIG_AUTOSTART_ARDUINO)
+#ifdef CONFIG_APP_ROLLBACK_ENABLE
     esp_image_metadata_t data;
     esp_ota_img_states_t state;
     const esp_partition_pos_t running_pos;

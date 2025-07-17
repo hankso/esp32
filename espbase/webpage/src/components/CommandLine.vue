@@ -23,7 +23,7 @@
 </template>
 
 <script setup>
-import { type, escape, strftime, get_monotonic } from '@/utils'
+import { type, escape, strftime, getMonotonic } from '@/utils'
 
 import { Terminal, TerminalApi, TerminalFlash } from 'vue-web-terminal'
 
@@ -190,7 +190,7 @@ function onCommand(key, cmdline, success, failed, name) {
     if (!props.callback) return failed(`Unhandled command ${key}`)
     if (flash[name]) return failed('Command running (this should not happen)!')
     flash[name] = new TerminalFlash()
-    let ts = get_monotonic()
+    let ts = getMonotonic()
     let rst = props.callback(key, cmdline, success, failed, name)
     if (type(rst) === 'promise') {
         rst.then(onSuccess(ts, name))
@@ -217,7 +217,7 @@ function onSuccess(ts, name) {
         if (!props.usedTime) return
         TerminalApi.pushMessage(name, {
             type: 'ansi',
-            content: escape(`Used ${(get_monotonic() - ts).toFixed(0)}ms`, 32),
+            content: escape(`Used ${(getMonotonic() - ts).toFixed(0)}ms`, 32),
         })
     }
 }

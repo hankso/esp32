@@ -10,23 +10,24 @@ import vuetify, { transformAssetUrls } from 'vite-plugin-vuetify'
 import pythonServer from './src/plugins/vite-python'
 
 // Utilities
-import { defineConfig } from 'vite'
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { execSync } from 'node:child_process'
 import { fileURLToPath, URL } from 'node:url'
+import { defineConfig, splitVendorChunkPlugin } from 'vite'
 
 // https://vitejs.dev/config/
 export default defineConfig(({ command, mode }) => {
-    let BUILD_INFO
+    let info
+    let sport = 5172 // python api server
     if (command === 'build') {
-        BUILD_INFO = {
+        info = {
             NODE_JS: process.versions.node,
             BUILD_OS: `${process.platform}-${process.arch}`,
             BUILD_TIME: new Date().toLocaleString(),
         }
         try {
-            BUILD_INFO['SOURCE'] = `${execSync('git describe --tags --always')}`
+            info['SOURCE'] = `${execSync('git describe --tags --always')}`
         } catch {}
     }
     let dist = resolve(__dirname, '..', 'files', 'www')
@@ -41,10 +42,10 @@ export default defineConfig(({ command, mode }) => {
         server: {
             host: '0.0.0.0',
             port: 5173,
-            sport: 5172, // python api server
+            sport,
             proxy: {
                 '/api': {
-                    target: 'http://localhost:5172',
+                    target: `http://localhost:${sport}`,
                     changeOrigin: true,
                     secure: false,
                 },
@@ -54,10 +55,10 @@ export default defineConfig(({ command, mode }) => {
             'process.env': {
                 PROJECT_VERSION: process.env.npm_package_version,
                 PROJECT_NAME: process.env.npm_package_name,
-                API_SERVER: 'localhost:5172',
+                API_SERVER: sport,
+                BUILD_INFO: info,
                 VITE_PATH: __dirname,
                 VITE_CMD: command,
-                BUILD_INFO,
             },
         },
         plugins: [
@@ -103,6 +104,7 @@ export default defineConfig(({ command, mode }) => {
                 entry: resolve(__dirname, '..', 'helper.py'),
                 verbose: false,
             }),
+            splitVendorChunkPlugin(),
         ],
         resolve: {
             alias: {

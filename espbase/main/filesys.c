@@ -5,7 +5,7 @@
  */
 
 #include "filesys.h"
-#include "drivers.h"
+#include "drivers.h"            // for PIN_XXX
 #include "config.h"
 
 #include "cJSON.h"
@@ -259,7 +259,7 @@ void filesys_print_info(filesys_type_t type) {
         card->cid.mfg_id, card->cid.oem_id,
         card->is_sdio ? "SDIO" : card->is_mmc ? "MMC" :
         card->ocr & SD_OCR_SDHC_CAP ? "SDHC/SDXC" : "SDSC",
-        format_size(card->csd.capacity * card->csd.sector_size, false),
+        format_size(card->csd.capacity * card->csd.sector_size),
         card->max_freq_khz / (card->max_freq_khz < 1000 ? 1 : 1000),
         card->max_freq_khz < 1000 ? 'K' : 'M', card->is_ddr ? ", DDR" : "",
         card->csd.sector_size, card->csd.read_block_len,
@@ -576,7 +576,7 @@ static void print_files(const char *base, const struct stat *st, void *arg) {
         break;
     }
     fprintf((FILE *)arg, "%s %8s %12s %s%s\n", // something like 'ls -alh'
-            statperm(st->st_mode), format_size(st->st_size, false),
+            statperm(st->st_mode), format_size(st->st_size),
             buf, base, S_ISDIR(st->st_mode) ? "/" : "");
     TRYFREE(utf8);
 }

@@ -18,7 +18,7 @@
 </template>
 
 <script setup>
-import { range, random_id } from '@/utils'
+import { range, randomId } from '@/utils'
 
 import Keyboard from 'simple-keyboard'
 import 'simple-keyboard/build/css/index.css'
@@ -31,12 +31,12 @@ const shift = ref(0)
 
 const input = ref(null)
 
-const emits = defineEmits(['keydn', 'keyup', 'event'])
-
 const text = defineModel({
     type: String,
     default: '',
 })
+
+const emits = defineEmits(['event', 'keydn', 'keyup'])
 
 const props = defineProps({
     className: {
@@ -67,11 +67,15 @@ const props = defineProps({
         type: Boolean,
         default: true,
     },
+    splitEvents: {
+        type: Boolean,
+        default: false,
+    },
 })
 
-const uid = computed(() => `${props.className}-${random_id()}`)
+const uid = computed(() => `${props.className}-${randomId()}`)
 
-const area = computed(() => toValue(input)?.$el?.querySelector('textarea'))
+const area = computed(() => input.value?.$el?.querySelector('textarea'))
 
 const shiftMapping = {
     '{f3}': '{mediaplaypause}',
@@ -111,23 +115,23 @@ const defaultLayout = [
 function syncState(event) {
     if (!props.showPress) return
     if (event.getModifierState('Alt')) {
-        alt.value = toValue(alt) || 1
-    } else if (toValue(alt) === 1) {
+        alt.value ||= 1
+    } else if (alt.value === 1) {
         alt.value = 0
     }
     if (event.getModifierState('Control')) {
-        ctrl.value = toValue(ctrl) || 1
-    } else if (toValue(ctrl) === 1) {
+        ctrl.value ||= 1
+    } else if (ctrl.value === 1) {
         ctrl.value = 0
     }
     if (event.getModifierState('CapsLock')) {
         shift.value = 2
-    } else if (toValue(shift) === 2) {
+    } else if (shift.value === 2) {
         shift.value = 0
     }
     if (event.getModifierState('Shift')) {
-        shift.value = toValue(shift) === 2 ? 0 : 1
-    } else if (toValue(shift) === 1) {
+        shift.value = shift.value === 2 ? 0 : 1
+    } else if (shift.value === 1) {
         shift.value = 0
     }
     event.preventDefault()
@@ -136,35 +140,30 @@ function syncState(event) {
 function emitKeyCode(event, key, ts) {
     key = key.replace(/^{|arrow|context|audio|}$/g, '')
     key = key.replace(/^(\w+)(left|right)$/g, (m, g1, g2) => `${g2[0]}-${g1}`)
-    if (props.handleAlt && toValue(alt) && !key.includes('alt'))
-        key = 'Alt|' + key
-    if (props.handleCtrl && toValue(ctrl) && !key.includes('control'))
+    if (props.handleAlt && alt.value && !key.includes('alt')) key = 'Alt|' + key
+    if (props.handleCtrl && ctrl.value && !key.includes('control'))
         key = 'Ctrl|' + key
+    if (props.splitEvents) emits(event, key, ts)
     emits('event', event, key, ts)
-    emits(event, key, ts)
-}
-
-function onKeyPress(key) {
-    emitKeyCode('keydn', key, Date.now())
 }
 
 function onKeyReleased(key) {
-    let ts = Date.now()
+    let ts = performance.now()
     if (props.handleAlt && key.includes('alt')) {
-        alt.value = (toValue(alt) + 1) % 3
-    } else if (toValue(alt) === 1) {
+        alt.value = (alt.value + 1) % 3
+    } else if (alt.value === 1) {
         alt.value = 0
     }
     if (props.handleCtrl && key.includes('control')) {
-        ctrl.value = (toValue(ctrl) + 1) % 3
-    } else if (toValue(ctrl) === 1) {
+        ctrl.value = (ctrl.value + 1) % 3
+    } else if (ctrl.value === 1) {
         ctrl.value = 0
     }
     if (props.handleShift && key.includes('shift')) {
-        shift.value = (toValue(shift) + 1) % 3
+        shift.value = (shift.value + 1) % 3
     } else if (props.handleCaps && key.includes('caps')) {
-        shift.value = toValue(shift) === 2 ? 0 : 2
-    } else if (toValue(shift) === 1) {
+        shift.value = shift.value === 2 ? 0 : 2
+    } else if (shift.value === 1) {
         shift.value = 0
     }
     emitKeyCode('keyup', key, ts)
@@ -172,10 +171,10 @@ function onKeyReleased(key) {
 
 function onChange(value) {
     text.value = value
-    if (!props.showInput || !toValue(area)) return
+    if (!props.showInput || !area.value) return
     let pos = [kbd.getCaretPosition(), kbd.getCaretPositionEnd()]
     if (!pos[0]) return
-    setTimeout(() => toValue(area).setSelectionRange(...pos), 5)
+    setTimeout(() => area.value.setSelectionRange(...pos), 5)
 }
 
 watch(text, val => props.showInput && kbd?.setInput(val))
@@ -184,7 +183,7 @@ watch(shift, val => kbd?.setOptions({ layoutName: ['default', 's', 'c'][val] }))
 
 watchPostEffect(() => {
     kbd?.destroy()
-    kbd = new Keyboard(toValue(uid), {
+    kbd = new Keyboard(uid.value, {
         display: {
             '{enter}': 'Enter',
             '{prtscr}': 'PrtScn',
@@ -194,17 +193,17 @@ watchPostEffect(() => {
             '{altright}': 'Alt',
             '{metaleft}': '&#x2318',
             '{metaright}': '&#x2318',
-            '{arrowup}': '&#x23F6',
-            '{arrowdown}': '&#x23F7',
-            '{arrowleft}': '&#x23F4',
-            '{arrowright}': '&#x23F5',
+            '{arrowup}': '&#x25B2',
+            '{arrowdown}': '&#x25BC',
+            '{arrowleft}': '&#x25C0',
+            '{arrowright}': '&#x25B6',
             '{controlleft}': 'Ctrl',
             '{controlright}': 'Ctrl',
             '{contextmenu}': '&#x1F5C9',
-            '{mediaplaypause}': '&#x23F8',
-            '{audiovolumemute}': '&#x1F568',
-            '{audiovolumedown}': '&#x1F569',
-            '{audiovolumeup}': '&#x1F56A',
+            '{mediaplaypause}': '&#x23EF',
+            '{audiovolumemute}': '&#x1F508',
+            '{audiovolumedown}': '&#x1F509',
+            '{audiovolumeup}': '&#x1F50A',
         },
         layout: {
             default: defaultLayout,
@@ -231,7 +230,7 @@ watchPostEffect(() => {
         mergeDisplay: true,
         maxLength: 100,
         onKeyReleased,
-        onKeyPress,
+        onKeyPress: key => emitKeyCode('keydn', key, performance.now()),
         onChange,
     })
     if (!props.showPress) return
@@ -258,8 +257,9 @@ onBeforeUnmount(() => {
 <style>
 .fix-keyboard .hg-button {
     border: 0px;
-    min-width: 40px;
+    min-width: 30px;
     background: rgb(var(--v-theme-background));
+    font-family: monospace;
 }
 .fix-keyboard .hg-theme-default {
     background: rgb(var(--v-theme-on-surface-variant));
@@ -278,9 +278,6 @@ onBeforeUnmount(() => {
 }
 .fix-keyboard .hg-button[data-skbtn*='menu'] {
     font-size: x-large;
-}
-.fix-keyboard .hg-button[data-skbtn*='audio'] {
-    transform: scale(-1, 1); /* hmirror */
 }
 .fix-keyboard .hg-button[data-skbtn*='alt'] {
     text-decoration: v-bind('["inherit", "underline", "overline"][alt % 3]');

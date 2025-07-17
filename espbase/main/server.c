@@ -4,11 +4,10 @@
  * Create: 2019-05-27 15:29:05
  */
 #include "server.h"
-#include "config.h"
-#include "update.h"
-#include "drivers.h"
-#include "filesys.h"
-#include "avcmode.h"
+#include "config.h"             // for Config
+#include "update.h"             // for ota_updation_xxx
+#include "filesys.h"            // for filesys_xxx
+#include "avcmode.h"            // for AUDIO_XXX && VIDEO_XXX
 #include "ledmode.h"            // for led_set_blink
 #include "console.h"            // for console_handle_xxx
 #include "timesync.h"           // for format_datetime
@@ -409,7 +408,7 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
 #define PARSE_FAILED    3
 #define PARSE_ERROR     4
     if (!req->content_len) return send_err(req, 400, "Invalid content length");
-    char *ctype = get_header(req, "Content-Type"), *buf;
+    char *ctype = get_header(req, "Content-Type"), *buf = NULL;
     char *bdary = strstr(ctype ?: "", "boundary=");
     if (!ctype || !strstr(ctype, TYPE_MPRT) || strlen(bdary ?: "") < 9) {
         TRYFREE(ctype);
@@ -455,7 +454,7 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
                 }
             }
             if (state == PARSE_DATA) {
-                bool fend = false;
+                bool fend = !remain;
                 size_t flen = tail - head, clen;
                 while (crlf) {
                     if (( clen = tail - crlf - slen ) < blen) {
@@ -469,6 +468,8 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
                 }
                 state = fend ? PARSE_BDARY : PARSE_DATA;
                 if (!flen && (!fend || !idx)) break;
+                ESP_LOGD(TAG, "idx: %u, remain: %d, fend: %d, flen: %u",
+                         idx, remain, fend, flen);
                 if (!( rc = callback(req, vals[0], idx, head, flen, fend) )) {
                     crlf = strstr(head += flen, "\r\n");
                     idx += flen;
@@ -492,6 +493,7 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
     } else if (rc == HTTPD_SOCK_ERR_TIMEOUT) {
         rc = send_err(req, 408, NULL);
     }
+    TRYFREE(buf);
     TRYFREE(ctype);
     return rc < 0 ? ESP_FAIL : ESP_OK; // HTTPD_SOCK_ERR_xxx < 0
 #undef PARSE_BDARY
@@ -618,10 +620,10 @@ static esp_err_t on_error(httpd_req_t *req, httpd_err_code_t err) {
 
 static esp_err_t on_success(httpd_req_t *req) {
     CHECK_REQUEST(req);
+#ifdef CONFIG_BASE_DEBUG
     size_t nfd = 8;
     int fds[nfd];
     if (httpd_get_client_list(req->handle, &nfd, fds) || !nfd) return ESP_OK;
-#ifdef CONFIG_BASE_DEBUG
     ESP_LOGI(TAG, "Got %d clients", nfd);
     LOOPN(i, nfd) {
         ESP_LOGI(TAG, "- fd=%d %s", fds[i], getaddrname(fds[i], false));
@@ -658,8 +660,10 @@ static esp_err_t on_upload_file(httpd_req_t *req, const char *name,
     static char *fn;
     if (!idx) {
         const char *path = fnorm(name);
-        if (fisfile(path) && !has_param(req, "overwrite", FROM_ANY))
+        if (fisfile(path) && !has_param(req, "overwrite", FROM_ANY)) {
+            ESP_LOGD(TAG, "Skip upload file %s", name);
             return ESP_ERR_HTTPD_SKIP_DATA;
+        }
         if (!( fn = strdup(path) ) || !( fd = fopen(path, "w") )) {
             send_err(req, 500, "Could not open file to write");
             goto error;
@@ -671,12 +675,12 @@ static esp_err_t on_upload_file(httpd_req_t *req, const char *name,
             send_err(req, 500, "Could not write to file");
             goto error;
         }
-        fprintf(stderr, "\rProgress: %8s", format_size(idx, false));
+        fprintf(stderr, "\rProgress: %8s", format_size(idx));
         fflush(stderr);
     }
     if (end && fd) {
         fputc('\n', stderr);
-        fprintf(stderr, "Upload success: %s\n", format_size(idx + len, false));
+        fprintf(stderr, "Upload success: %s\n", format_size(idx + len));
         TRYNULL(fd, fclose);
         TRYFREE(fn);
     }
@@ -758,17 +762,17 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
                                 size_t idx, char *data, size_t len, bool end)
 {
     if (!idx) {
+        fprintf(stderr, "Update file: %s\n", name);
         if (strcmp(name, "update")) return ESP_ERR_HTTPD_SKIP_DATA;
         if (!has_param(req, "size", -1) && !ota_updation_begin(0)) goto error;
-        fprintf(stderr, "Update file: %s\n", name);
         led_set_blink(1);
     }
     if (len && !ota_updation_write(data, len)) goto error;
     if (end) {
         if (!ota_updation_end()) goto error;
-        fprintf(stderr, "Update success: %s\n", format_size(idx + len, false));
+        fprintf(stderr, "Update success: %s\n", format_size(idx + len));
         send_str(req, "OTA Updation success: reboot now");
-        setTimeout(10, restart, NULL);
+        setTimeout(500, restart, NULL);
     }
     return ESP_OK;
 error:
@@ -843,10 +847,15 @@ static http_media_t audio_ctx;
 
 static void handle_audio_streaming(void *arg) {
     audio_evt_t *evt = arg;
-    if (evt->len && !socket_send_all(autio_ctx.fd, evt->data, evt->len)) return;
+    notify_increase(evt->task);
+    if (!evt->len) goto stop;
+    if (!socket_send_all(autio_ctx.fd, evt->data, evt->len)) goto exit;
+stop:
     UREGEVTS(AVC, audio_ctx.inst);
     if (audio_ctx.stop) AUDIO_STOP();
     ESP_LOGI(TAG, "Audio stream to %s stopped", audio_ctx.addr);
+exit:
+    notify_decrease(evt->task);
 }
 #endif
 
@@ -867,14 +876,14 @@ static void handle_video_streaming(void *arg) {
     if (!socket_send_all(video_ctx.fd, bdary, blen) &&
         !socket_send_all(video_ctx.fd, evt->data, evt->len) &&
         !video_ctx.once) goto exit;
-stop:
-    UREGEVTS(AVC, video_ctx.inst);
-    if (video_ctx.stop) VIDEO_STOP();
-    ESP_LOGI(TAG, "Video stream to %s stopped", video_ctx.addr);
     if (video_ctx.once) {
         httpd_sess_trigger_close(server, video_ctx.fd);
         video_ctx.fd = 0;
     }
+stop:
+    UREGEVTS(AVC, video_ctx.inst);
+    if (video_ctx.stop) VIDEO_STOP();
+    ESP_LOGI(TAG, "Video stream to %s stopped", video_ctx.addr);
 exit:
     notify_decrease(evt->task);
 }

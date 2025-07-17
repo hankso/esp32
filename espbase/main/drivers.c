@@ -5,10 +5,10 @@
  */
 
 #include "drivers.h"
-#include "config.h"
 #include "hidtool.h"            // for hid_report_xxx
 #include "ledmode.h"            // for led_initialize
 #include "avcmode.h"            // for avc_initialize
+#include "config.h"
 
 #include "esp_attr.h"
 #include "esp_intr_alloc.h"     // for GPIO_INTR_XXX
@@ -99,12 +99,12 @@ static struct {
 #ifdef PIN_ADC1
         PIN_ADC1,
 #else
-        PIN_UNUSED,
+        GPIO_NUM_NC,
 #endif
 #ifdef PIN_ADC2
         PIN_ADC2,
 #else
-        PIN_UNUSED,
+        GPIO_NUM_NC,
 #endif
     },
     .chans = { ADC_CHANNEL_MAX, ADC_CHANNEL_MAX },
@@ -126,7 +126,7 @@ static adc_channel_t gpio2adc(gpio_num_t pin) {
 
 static void adc_initialize() {
     LOOPN(i, LEN(adc.chans)) {
-        if (adc.pins[i] == PIN_UNUSED) continue;
+        if (adc.pins[i] == GPIO_NUM_NC) continue;
         if (( adc.chans[i] = gpio2adc(adc.pins[i]) ) == ADC_CHANNEL_MAX) {
             ESP_LOGE(TAG, "ADC: invalid pin %d", adc.pins[i]);
             return;
@@ -493,6 +493,7 @@ esp_err_t smbus_wregs(
 ) {
     // SMBus Write protocol:
     //      S | (ADDR + W) | ACK | REG | ACK | {DATA | ACK} * n | P
+    if (!addr) return ESP_ERR_INVALID_ARG;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
@@ -515,6 +516,7 @@ esp_err_t smbus_rregs(
     // SMBus Read protocol:
     //      S | (ADDR + W) | ACK | REG | ACK |
     //      S | (ADDR + R) | ACK | {DATA | ACK} * (n - 1) | DATA | NACK | P
+    if (!addr) return ESP_ERR_INVALID_ARG;
     i2c_cmd_handle_t cmd = i2c_cmd_link_create();
     i2c_master_start(cmd);
     i2c_master_write_byte(cmd, addr << 1 | I2C_MASTER_WRITE, true);
@@ -567,26 +569,50 @@ esp_err_t smbus_read_word(int bus, uint8_t addr, uint16_t reg, uint16_t *val) {
     return err;
 }
 
-esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num) {
-    esp_err_t err = ESP_ERR_INVALID_ARG;
-    uint8_t *buf = NULL, length = 16, wb = SMBUS_IS_WORD(reg) ? 4 : 2;
-    reg = SMBUS_HI_WORD(reg) << 8 | SMBUS_LO_WORD(reg);
-    if (!addr || !num || ( err = EMALLOC(buf, num) ) ||
-        ( err = smbus_rregs(bus, addr, reg, buf, num) )) goto exit;
-    printf("I2C %d-%02X register table 0x%0*X - 0x%0*X\n%*s",
-           bus, addr, wb, reg, wb, reg + num, wb, "");
-    LOOPN(i, length) { printf(" %02X", i); }
-    if (reg % length) // pad start spaces
-        printf("\n%0*X%*s", wb, reg - (reg % length), 3 * (reg % length), "");
-    LOOPN(i, num) {
-        if ((i + reg) % length == 0)
-            printf("\n%0*X", wb, i + reg); // newline
-        printf(" %02X", buf[i]);
+esp_err_t smbus_regtable(int bus, uint8_t addr, smbus_regval_t *p, size_t len) {
+    esp_err_t err = p ? ESP_OK : ESP_ERR_INVALID_ARG;
+    TickType_t tout;
+    uint8_t vo, tmp;
+    uint16_t vh, reg, opt;
+    for (; !err && len; len--, p++) {
+        vo = vh = p->val;
+        opt = p->reg >> 16;
+        reg = p->reg & 0xFFFF;
+        switch (opt) {
+        case 0xFF: msleep(vh); break;
+        case 0: err = smbus_write_byte(bus, addr, reg, vo); break;
+        case 1: err = smbus_write_word(bus, addr, reg, vh); break;
+        case 2: err = smbus_read_byte(bus, addr, reg, &vo); p->val = vo; break;
+        case 3: err = smbus_read_word(bus, addr, reg, &vh); p->val = vh; break;
+        case 4: err = smbus_clearbits(bus, addr, reg, vo); break;
+        case 5: err = smbus_setbits(bus, addr, reg, vo); break;
+        case 6: err = smbus_toggle(bus, addr, reg, vo); break;
+        case 7: FALLTH; case 8:
+            tout = xTaskGetTickCount() + pdMS_TO_TICKS(p->val >> 16);
+            while (!( err = smbus_read_byte(bus, addr, reg, &tmp) )) {
+                if (opt == 7 ? !(tmp & vo) : (tmp & vo)) break;
+                if (xTaskGetTickCount() >= tout) {
+                    err = ESP_ERR_TIMEOUT;
+                    break;
+                }
+            }
+            break;
+        default: ESP_LOGD(TAG, "Unknown opt value: %u", opt);
+        }
     }
-    putchar('\n');
-exit:
-    TRYFREE(buf);
     return err;
+}
+
+esp_err_t smbus_clearbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask) {
+    uint8_t val;
+    esp_err_t err = smbus_read_byte(bus, addr, reg, &val);
+    return err ?: smbus_write_byte(bus, addr, reg, val & ~mask);
+}
+
+esp_err_t smbus_setbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask) {
+    uint8_t val;
+    esp_err_t err = smbus_read_byte(bus, addr, reg, &val);
+    return err ?: smbus_write_byte(bus, addr, reg, val | mask);
 }
 
 esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit) {
@@ -600,13 +626,30 @@ esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit) {
     return err ?: smbus_write_byte(bus, addr, reg, val);
 }
 
-static bool i2c_master_inited(int bus) {
-    esp_err_t err = smbus_probe(bus, 0);
-    return err != ESP_ERR_INVALID_ARG && err != ESP_ERR_INVALID_STATE;
+esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num) {
+    esp_err_t err = ESP_ERR_INVALID_ARG;
+    uint8_t *buf = NULL, length = 16, wb = SMBUS_IS_WORD(reg) ? 4 : 2;
+    reg = SMBUS_HI_WORD(reg) << 8 | SMBUS_LO_WORD(reg);
+    if (!addr || !num || ( err = EMALLOC(buf, num) ) ||
+        ( err = smbus_rregs(bus, addr, reg, buf, num) )) goto exit;
+    printf("I2C %d-%02X register table 0x%0*X - 0x%0*X\n%*s",
+           bus, addr, wb, reg, wb, reg + num, wb, "");
+    LOOPN(i, length) { printf(" %02X", i); }
+    if (reg % length) // pad start spaces
+        printf("\n%0*X%*s", wb, reg - (reg % length), 3 * (reg % length), "");
+    LOOPN(i, num) {
+        if ((i + reg) % length == 0) printf("\n%0*X", wb, i + reg); // newline
+        printf(" %02X", buf[i]);
+    }
+    putchar('\n');
+exit:
+    TRYFREE(buf);
+    return err;
 }
 
 void i2c_detect(int bus) {
-    if (!i2c_master_inited(bus)) return;
+    esp_err_t err = smbus_probe(bus, 0);
+    if (err == ESP_ERR_INVALID_ARG || err == ESP_ERR_INVALID_STATE) return;
     LOOPN(i, 0x10) {
         if (!i) printf("  ");
         printf(" %02X", i);
@@ -690,13 +733,13 @@ static UNUSED void IRAM_ATTR gexp_isr(void *arg) {
 #   ifdef CONFIG_BASE_GPIOEXP_I2C
     LOOPN(i, LEN(i2c_pin_data)) {
         if (i2c_gexp_get_level(PIN_I2C_BASE + i * 8, NULL, true)) continue;
-        ets_printf("I2C GPIOExp: %s\n", format_binary(i2c_pin_data[i], 1));
+        ets_printf("I2C GPIOExp: %s\n", format_binary(i2c_pin_data[i], 8));
     }
 #   endif
 #   ifdef CONFIG_BASE_GPIOEXP_SPI
     if (spi_gexp_get_level(PIN_SPI_BASE, NULL, true)) return;
     LOOPN(i, PIN_SPI_COUNT / 8) {
-        ets_printf("SPI GPIOExp: %s\n", format_binary(spi_pin_data[i], 1));
+        ets_printf("SPI GPIOExp: %s\n", format_binary(spi_pin_data[i], 8));
     }
 #   endif
 }
@@ -900,23 +943,23 @@ const char * gpio_usage(gpio_num_t pin, const char *usage) {
 }
 
 #ifdef CONFIG_BASE_USE_BTN
-static button_handle_t btn[2];
+static UNUSED button_handle_t btn[2];
 
-static void cb_button(void *arg, void *data) {
+static UNUSED void cb_button(void *arg, void *data) {
     static const char *BTAG = "button";
     int pin = (int)data;
     switch (iot_button_get_event(arg)) {
     case BUTTON_PRESS_DOWN:
         ESP_LOGI(BTAG, "%d press", pin);
-#ifdef CONFIG_BASE_BTN_INPUT
-        if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_DN);
-#endif
+#   ifdef CONFIG_BASE_BTN_INPUT
+        if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_D);
+#   endif
         break;
     case BUTTON_PRESS_UP:
         ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
-#ifdef CONFIG_BASE_BTN_INPUT
-        if (pin == PIN_BTN) hid_report_dial(HID_TARGET_ALL, DIAL_UP);
-#endif
+#   ifdef CONFIG_BASE_BTN_INPUT
+        if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_U);
+#   endif
         break;
     case BUTTON_SINGLE_CLICK:
         ESP_LOGI(BTAG, "%d single click", pin);
@@ -935,21 +978,7 @@ static void cb_button(void *arg, void *data) {
     }
 }
 
-#   ifdef CONFIG_BASE_ADC_JOYSTICK
-static button_handle_t jstk[4];
-
-static void cb_joystick(void *arg, void *data) {
-    button_event_t event = iot_button_get_event(arg);
-    if (event != BUTTON_PRESS_DOWN && event != BUTTON_LONG_PRESS_HOLD) return;
-    int x = adc_read(0), y = adc_read(1);
-    if (x == -1 || y == -1) return;
-    x = x > 1900 ? (x - 1900) : x < 1400 ? (x - 1400) : 0;
-    y = y > 1900 ? (y - 1900) : y < 1400 ? (y - 1400) : 0;
-    if (x && y) hid_report_mouse_move(HID_TARGET_ALL, x / 28, y / 28); // ±50
-}
-#   endif
-
-static button_handle_t button_init(
+static UNUSED button_handle_t button_init(
     button_config_t *conf, gpio_num_t pin, button_cb_t cb
 ) {
     button_handle_t hdl = iot_button_create(conf);
@@ -968,41 +997,42 @@ static button_handle_t button_init(
     }
     return hdl;
 }
-#endif // CONFIG_BASE_USE_BTN
 
-#ifdef CONFIG_BASE_USE_KNOB
+#   ifdef CONFIG_BASE_ADC_JOYSTICK
+static button_handle_t jstk[4];
+
+static void cb_joystick(void *arg, void *data) {
+    button_event_t event = iot_button_get_event(arg);
+    if (event != BUTTON_PRESS_DOWN && event != BUTTON_LONG_PRESS_HOLD) return;
+    int x = adc_read(0), y = adc_read(1);
+    if (x == -1 || y == -1) return;
+    x = x > 1900 ? (x - 1900) : x < 1400 ? (x - 1400) : 0;
+    y = y > 1900 ? (y - 1900) : y < 1400 ? (y - 1400) : 0;
+    if (x && y) hid_report_mouse_move(HID_TARGET_ALL, x / 28, y / 28); // ±50
+}
+#   endif
+
+#   ifdef CONFIG_BASE_USE_KNOB
 static knob_handle_t knob;
-static const char *KTAG = "Knob";
+static const char *KTAG = "knob";
 
 static void cb_knob(void *arg, void *data) {
     switch (iot_knob_get_event(arg)) {
     case KNOB_LEFT:
         ESP_LOGD(KTAG, "left rotate %d", iot_knob_get_count_value(arg));
-        hid_report_dial(HID_TARGET_ALL, DIAL_L);
+        hid_report_sdial(HID_TARGET_ALL, SDIAL_L);
         break;
     case KNOB_RIGHT:
         ESP_LOGD(KTAG, "right rotate %d", iot_knob_get_count_value(arg));
-        hid_report_dial(HID_TARGET_ALL, DIAL_R);
+        hid_report_sdial(HID_TARGET_ALL, SDIAL_R);
         break;
     default: break;
     }
 }
-#endif
+#   endif
+#endif // CONFIG_BASE_USE_BTN
 
 static void gpio_initialize() {
-#ifdef CONFIG_BASE_USE_KNOB
-    knob_event_t events[] = { KNOB_LEFT, KNOB_RIGHT };
-    knob_config_t knob_conf = {
-        .default_direction = 0,     // 0:positive; 1:negative
-        .gpio_encoder_a = PIN_ENCA,
-        .gpio_encoder_b = PIN_ENCB
-    };
-    if (!( knob = iot_knob_create(&knob_conf) )) {
-        ESP_LOGE(KTAG, "bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
-    } else ITERV(event, events) {
-        iot_knob_register_cb(knob, event, cb_knob, NULL);
-    }
-#endif
 #ifdef CONFIG_BASE_USE_BTN
 #   ifdef CONFIG_BASE_BTN_INPUT
     button_config_t btn_conf = {
@@ -1019,7 +1049,7 @@ static void gpio_initialize() {
     if (!usage || startswith(usage, "Strapping")) {
         button_config_t io0_conf = {
             .type = BUTTON_TYPE_GPIO,
-            .gpio_button_config = { .gpio_num = GPIO_NUM_0 }
+            .gpio_button_config = { .gpio_num = GPIO_NUM_0 },
         };
         btn[1] = button_init(&io0_conf, GPIO_NUM_0, cb_button);
         if (btn[1] && !usage) {
@@ -1032,22 +1062,37 @@ static void gpio_initialize() {
     }
 #   endif
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
-    btn_conf.type = BUTTON_TYPE_ADC;
-    btn_conf.long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20;
-#   ifdef TARGET_IDF_5
-    btn_conf.adc_button_config.adc_handle = adc.oneshot;
-#   endif
+    button_config_t adc_conf = {
+        .type = BUTTON_TYPE_ADC,
+        .long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20,
+#       ifdef TARGET_IDF_5
+        .adc_button_config = { .adc_handle = adc.oneshot },
+#       endif
+    };
     LOOPN(i, LEN(adc.chans)) {
         if (adc.chans[i] == ADC_CHANNEL_MAX) continue;
-        btn_conf.adc_button_config.adc_channel = adc.chans[i];
-        btn_conf.adc_button_config.button_index = 0;
-        btn_conf.adc_button_config.min = 0;
-        btn_conf.adc_button_config.max = 1400; // 0.0-1.4V
-        jstk[2 * i + 0] = button_init(&btn_conf, adc.pins[i], cb_joystick);
-        btn_conf.adc_button_config.button_index = 1;
-        btn_conf.adc_button_config.min = 1900;
-        btn_conf.adc_button_config.max = 3300; // 1.9-3.3V
-        jstk[2 * i + 1] = button_init(&btn_conf, adc.pins[i], cb_joystick);
+        adc_conf.adc_button_config.adc_channel = adc.chans[i];
+        adc_conf.adc_button_config.button_index = 0;
+        adc_conf.adc_button_config.min = 0;
+        adc_conf.adc_button_config.max = 1400; // 0.0-1.4V
+        jstk[2 * i + 0] = button_init(&adc_conf, adc.pins[i], cb_joystick);
+        adc_conf.adc_button_config.button_index = 1;
+        adc_conf.adc_button_config.min = 1900;
+        adc_conf.adc_button_config.max = 3300; // 1.9-3.3V
+        jstk[2 * i + 1] = button_init(&adc_conf, adc.pins[i], cb_joystick);
+    }
+#   endif
+#   ifdef CONFIG_BASE_USE_KNOB
+    knob_event_t events[] = { KNOB_LEFT, KNOB_RIGHT };
+    knob_config_t knob_conf = {
+        .default_direction = 0,     // 0:positive; 1:negative
+        .gpio_encoder_a = PIN_ENCA,
+        .gpio_encoder_b = PIN_ENCB
+    };
+    if (!( knob = iot_knob_create(&knob_conf) )) {
+        ESP_LOGE(KTAG, "bind to GPIO%d & %d failed", PIN_ENCA, PIN_ENCB);
+    } else ITERV(event, events) {
+        iot_knob_register_cb(knob, event, cb_knob, NULL);
     }
 #   endif
 #endif
@@ -1150,7 +1195,8 @@ static void twdt_initialize() {
 
 void driver_initialize() {
     const char * tags[] = {
-        "gpio", "button", "adc button", "led_indicator", "Knob",
+        "gpio", "led_indicator",
+        "button", "adc button", "knob",
         "cam_hal", "camera",
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }

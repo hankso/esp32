@@ -1,6 +1,6 @@
 // Modified on github.com/hankso/EmBCI
 
-import { strftime } from '@/utils'
+import { strftime, getMonotonic } from '@/utils'
 
 // For compatiability
 //   - Chromium
@@ -80,9 +80,9 @@ export default function LoopFrame(
 
     function loop(dt) {
         if (cnt++ % divider < 0.1) return
-        if (!lasttime) lasttime = get_monotonic()
+        if (!lasttime) lasttime = getMonotonic()
         callback(dt)
-        let thistime = get_monotonic()
+        let thistime = getMonotonic()
         let frametime = thistime - lasttime
         lasttime = thistime
         rfps = 1000 / frametime

@@ -9,14 +9,19 @@
  *  /docs   GET     Serve static files from /flashfs/docs/ folder
  *  /       GET     Serve static files from /flashfs/www/ folder
  *
- * API list:
+ * API list (for STA & AP mode):
  *  Name    Method  Description (for STA & AP mode)
  *  /ws     POST    Websocket connection point: messages are parsed as JSON
  *  /alive  GET     Just respond `200 OK`
  *  /exec   POST    Manually send in command string just like using console
  *                  - param `?cmd=str&gcode=str`
+ *  /media  GET     Fetch or check multi-media (audio / video) streaming
+ *                  - param `?video=<mjpg|config>&audo=<wav|config>`
+ *  /media  POST    Update microphone or camera configs
+ *                  - param `?video=config&audio=config`
  *
- *  Name    Method  Description (for AP mode only and auth needed)
+ * API list (for AP mode only and auth needed):
+ *  Name    Method  Description
  *  /edit   GET     Online Editor page
  *                  - param `?path=str&list&download`
  *  /edit   PUT     Create file|dir

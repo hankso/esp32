@@ -39,27 +39,27 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 
-typedef struct PACKED {
+typedef struct {
     u32 srate;      // sample rate
     u16 nch;        // number of channels
     u16 depth;      // Bytes per channel per sample (i.e. BPC)
-} audio_mode_t;
+} PACKED audio_mode_t;
 
-typedef struct PACKED {
+typedef struct {
     u16 fps;        // frame per second
     u16 width;      // frame width in pixel
     u16 height;     // frame height in pixel
     u16 depth;      // frame depth in Byte
     fcc fourcc;
-} video_mode_t;
+} PACKED video_mode_t;
 
-typedef struct PACKED {
+typedef struct {
     size_t id;
     size_t len;
     void *data;
     void *task;
     audio_mode_t *mode;
-} audio_evt_t;
+} PACKED audio_evt_t;
 
 typedef struct {
     size_t id;
@@ -67,7 +67,7 @@ typedef struct {
     void *data;
     void *task;
     video_mode_t *mode;
-} video_evt_t;
+} PACKED video_evt_t;
 
 // esp_event_post keeps a copy of event_data instead of passing it (a pointer)
 // directly to the event handlers. To avoid copying whole xxx_evt_t structure,
@@ -100,7 +100,7 @@ enum {
 #define CAMERA_PRINT(s) avc_command(NULL, IMAGE_TARGET | ACTION_READ, 0, (s))
 esp_err_t avc_command(const char *ctrl, int tgt, uint32_t tout_ms, FILE *out);
 
-typedef struct PACKED {
+typedef struct {
 #define WAV_HEADER_FMT_LEN 16
     fcc RIFF; u32 filelen;
     fcc WAVE;
@@ -112,9 +112,9 @@ typedef struct PACKED {
         u16 BpS;    // Bytes per Sample
         u16 bpC;    // bits per Channel (per sample)
     fcc data; u32 datalen;
-} wav_header_t;
+} PACKED wav_header_t;
 
-typedef struct PACKED {
+typedef struct {
 #define AVI_HEADER_HDLR_LEN 192
 #define AVI_HEADER_AVIH_LEN 56
 #define AVI_HEADER_STRL_LEN 116
@@ -164,12 +164,12 @@ typedef struct PACKED {
                 u32 color_used;
                 u32 color_import;
     fcc LST3; u32 lst3len; fcc movi;
-} avi_header_t;
+} PACKED avi_header_t;
 
-typedef struct PACKED {
+typedef struct {
     fcc two_code;   // e.g. 00dc for compressed video frames
     u32 length;
-} avi_frame_t;
+} PACKED avi_frame_t;
 
 #ifdef __cplusplus
 }

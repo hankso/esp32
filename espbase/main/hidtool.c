@@ -5,428 +5,150 @@
  */
 
 #include "hidtool.h"
-#include "usbmode.h"
-#include "btmode.h"
-#include "screen.h"
+#include "hiddesc.h"
+#include "filesys.h"            // for filesys_load
+#include "usbmode.h"            // for hidu_send_report
+#include "btmode.h"             // for hidb_send_report
+#include "screen.h"             // for screen_command
 #include "config.h"
-
-#ifdef WITH_TUSB
-#   include "tusb.h"
-#   include "class/hid/hid.h"
-#   include "class/hid/hid_device.h"
-#else
-
-// Copied from tinyusb-v0.9.0/src/class/hid/hid.h
-
-//------------- ITEM & TAG -------------//
-#   define HID_REPORT_DATA_0(data)
-#   define HID_REPORT_DATA_1(data)  , data
-#   define HID_REPORT_DATA_2(data)  , (data) & 0xFF, ((data) >> 8) & 0xFF
-
-#   define HID_REPORT_ITEM(data, tag, type, size) \
-           (((tag) << 4) | ((type) << 2) | (size)) HID_REPORT_DATA_##size(data)
-
-#   define RI_TYPE_MAIN             0
-#   define RI_TYPE_GLOBAL           1
-#   define RI_TYPE_LOCAL            2
-
-//------------- MAIN ITEMS 6.2.2.4 -------------//
-#   define HID_INPUT(x)             HID_REPORT_ITEM(x,  8, RI_TYPE_MAIN, 1)
-#   define HID_OUTPUT(x)            HID_REPORT_ITEM(x,  9, RI_TYPE_MAIN, 1)
-#   define HID_COLLECTION(x)        HID_REPORT_ITEM(x, 10, RI_TYPE_MAIN, 1)
-#   define HID_FEATURE(x)           HID_REPORT_ITEM(x, 11, RI_TYPE_MAIN, 1)
-#   define HID_COLLECTION_END       HID_REPORT_ITEM(x, 12, RI_TYPE_MAIN, 0)
-
-//------------- INPUT, OUTPUT, FEATURE 6.2.2.5 -------------//
-#   define HID_DATA                 (0<<0)
-#   define HID_CONSTANT             (1<<0)
-#   define HID_ARRAY                (0<<1)
-#   define HID_VARIABLE             (1<<1)
-#   define HID_ABSOLUTE             (0<<2)
-#   define HID_RELATIVE             (1<<2)
-#   define HID_WRAP_NO              (0<<3)
-#   define HID_WRAP                 (1<<3)
-#   define HID_LINEAR               (0<<4)
-#   define HID_NONLINEAR            (1<<4)
-#   define HID_PREFERRED_STATE      (0<<5)
-#   define HID_PREFERRED_NO         (1<<5)
-#   define HID_NO_NULL_POSITION     (0<<6)
-#   define HID_NULL_STATE           (1<<6)
-#   define HID_NON_VOLATILE         (0<<7)
-#   define HID_VOLATILE             (1<<7)
-#   define HID_BITFIELD             (0<<8)
-#   define HID_BUFFERED_BYTES       (1<<8)
-
-//------------- COLLECTION ITEM 6.2.2.6 -------------//
-enum {
-    HID_COLLECTION_PHYSICAL = 0,
-    HID_COLLECTION_APPLICATION,
-    HID_COLLECTION_LOGICAL,
-    HID_COLLECTION_REPORT,
-    HID_COLLECTION_NAMED_ARRAY,
-    HID_COLLECTION_USAGE_SWITCH,
-    HID_COLLECTION_USAGE_MODIFIER
-};
-
-//------------- GLOBAL ITEMS 6.2.2.7 -------------//
-#   define HID_USAGE_PAGE(x)        HID_REPORT_ITEM(x, 0, RI_TYPE_GLOBAL, 1)
-#   define HID_USAGE_PAGE_N(x, n)   HID_REPORT_ITEM(x, 0, RI_TYPE_GLOBAL, n)
-#   define HID_LOGICAL_MIN(x)       HID_REPORT_ITEM(x, 1, RI_TYPE_GLOBAL, 1)
-#   define HID_LOGICAL_MIN_N(x, n)  HID_REPORT_ITEM(x, 1, RI_TYPE_GLOBAL, n)
-#   define HID_LOGICAL_MAX(x)       HID_REPORT_ITEM(x, 2, RI_TYPE_GLOBAL, 1)
-#   define HID_LOGICAL_MAX_N(x, n)  HID_REPORT_ITEM(x, 2, RI_TYPE_GLOBAL, n)
-#   define HID_PHYSICAL_MIN(x)      HID_REPORT_ITEM(x, 3, RI_TYPE_GLOBAL, 1)
-#   define HID_PHYSICAL_MIN_N(x, n) HID_REPORT_ITEM(x, 3, RI_TYPE_GLOBAL, n)
-#   define HID_PHYSICAL_MAX(x)      HID_REPORT_ITEM(x, 4, RI_TYPE_GLOBAL, 1)
-#   define HID_PHYSICAL_MAX_N(x, n) HID_REPORT_ITEM(x, 4, RI_TYPE_GLOBAL, n)
-#   define HID_UNIT_EXPONENT(x)     HID_REPORT_ITEM(x, 5, RI_TYPE_GLOBAL, 1)
-#   define HID_UNIT_EXPONENT_N(x, n) HID_REPORT_ITEM(x, 5, RI_TYPE_GLOBAL, n)
-#   define HID_UNIT(x)              HID_REPORT_ITEM(x, 6, RI_TYPE_GLOBAL, 1)
-#   define HID_UNIT_N(x, n)         HID_REPORT_ITEM(x, 6, RI_TYPE_GLOBAL, n)
-#   define HID_REPORT_SIZE(x)       HID_REPORT_ITEM(x, 7, RI_TYPE_GLOBAL, 1)
-#   define HID_REPORT_SIZE_N(x, n)  HID_REPORT_ITEM(x, 7, RI_TYPE_GLOBAL, n)
-#   define HID_REPORT_ID(x)         HID_REPORT_ITEM(x, 8, RI_TYPE_GLOBAL, 1),
-#   define HID_REPORT_ID_N(x)       HID_REPORT_ITEM(x, 8, RI_TYPE_GLOBAL, n),
-#   define HID_REPORT_COUNT(x)      HID_REPORT_ITEM(x, 9, RI_TYPE_GLOBAL, 1)
-#   define HID_REPORT_COUNT_N(x, n) HID_REPORT_ITEM(x, 9, RI_TYPE_GLOBAL, n)
-#   define HID_PUSH                 HID_REPORT_ITEM(x, 10, RI_TYPE_GLOBAL, 0)
-#   define HID_POP                  HID_REPORT_ITEM(x, 11, RI_TYPE_GLOBAL, 0)
-#   define HID_USAGE(x)             HID_REPORT_ITEM(x, 0, RI_TYPE_LOCAL, 1)
-#   define HID_USAGE_N(x, n)        HID_REPORT_ITEM(x, 0, RI_TYPE_LOCAL, n)
-#   define HID_USAGE_MIN(x)         HID_REPORT_ITEM(x, 1, RI_TYPE_LOCAL, 1)
-#   define HID_USAGE_MIN_N(x, n)    HID_REPORT_ITEM(x, 1, RI_TYPE_LOCAL, n)
-#   define HID_USAGE_MAX(x)         HID_REPORT_ITEM(x, 2, RI_TYPE_LOCAL, 1)
-#   define HID_USAGE_MAX_N(x, n)    HID_REPORT_ITEM(x, 2, RI_TYPE_LOCAL, n)
-
-/// HID Usage Table - Table 1: Usage Page Summary
-enum {
-    HID_USAGE_PAGE_DESKTOP         = 0x01,
-    HID_USAGE_PAGE_SIMULATE        = 0x02,
-    HID_USAGE_PAGE_VIRTUAL_REALITY = 0x03,
-    HID_USAGE_PAGE_SPORT           = 0x04,
-    HID_USAGE_PAGE_GAME            = 0x05,
-    HID_USAGE_PAGE_GENERIC_DEVICE  = 0x06,
-    HID_USAGE_PAGE_KEYBOARD        = 0x07,
-    HID_USAGE_PAGE_LED             = 0x08,
-    HID_USAGE_PAGE_BUTTON          = 0x09,
-    HID_USAGE_PAGE_ORDINAL         = 0x0a,
-    HID_USAGE_PAGE_TELEPHONY       = 0x0b,
-    HID_USAGE_PAGE_CONSUMER        = 0x0c,
-    HID_USAGE_PAGE_DIGITIZER       = 0x0d,
-    HID_USAGE_PAGE_PID             = 0x0f,
-    HID_USAGE_PAGE_UNICODE         = 0x10,
-    HID_USAGE_PAGE_ALPHA_DISPLAY   = 0x14,
-    HID_USAGE_PAGE_MEDICAL         = 0x40,
-    HID_USAGE_PAGE_MONITOR         = 0x80, // 0x80 - 0x83
-    HID_USAGE_PAGE_POWER           = 0x84, // 0x84 - 0x87
-    HID_USAGE_PAGE_BARCODE_SCANNER = 0x8c,
-    HID_USAGE_PAGE_SCALE           = 0x8d,
-    HID_USAGE_PAGE_MSR             = 0x8e,
-    HID_USAGE_PAGE_CAMERA          = 0x90,
-    HID_USAGE_PAGE_ARCADE          = 0x91,
-    HID_USAGE_PAGE_VENDOR          = 0xFF00 // 0xFF00 - 0xFFFF
-};
-
-/// HID Usage Table - Table 6: Generic Desktop Page
-enum {
-    HID_USAGE_DESKTOP_POINTER                               = 0x01,
-    HID_USAGE_DESKTOP_MOUSE                                 = 0x02,
-    HID_USAGE_DESKTOP_JOYSTICK                              = 0x04,
-    HID_USAGE_DESKTOP_GAMEPAD                               = 0x05,
-    HID_USAGE_DESKTOP_KEYBOARD                              = 0x06,
-    HID_USAGE_DESKTOP_KEYPAD                                = 0x07,
-    HID_USAGE_DESKTOP_MULTI_AXIS_CONTROLLER                 = 0x08,
-    HID_USAGE_DESKTOP_TABLET_PC_SYSTEM                      = 0x09,
-    HID_USAGE_DESKTOP_X                                     = 0x30,
-    HID_USAGE_DESKTOP_Y                                     = 0x31,
-    HID_USAGE_DESKTOP_Z                                     = 0x32,
-    HID_USAGE_DESKTOP_RX                                    = 0x33,
-    HID_USAGE_DESKTOP_RY                                    = 0x34,
-    HID_USAGE_DESKTOP_RZ                                    = 0x35,
-    HID_USAGE_DESKTOP_SLIDER                                = 0x36,
-    HID_USAGE_DESKTOP_DIAL                                  = 0x37,
-    HID_USAGE_DESKTOP_WHEEL                                 = 0x38,
-    HID_USAGE_DESKTOP_HAT_SWITCH                            = 0x39,
-    HID_USAGE_DESKTOP_COUNTED_BUFFER                        = 0x3a,
-    HID_USAGE_DESKTOP_BYTE_COUNT                            = 0x3b,
-    HID_USAGE_DESKTOP_MOTION_WAKEUP                         = 0x3c,
-    HID_USAGE_DESKTOP_START                                 = 0x3d,
-    HID_USAGE_DESKTOP_SELECT                                = 0x3e,
-    HID_USAGE_DESKTOP_VX                                    = 0x40,
-    HID_USAGE_DESKTOP_VY                                    = 0x41,
-    HID_USAGE_DESKTOP_VZ                                    = 0x42,
-    HID_USAGE_DESKTOP_VBRX                                  = 0x43,
-    HID_USAGE_DESKTOP_VBRY                                  = 0x44,
-    HID_USAGE_DESKTOP_VBRZ                                  = 0x45,
-    HID_USAGE_DESKTOP_VNO                                   = 0x46,
-    HID_USAGE_DESKTOP_FEATURE_NOTIFICATION                  = 0x47,
-    HID_USAGE_DESKTOP_RESOLUTION_MULTIPLIER                 = 0x48,
-    HID_USAGE_DESKTOP_SYSTEM_CONTROL                        = 0x80,
-    HID_USAGE_DESKTOP_SYSTEM_POWER_DOWN                     = 0x81,
-    HID_USAGE_DESKTOP_SYSTEM_SLEEP                          = 0x82,
-    HID_USAGE_DESKTOP_SYSTEM_WAKE_UP                        = 0x83,
-    HID_USAGE_DESKTOP_SYSTEM_CONTEXT_MENU                   = 0x84,
-    HID_USAGE_DESKTOP_SYSTEM_MAIN_MENU                      = 0x85,
-    HID_USAGE_DESKTOP_SYSTEM_APP_MENU                       = 0x86,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_HELP                      = 0x87,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_EXIT                      = 0x88,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_SELECT                    = 0x89,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_RIGHT                     = 0x8A,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_LEFT                      = 0x8B,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_UP                        = 0x8C,
-    HID_USAGE_DESKTOP_SYSTEM_MENU_DOWN                      = 0x8D,
-    HID_USAGE_DESKTOP_SYSTEM_COLD_RESTART                   = 0x8E,
-    HID_USAGE_DESKTOP_SYSTEM_WARM_RESTART                   = 0x8F,
-    HID_USAGE_DESKTOP_DPAD_UP                               = 0x90,
-    HID_USAGE_DESKTOP_DPAD_DOWN                             = 0x91,
-    HID_USAGE_DESKTOP_DPAD_RIGHT                            = 0x92,
-    HID_USAGE_DESKTOP_DPAD_LEFT                             = 0x93,
-    HID_USAGE_DESKTOP_SYSTEM_DOCK                           = 0xA0,
-    HID_USAGE_DESKTOP_SYSTEM_UNDOCK                         = 0xA1,
-    HID_USAGE_DESKTOP_SYSTEM_SETUP                          = 0xA2,
-    HID_USAGE_DESKTOP_SYSTEM_BREAK                          = 0xA3,
-    HID_USAGE_DESKTOP_SYSTEM_DEBUGGER_BREAK                 = 0xA4,
-    HID_USAGE_DESKTOP_APPLICATION_BREAK                     = 0xA5,
-    HID_USAGE_DESKTOP_APPLICATION_DEBUGGER_BREAK            = 0xA6,
-    HID_USAGE_DESKTOP_SYSTEM_SPEAKER_MUTE                   = 0xA7,
-    HID_USAGE_DESKTOP_SYSTEM_HIBERNATE                      = 0xA8,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_INVERT                 = 0xB0,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_INTERNAL               = 0xB1,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_EXTERNAL               = 0xB2,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_BOTH                   = 0xB3,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_DUAL                   = 0xB4,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_TOGGLE_INT_EXT         = 0xB5,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_SWAP_PRIMARY_SECONDARY = 0xB6,
-    HID_USAGE_DESKTOP_SYSTEM_DISPLAY_LCD_AUTOSCALE          = 0xB7
-};
-
-/// HID Usage Table: Consumer Page (0x0C)
-/// Only contains controls that supported by Windows (whole list is too long)
-enum {
-    // Generic Control
-    HID_USAGE_CONSUMER_CONTROL                           = 0x0001,
-
-    // Power Control
-    HID_USAGE_CONSUMER_POWER                             = 0x0030,
-    HID_USAGE_CONSUMER_RESET                             = 0x0031,
-    HID_USAGE_CONSUMER_SLEEP                             = 0x0032,
-
-    // Screen Brightness
-    HID_USAGE_CONSUMER_BRIGHTNESS_INCREMENT              = 0x006F,
-    HID_USAGE_CONSUMER_BRIGHTNESS_DECREMENT              = 0x0070,
-
-    // These HID usages operate only on mobile systems (battery powered) and
-    // require Windows 8 (build 8302 or greater).
-    HID_USAGE_CONSUMER_WIRELESS_RADIO_CONTROLS           = 0x000C,
-    HID_USAGE_CONSUMER_WIRELESS_RADIO_BUTTONS            = 0x00C6,
-    HID_USAGE_CONSUMER_WIRELESS_RADIO_LED                = 0x00C7,
-    HID_USAGE_CONSUMER_WIRELESS_RADIO_SLIDER_SWITCH      = 0x00C8,
-
-    // Media Control
-    HID_USAGE_CONSUMER_PLAY_PAUSE                        = 0x00CD,
-    HID_USAGE_CONSUMER_SCAN_NEXT                         = 0x00B5,
-    HID_USAGE_CONSUMER_SCAN_PREVIOUS                     = 0x00B6,
-    HID_USAGE_CONSUMER_STOP                              = 0x00B7,
-    HID_USAGE_CONSUMER_VOLUME                            = 0x00E0,
-    HID_USAGE_CONSUMER_MUTE                              = 0x00E2,
-    HID_USAGE_CONSUMER_BASS                              = 0x00E3,
-    HID_USAGE_CONSUMER_TREBLE                            = 0x00E4,
-    HID_USAGE_CONSUMER_BASS_BOOST                        = 0x00E5,
-    HID_USAGE_CONSUMER_VOLUME_INCREMENT                  = 0x00E9,
-    HID_USAGE_CONSUMER_VOLUME_DECREMENT                  = 0x00EA,
-    HID_USAGE_CONSUMER_BASS_INCREMENT                    = 0x0152,
-    HID_USAGE_CONSUMER_BASS_DECREMENT                    = 0x0153,
-    HID_USAGE_CONSUMER_TREBLE_INCREMENT                  = 0x0154,
-    HID_USAGE_CONSUMER_TREBLE_DECREMENT                  = 0x0155,
-
-    // Application Launcher
-    HID_USAGE_CONSUMER_AL_CONSUMER_CONTROL_CONFIGURATION = 0x0183,
-    HID_USAGE_CONSUMER_AL_EMAIL_READER                   = 0x018A,
-    HID_USAGE_CONSUMER_AL_CALCULATOR                     = 0x0192,
-    HID_USAGE_CONSUMER_AL_LOCAL_BROWSER                  = 0x0194,
-
-    // Browser/Explorer Specific
-    HID_USAGE_CONSUMER_AC_SEARCH                         = 0x0221,
-    HID_USAGE_CONSUMER_AC_HOME                           = 0x0223,
-    HID_USAGE_CONSUMER_AC_BACK                           = 0x0224,
-    HID_USAGE_CONSUMER_AC_FORWARD                        = 0x0225,
-    HID_USAGE_CONSUMER_AC_STOP                           = 0x0226,
-    HID_USAGE_CONSUMER_AC_REFRESH                        = 0x0227,
-    HID_USAGE_CONSUMER_AC_BOOKMARKS                      = 0x022A,
-
-    // Mouse Horizontal scroll
-    HID_USAGE_CONSUMER_AC_PAN                            = 0x0238,
-};
-
-// Copied from tinyusb/class/hid/hid_device.h
-#   define TUD_HID_REPORT_DESC_KEYBOARD(...)                                \
-    HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP     )                          ,\
-    HID_USAGE      ( HID_USAGE_DESKTOP_KEYBOARD )                          ,\
-    HID_COLLECTION ( HID_COLLECTION_APPLICATION )                          ,\
-        __VA_ARGS__ /* Report ID if any */                                  \
-        /* 8 bits Modifier Keys (Shfit, Control, Alt, GUI) */               \
-        HID_USAGE_PAGE ( HID_USAGE_PAGE_KEYBOARD )                         ,\
-            HID_USAGE_MIN    ( 224                                       ) ,\
-            HID_USAGE_MAX    ( 231                                       ) ,\
-            HID_LOGICAL_MIN  ( 0                                         ) ,\
-            HID_LOGICAL_MAX  ( 1                                         ) ,\
-            HID_REPORT_COUNT ( 8                                         ) ,\
-            HID_REPORT_SIZE  ( 1                                         ) ,\
-            HID_INPUT        ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE    ) ,\
-            /* 8 bit reserved */                                            \
-            HID_REPORT_COUNT ( 1                                         ) ,\
-            HID_REPORT_SIZE  ( 8                                         ) ,\
-            HID_INPUT        ( HID_CONSTANT                              ) ,\
-        /* 6-byte Keycodes */                                               \
-        HID_USAGE_PAGE ( HID_USAGE_PAGE_KEYBOARD )                         ,\
-            HID_USAGE_MIN    ( 0                                         ) ,\
-            HID_USAGE_MAX    ( 255                                       ) ,\
-            HID_LOGICAL_MIN  ( 0                                         ) ,\
-            HID_LOGICAL_MAX  ( 255                                       ) ,\
-            HID_REPORT_COUNT ( 6                                         ) ,\
-            HID_REPORT_SIZE  ( 8                                         ) ,\
-            HID_INPUT        ( HID_DATA | HID_ARRAY | HID_ABSOLUTE       ) ,\
-        /* 5-bit LED Kana | Compose | ScrollLock | CapsLock | NumLock */    \
-        HID_USAGE_PAGE  ( HID_USAGE_PAGE_LED )                             ,\
-            HID_USAGE_MIN    ( 1                                         ) ,\
-            HID_USAGE_MAX    ( 5                                         ) ,\
-            HID_REPORT_COUNT ( 5                                         ) ,\
-            HID_REPORT_SIZE  ( 1                                         ) ,\
-            HID_OUTPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE    ) ,\
-            /* led padding */                                               \
-            HID_REPORT_COUNT ( 1                                         ) ,\
-            HID_REPORT_SIZE  ( 3                                         ) ,\
-            HID_OUTPUT       ( HID_CONSTANT                              ) ,\
-    HID_COLLECTION_END
-
-#   define TUD_HID_REPORT_DESC_MOUSE(...)                                   \
-    HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP      )                         ,\
-    HID_USAGE      ( HID_USAGE_DESKTOP_MOUSE     )                         ,\
-    HID_COLLECTION ( HID_COLLECTION_APPLICATION  )                         ,\
-        __VA_ARGS__ /* Report ID if any */                                  \
-        HID_USAGE      ( HID_USAGE_DESKTOP_POINTER )                       ,\
-        HID_COLLECTION ( HID_COLLECTION_PHYSICAL   )                       ,\
-            HID_USAGE_PAGE  ( HID_USAGE_PAGE_BUTTON  )                     ,\
-                HID_USAGE_MIN   ( 1                                      ) ,\
-                HID_USAGE_MAX   ( 5                                      ) ,\
-                HID_LOGICAL_MIN ( 0                                      ) ,\
-                HID_LOGICAL_MAX ( 1                                      ) ,\
-                /* Left, Right, Middle, Backward, Forward buttons */        \
-                HID_REPORT_COUNT( 5                                      ) ,\
-                HID_REPORT_SIZE ( 1                                      ) ,\
-                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE ) ,\
-                /* 3 bit padding */                                         \
-                HID_REPORT_COUNT( 1                                      ) ,\
-                HID_REPORT_SIZE ( 3                                      ) ,\
-                HID_INPUT       ( HID_CONSTANT                           ) ,\
-            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP )                     ,\
-                /* X, Y position [-127, 127] */                             \
-                HID_USAGE       ( HID_USAGE_DESKTOP_X                    ) ,\
-                HID_USAGE       ( HID_USAGE_DESKTOP_Y                    ) ,\
-                HID_LOGICAL_MIN ( 0x81                                   ) ,\
-                HID_LOGICAL_MAX ( 0x7f                                   ) ,\
-                HID_REPORT_COUNT( 2                                      ) ,\
-                HID_REPORT_SIZE ( 8                                      ) ,\
-                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_RELATIVE ) ,\
-                /* Verital wheel scroll [-127, 127] */                      \
-                HID_USAGE       ( HID_USAGE_DESKTOP_WHEEL                ) ,\
-                HID_LOGICAL_MIN ( 0x81                                   ) ,\
-                HID_LOGICAL_MAX ( 0x7f                                   ) ,\
-                HID_REPORT_COUNT( 1                                      ) ,\
-                HID_REPORT_SIZE ( 8                                      ) ,\
-                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_RELATIVE ) ,\
-            HID_USAGE_PAGE  ( HID_USAGE_PAGE_CONSUMER ),                    \
-                /* Horizontal wheel scroll [-127, 127] */                   \
-                HID_USAGE_N     ( HID_USAGE_CONSUMER_AC_PAN, 2           ) ,\
-                HID_LOGICAL_MIN ( 0x81                                   ) ,\
-                HID_LOGICAL_MAX ( 0x7f                                   ) ,\
-                HID_REPORT_COUNT( 1                                      ) ,\
-                HID_REPORT_SIZE ( 8                                      ) ,\
-                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_RELATIVE ) ,\
-        HID_COLLECTION_END                                                 ,\
-    HID_COLLECTION_END
-
-#endif // WITH_TUSB
-
-#define TUD_HID_REPORT_DESC_DIAL(...)                                       \
-    HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP )                              ,\
-    HID_USAGE      ( 0x0E )                                                ,\
-    HID_COLLECTION ( HID_COLLECTION_APPLICATION )                          ,\
-        __VA_ARGS__ /* Report ID if any */                                  \
-        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER )                        ,\
-        HID_USAGE      ( 0x21 )                                            ,\
-        HID_COLLECTION ( HID_COLLECTION_PHYSICAL )                         ,\
-            HID_USAGE_PAGE   ( HID_USAGE_PAGE_BUTTON )                     ,\
-            HID_USAGE        ( 1 )                                         ,\
-            HID_REPORT_COUNT ( 1                                         ) ,\
-            HID_REPORT_SIZE  ( 1                                         ) ,\
-            HID_LOGICAL_MIN  ( 0                                         ) ,\
-            HID_LOGICAL_MAX  ( 1                                         ) ,\
-            HID_INPUT        ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE    ) ,\
-            HID_USAGE_PAGE   ( HID_USAGE_PAGE_DESKTOP )                    ,\
-            HID_USAGE        ( HID_USAGE_DESKTOP_DIAL )                    ,\
-            HID_REPORT_COUNT ( 1                                         ) ,\
-            HID_REPORT_SIZE  ( 15                                        ) ,\
-            HID_UNIT_EXPONENT( 0x0F                                      ) ,\
-                /* HID Unit: English Rotation - Angular Position */         \
-                HID_UNIT           ( 0x14 )                                ,\
-                HID_PHYSICAL_MIN_N ( -3600, 2                            ) ,\
-                HID_PHYSICAL_MAX_N (  3600, 2                            ) ,\
-                HID_LOGICAL_MIN_N  ( -3600, 2                            ) ,\
-                HID_LOGICAL_MAX_N  (  3600, 2                            ) ,\
-            HID_INPUT        ( HID_DATA | HID_VARIABLE | HID_RELATIVE    ) ,\
-        HID_COLLECTION_END                                                 ,\
-    HID_COLLECTION_END
-
-const uint8_t hid_descriptor_report[] = {
-    TUD_HID_REPORT_DESC_KEYBOARD(HID_REPORT_ID(REPORT_ID_KEYBD)),   // 65 Bytes
-    TUD_HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE)),      // 79 Bytes
-    TUD_HID_REPORT_DESC_DIAL(HID_REPORT_ID(REPORT_ID_DIAL)),        // 56 Bytes
-};
-
-const size_t hid_descriptor_report_len = sizeof(hid_descriptor_report); // 200
 
 static const char *TAG = "HIDTool";
 
-uint16_t hid_desc_version(uint16_t *arg) {
-    uint16_t version = 0;
-    int buf[3];
-    if (parse_all(Config.info.VER, buf, sizeof(buf)) >= 2)
-        version = ((buf[0] & 0xFF) << 8) | (buf[1] & 0xFF);
-    if (version && arg) *arg = version;
-    return version;
-}
+hidtool_t HIDTool = {
+    .pad = 0, .rlen = {
+        0,
+        SIZEOF(hid_report_t, keybd),
+        SIZEOF(hid_report_t, mouse),
+        SIZEOF(hid_report_t, gmpad),
+        SIZEOF(hid_report_t, sctrl),
+        SIZEOF(hid_report_t, sdial),
+    },
+    .desc = { 0 }, .dlen = 0,
+    .vid = 0xCAFE, .pid = 0x4000, .ver = 0,
+    .dstr = "", .vendor = "", .serial = "",
+};
 
-const char * hid_desc_vendor(const char **arg) {
+void hidtool_initialize() {
+    if (!strlen(Config.app.HID_MODE)) return;
+
+    int vals[2];
+    if (parse_all(Config.info.VER, vals, 2) == 2)
+        HIDTool.ver = ((vals[0] & 0xFF) << 8) | (vals[1] & 0xFF);
 #ifdef CONFIG_TINYUSB_DESC_MANUFACTURER_STRING
-    const char *vendor = CONFIG_TINYUSB_DESC_MANUFACTURER_STRING;
+    HIDTool.vendor = CONFIG_TINYUSB_DESC_MANUFACTURER_STRING;
 #else
-    const char *vendor = Config.info.NAME;
+    HIDTool.vendor = Config.info.NAME;
 #endif
-    if (strlen(vendor) && arg) *arg = vendor;
-    return vendor;
+    HIDTool.serial = Config.info.UID;
+
+    const char *hidfile = NULL;
+    if (!strcasecmp(Config.app.HID_MODE, "GENERAL")) {
+        HIDTool.vid = 0x16C0;   // libusb debug vendor id
+        HIDTool.vid = 0x05DF;
+        HIDTool.pad = GMPAD_GENERAL;
+        HIDTool.dstr = "Keybd(1), Mouse(2), Joyst(3), SCtrl(4), SDial(5)";
+        HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, general);
+        uint8_t desc[] = {
+            HID_REPORT_DESC_KEYBD(HID_REPORT_ID(REPORT_ID_KEYBD)),  // 69 Bytes
+            HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE)),  // 63 Bytes
+            HID_REPORT_DESC_GMPAD(HID_REPORT_ID(REPORT_ID_GMPAD)),  // 70 Bytes
+            HID_REPORT_DESC_SCTRL(HID_REPORT_ID(REPORT_ID_SCTRL)),  // 23 Bytes
+            HID_REPORT_DESC_SDIAL(HID_REPORT_ID(REPORT_ID_SDIAL)),  // 56 Bytes
+        };
+        if (sizeof(desc) < sizeof(HIDTool.desc))
+            memcpy(HIDTool.desc, desc, HIDTool.dlen = sizeof(desc));
+    } else if (!strcasecmp(Config.app.HID_MODE, "XINPUT")) {
+        HIDTool.vid = 0x045E;
+        HIDTool.pid = 0x0B13;
+        HIDTool.ver = 0x0509;
+        HIDTool.pad = GMPAD_XINPUT;
+        HIDTool.dstr = "Microsoft XInput compatible gamepad";
+        HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, xinput);
+        hidfile = "xinput.hid";                                     // 283 Bytes
+    } else if (!strcasecmp(Config.app.HID_MODE, "SWITCH")) {
+        HIDTool.vid = 0x057E;
+        HIDTool.pid = 0x2009;
+        HIDTool.ver = 0x0101;
+        HIDTool.pad = GMPAD_SWITCH;
+        HIDTool.dstr = "Mintendo wireless gamepad";
+        HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, nswitch);
+        hidfile = "switch.hid";                                     // 170 Bytes
+    } else if (!strcasecmp(Config.app.HID_MODE, "DSENSE")) {
+        HIDTool.vid = 0x054C;
+        HIDTool.pid = 0x0CE6;
+        HIDTool.ver = 0x0101;
+        HIDTool.pad = GMPAD_DSENSE;
+        HIDTool.dstr = "PlayStation DualSense gamepad";
+        HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, dsense);
+        hidfile = "dsense.hid";                                     // 279 Bytes
+    } else {
+        ESP_LOGE(TAG, "Unknown HID MODE: %s", Config.app.HID_MODE);
+        return;
+    }
+    if (hidfile) {
+        size_t dlen = sizeof(HIDTool.desc);     // skip files larger than buffer
+        const char *hidpath = fjoin(2, Config.sys.DIR_DATA, hidfile);
+        uint8_t *desc = fload(hidpath, &dlen);
+        if (desc) memcpy(HIDTool.desc, desc, HIDTool.dlen = dlen);
+        TRYFREE(desc);
+    }
+#ifdef CONFIG_BASE_DEBUG
+    if (HIDTool.dlen) {
+        printf("HID Descriptor (%d Bytes):", HIDTool.dlen);
+        LOOPN(i, HIDTool.dlen) {
+            if (i % 16 == 0) putchar('\n');
+            printf("%02X ", HIDTool.desc[i]);
+        }
+        putchar('\n');
+    }
+#endif
 }
 
-const char * hid_desc_serial(const char **arg) {
-    const char *serial = strlen(Config.info.UID ?: "") ? Config.info.UID : "";
-    if (strlen(serial) && arg) *arg = serial;
-    return serial;
-}
+static hid_gmpad_data_t gctx;   // defined here for logging
 
-bool hid_report_send(hid_target_t to, hid_report_t *report) {
+bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
     bool sent = false;
+    if (!rpt || !rpt->id || rpt->id >= REPORT_ID_MAX) {
+        if (rpt) ESP_LOGW(TAG, "Unknown report id: %d", rpt->id);
+        return sent;
+    }
+    if (!HIDTool.pad) {
+        if (rpt->id == REPORT_ID_GMPAD) return sent;
+    } else if (HIDTool.pad != GMPAD_GENERAL) {
+        if (rpt->id != REPORT_ID_GMPAD) return sent;
+    }
+    if (!rpt->size) rpt->size = HIDTool.rlen[rpt->id];
 #ifdef CONFIG_BASE_USB_HID_DEVICE
     if (to == HID_TARGET_USB || to == HID_TARGET_ALL)
-        sent |= hidu_send_report(report);
+        sent |= hidu_send_report(rpt);
 #endif
 #ifdef CONFIG_BASE_USE_BT
     if (to == HID_TARGET_BLE || to == HID_TARGET_ALL)
-        sent |= hidb_send_report(report);
+        sent |= hidb_send_report(rpt);
 #endif
 #ifdef CONFIG_BASE_USE_SCREEN
     if (to == HID_TARGET_SCN || to == HID_TARGET_ALL)
-        sent |= screen_command(SCN_INP, report) == ESP_OK;
+        sent |= screen_command(SCN_INP, rpt) == ESP_OK;
 #endif
+    if (to == HID_TARGET_SCN || !sent) {
+        // do nothing
+    } else if (rpt->id == REPORT_ID_KEYBD) {
+        uint8_t mod = rpt->keybd.modifier;
+        ESP_LOGI(TAG, "KEYBD MOD 0x%02X KEY %s",
+                mod, hid_keycodes_str(mod, rpt->keybd.keycode));
+    } else if (rpt->id == REPORT_ID_MOUSE) {
+        ESP_LOGI(TAG, "MOUSE X %4d Y %4d V %3d H %3d BTN %s",
+                rpt->mouse.x, rpt->mouse.y, rpt->mouse.wheel, rpt->mouse.pan,
+                hid_btncode_str(rpt->mouse.buttons));
+    } else if (rpt->id == REPORT_ID_GMPAD) {
+        ESP_LOGI(TAG, "GMPAD L %4d %-4d R %4d %-4d H %02X T %02X%02X BTN %s",
+                gctx.lx >> 8, gctx.ly >> 8, gctx.rx >> 8, gctx.ry >> 8,
+                gctx.dpad, gctx.lt, gctx.rt, format_binary(gctx.btns, 12));
+    } else if (rpt->id == REPORT_ID_SCTRL) {
+        ESP_LOGI(TAG, "SCTRL 0x%02X", rpt->sctrl);
+    } else if (rpt->id == REPORT_ID_SDIAL) {
+        ESP_LOGI(TAG, "SDIAL 0x%04X", *(uint16_t *)rpt->sdial);
+    }
     return sent;
 }
 
@@ -434,21 +156,199 @@ bool hid_report_send(hid_target_t to, hid_report_t *report) {
  * HID type: Surface Dial
  */
 
-bool hid_report_dial(hid_target_t to, hid_dial_keycode_t k) {
+bool hid_report_sdial(hid_target_t to, hid_sdial_keycode_t k) {
     hid_report_t report = {
-        .id = REPORT_ID_DIAL,
-        .dial = { k, (k == DIAL_L) ? 0xFF : 0 }
+        .id = REPORT_ID_SDIAL,
+        .sdial = { k, (k == SDIAL_L) ? 0xFF : 0 }
     };
     return hid_report_send(to, &report);
 }
 
-bool hid_report_dial_button(hid_target_t to, uint32_t ms) {
-    bool sent = hid_report_dial(to, DIAL_DN);
+bool hid_report_sdial_click(hid_target_t to, uint32_t ms) {
+    bool sent = hid_report_sdial(to, SDIAL_D);
     if (sent && ms) {
         msleep(ms);
-        sent = hid_report_dial(to, DIAL_UP);
+        sent = hid_report_sdial(to, SDIAL_U);
     }
     return sent;
+}
+
+/******************************************************************************
+ * HID type: System Control
+ */
+
+bool hid_report_sctrl(hid_target_t to, hid_sctrl_keycode_t k) {
+    hid_report_t report = { .id = REPORT_ID_SCTRL, .sctrl = k | 0x80 };
+    bool sent = hid_report_send(to, &report);
+    if (sent) {
+        msleep(50);
+        report.sctrl = 0;
+        sent = hid_report_send(to, &report);
+    }
+    return sent;
+}
+
+/******************************************************************************
+ * HID type: Game Pad
+ */
+
+static hid_report_t * gmpad_dump_data(hid_report_t *report) {
+    // bits  : 15  14  13  12   11    10     9    8     7  6  5  4  3 2 1 0
+    // gctx  : L   D   R   U    Share Home   Next Prev  RS LS RB LB Y X B A
+    // xinput: -   RS  LS  XBox Start Select -    -     RB LB -  Y  X - B A
+    // switch: -   -   Cap Home RS    LS     Plus Minus ZR ZL R  L  Y X B A
+    // dsense: -   -   Pad Home R3    L3     Opt  Share R2 L2 R1 L1 T C C S
+    hid_gmpad_report_t *rpt = &report->gmpad;
+    switch (HIDTool.pad) {
+    case GMPAD_GENERAL:
+        rpt->general.lx = gctx.lx * 0x7F / 0x7FFF;
+        rpt->general.ly = gctx.ly * 0x7F / 0x7FFF;
+        rpt->general.rx = gctx.rx * 0x7F / 0x7FFF;
+        rpt->general.ry = gctx.ry * 0x7F / 0x7FFF;
+        rpt->general.lz = gctx.lt - 0x80;
+        rpt->general.rz = gctx.rt - 0x80;
+        rpt->general.dpad = gctx.dpad;
+        rpt->general.btns = gctx.btns;
+        break;
+    case GMPAD_XINPUT:
+        rpt->xinput.lx = gctx.lx + 0x8000;
+        rpt->xinput.ly = gctx.ly + 0x8000;
+        rpt->xinput.rx = gctx.rx + 0x8000;
+        rpt->xinput.ry = gctx.ry + 0x8000;
+        rpt->xinput.lt = gctx.lt << 2;
+        rpt->xinput.rt = gctx.rt << 2;
+        rpt->xinput.dpad = gctx.dpad & 0xF;
+        rpt->xinput.btns = (
+            (gctx.btns & 0x03)                  |   // A, B
+            bitnread(gctx.btns, 2, 2) << 3      |   // X, Y
+            bitnread(gctx.btns, 4, 2) << 6      |   // LB, RB
+            bitnread(gctx.btns, 8, 3) << 10     |   // Select, Start, XBox
+            bitnread(gctx.btns, 6, 2) << 13         // LS, RS
+        );
+        rpt->xinput.share = (gctx.btns & GMPAD_BUTTON_SHARE) ? BIT0 : 0;
+        break;
+    case GMPAD_SWITCH:
+        rpt->nswitch.lx = gctx.lx + 0x8000;
+        rpt->nswitch.ly = gctx.ly + 0x8000;
+        rpt->nswitch.rx = gctx.rx + 0x8000;
+        rpt->nswitch.ry = gctx.ry + 0x8000;
+        rpt->nswitch.dpad = gctx.dpad & 0xF;
+        rpt->nswitch.btns = (
+            (gctx.btns & 0x33F)                 |   // A, B, X, Y, L, R, -, +
+            (gctx.lt ? BIT6 : 0)                |   // ZL
+            (gctx.rt ? BIT7 : 0)                |   // ZR
+            bitnread(gctx.btns, 6, 2) << 10     |   // LS, RS
+            bitnread(gctx.btns, 10, 2) << 12        // Home, Capture
+        );
+        break;
+    case GMPAD_DSENSE:
+        rpt->dsense.lx = gctx.lx * 0x7F / 0x7FFF;
+        rpt->dsense.ly = gctx.ly * 0x7F / 0x7FFF;
+        rpt->dsense.rx = gctx.rx * 0x7F / 0x7FFF;
+        rpt->dsense.ry = gctx.ry * 0x7F / 0x7FFF;
+        rpt->dsense.lt = gctx.lt;
+        rpt->dsense.rt = gctx.rt;
+        rpt->dsense.btns = (
+            (bitread(gctx.btns, 2) << 0)        |   // Square
+            (bitread(gctx.btns, 0) << 1)        |   // Cross
+            (bitread(gctx.btns, 1) << 2)        |   // Circle
+            (bitread(gctx.btns, 3) << 3)        |   // Triangle
+            (gctx.btns & 0x330)                 |   // L1, R1, Share, Option
+            (gctx.lt ? BIT6 : 0)                |   // L2
+            (gctx.rt ? BIT7 : 0)                |   // R2
+            bitnread(gctx.btns, 6, 2) << 10     |   // L3, R3
+            bitnread(gctx.btns, 10, 2) << 12        // Home, Pad
+        );
+        rpt->dsense.dpad = (gctx.dpad & 0xF) | (rpt->dsense.btns << 4);
+        rpt->dsense.btns >>= 4;
+        break;
+    }
+    return report;
+}
+
+static const uint16_t dpad_map[] = {
+    [GMPAD_DPAD_U]  = GMPAD_BUTTON_U,
+    [GMPAD_DPAD_UR] = GMPAD_BUTTON_U | GMPAD_BUTTON_R,
+    [GMPAD_DPAD_R]  = GMPAD_BUTTON_R,
+    [GMPAD_DPAD_DR] = GMPAD_BUTTON_D | GMPAD_BUTTON_R,
+    [GMPAD_DPAD_D]  = GMPAD_BUTTON_D,
+    [GMPAD_DPAD_DL] = GMPAD_BUTTON_D | GMPAD_BUTTON_L,
+    [GMPAD_DPAD_L]  = GMPAD_BUTTON_L,
+    [GMPAD_DPAD_UL] = GMPAD_BUTTON_U | GMPAD_BUTTON_L,
+};
+
+static uint16_t dir2bits(hid_gmpad_dpad_t dir) {
+    return dir < GMPAD_DPAD_MAX ? dpad_map[dir] : 0;
+}
+
+static hid_gmpad_dpad_t bits2dir(uint16_t bit) {
+    for (uint8_t dir = GMPAD_DPAD_NONE; dir < GMPAD_DPAD_MAX; dir++) {
+        if (dpad_map[dir] == (bit & 0xF000)) return dir; // bit 12-15
+    }
+    return GMPAD_DPAD_NONE;
+}
+
+bool hid_report_gmpad_dpad(
+    hid_target_t to, hid_gmpad_dpad_t dpad1, hid_gmpad_dpad_t dpad2
+) {
+    hid_report_t report = { .id = REPORT_ID_GMPAD };
+    gctx.btns = dir2bits(dpad1) | (gctx.btns & 0xFFF);
+    gctx.dpad = (dpad1 & 0xF) | ((dpad2 & 0xF) << 4);
+    return hid_report_send(to, gmpad_dump_data(&report));
+}
+
+bool hid_report_gmpad_trig(hid_target_t to, uint8_t lt, uint8_t rt) {
+    hid_report_t report = { .id = REPORT_ID_GMPAD };
+    gctx.lt = lt; gctx.rt = rt;
+    return hid_report_send(to, gmpad_dump_data(&report));
+}
+
+bool hid_report_gmpad_joyst(
+    hid_target_t to, int16_t lx, int16_t ly, int16_t rx, int16_t ry
+) {
+    hid_report_t report = { .id = REPORT_ID_GMPAD };
+    gctx.lx = lx; gctx.ly = ly; gctx.rx = rx; gctx.ry = ry;
+    return hid_report_send(to, gmpad_dump_data(&report));
+}
+
+bool hid_report_gmpad_click(hid_target_t to, const char *str, uint32_t ms) {
+    bool sent = false;
+    int idx = stridx(
+        str, "A|B|X|Y|LB|RB|LS|RS|PREV|NEXT|HOME|SHARE|U|R|D|L|UR|DR|DL|UL");
+    if (idx < 0) return sent;
+    if (idx < 16) {
+        sent = hid_report_gmpad_btn_add(to, BIT(idx));
+    } else if (idx < 20) {  // index 16~19 -> hid_gmpad_dpad_t 2,4,6,8
+        sent = hid_report_gmpad_dpad(to, 2 * idx - 30, 2 * idx - 30);
+    }
+    if (sent && ms) {
+        msleep(ms);
+        if (idx < 16) {
+            sent = hid_report_gmpad_btn_del(to, BIT(idx));
+        } else if (idx < 20) {
+            sent = hid_report_gmpad_dpad(to, 0, 0);
+        }
+    }
+    return sent;
+}
+
+bool hid_report_gmpad_button(hid_target_t to, uint16_t btn, uint8_t action) {
+    uint16_t val = gctx.btns;
+    if (action == 3) {
+        val = btn;
+    } else LOOPN(i, 16) {
+        if (!bitread(btn, i)) continue;
+        if (bitread(val, i)) {
+            if (action == 0 || action == 2) val &= ~BIT(i);
+        } else {
+            if (action == 1 || action == 2) val |= BIT(i);
+        }
+    }
+    if (val == gctx.btns) return true;
+    hid_report_t report = { .id = REPORT_ID_GMPAD };
+    gctx.btns = val;
+    gctx.dpad = bits2dir(val) | (gctx.dpad & 0xF0);
+    return hid_report_send(to, gmpad_dump_data(&report));
 }
 
 /******************************************************************************
@@ -512,7 +412,7 @@ void hid_handle_mouse(
     hid_key_cb key_cb, hid_pos_cb pos_cb
 ) {
     if (!rpt) return;
-    static int xs[HID_TARGET_CNT], ys[HID_TARGET_CNT], btns[HID_TARGET_CNT];
+    static int xs[HID_TARGET_MAX], ys[HID_TARGET_MAX], btns[HID_TARGET_MAX];
     xs[from] += rpt->x;
     ys[from] += rpt->y;
     if (pos_cb) pos_cb(xs[from], ys[from], rpt->x, rpt->y);
@@ -619,7 +519,7 @@ const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
     if (!len) goto exit;
     if (str[0] == '|') {
         buf[klen++] = HID_KEY_BACKSLASH;
-        if (mod) ADD_SHIFT(*mod);
+        if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
     }
     char *dup = strdup(str);
     for (str = strtok(dup, "|"); str && klen < blen; str = strtok(NULL, "|")) {
@@ -644,14 +544,14 @@ const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
                 buf[klen++] = keycodes_normal[i][0];
             if (klen < blen && str[0] == keycodes_normal[i][2]) {
                 buf[klen++] = keycodes_normal[i][0];
-                if (mod) ADD_SHIFT(*mod);
+                if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
             }
         }
         if ('a' <= str[0] && str[0] <= 'z')
             buf[klen++] = str[0] - 'a' + HID_KEY_A;
         if ('A' <= str[0] && str[0] <= 'Z') {
             buf[klen++] = str[0] - 'A' + HID_KEY_A;
-            if (mod) ADD_SHIFT(*mod);
+            if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
         }
     }
     TRYFREE(dup);
@@ -662,7 +562,7 @@ exit:
 
 const char * keycode2str(uint8_t code, uint8_t modifier) {
     static char buf[32];
-    bool shift = HAS_SHIFT(modifier);
+    bool shift = KEYBD_MOD_HAS_SHIFT(modifier);
     if (HID_KEY_A <= code && code <= HID_KEY_Z) {
         buf[0] = code - HID_KEY_A + (shift ? 'A' : 'a');
         buf[1] = '\0';
@@ -740,8 +640,8 @@ void hid_handle_keybd(
     hid_target_t from, hid_keybd_report_t *rpt, hid_key_cb key_cb
 ) {
     if (!rpt) return;
-    static uint8_t pmods[HID_TARGET_CNT];
-    static uint8_t prevs[HID_TARGET_CNT][LEN(rpt->keycode)];
+    static uint8_t pmods[HID_TARGET_MAX];
+    static uint8_t prevs[HID_TARGET_MAX][LEN(rpt->keycode)];
     uint8_t *next = rpt->keycode, *prev = prevs[from];
     LOOPN(i, LEN(rpt->keycode)) {
         bool prev_found = false, next_found = false;

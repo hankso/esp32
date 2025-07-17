@@ -25,6 +25,15 @@ menu "ESP Base Configuration"
         help
             Minimize IRAM usage when WiFi & BT are both enabled
 
+    config BASE_PSRAM
+        bool "Enable PSRAM support"
+        select ESP32_SPIRAM_SUPPORT if IDF_TARGET_ESP32
+        select ESP32S3_SPIRAM_SUPPORT if IDF_TARGET_ESP32S3
+        select BT_ALLOCATION_FROM_SPIRAM_FIRST if BASE_USE_BT
+        select SPIRAM_TRY_ALLOCATE_WIFI_LWIP if BASE_USE_WIFI
+        select SPIRAM_IGNORE_NOTFOUND
+        default n
+
     config BASE_DEBUG
         bool "Enable DEBUG features and loggings"
         default y
@@ -355,11 +364,12 @@ menu "ESP Base Configuration"
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE & Bluedroid host"
         depends on !BASE_CAM_ATCAM
-        select BT_BLE_42_FEATURES_SUPPORTED if IDF_TARGET_ESP32S3
+        select BT_ENABLED
         select BT_BLE_DYNAMIC_ENV_MEMORY
+        select BT_BLE_42_FEATURES_SUPPORTED if IDF_TARGET_ESP32S3
         default n
         help
-            Enable btmode_xxx functions (465-600KB)
+            Enable btmode_xxx functions (~500KB)
     if BASE_USE_BT
         config BASE_BT_HID_DEVICE
             bool "Enable BT HID device mode"
@@ -406,6 +416,7 @@ menu "ESP Base Configuration"
 
         config BASE_USE_WEBSERVER
             bool "Enable web server on port 80"
+            select HTTPD_WS_SUPPORT
             default y
             help
                 Enable server_loop_xxx functions (~40KB)

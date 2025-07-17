@@ -56,7 +56,7 @@ extern "C" {
 // Config and init console. Commands are registered at the end.
 void console_initialize();
 
-void console_register_prompt(const char *prompt);
+void console_register_prompt(const char *str, const char *ctx);
 
 char * console_handle_command(const char *cmd, bool pipe, bool history);
 

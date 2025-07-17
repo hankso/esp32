@@ -102,7 +102,7 @@ esp_err_t btmode_switch(btmode_t mode, bool restart) {
 void btmode_initialize() {
     esp_log_level_set("BT_HCI", ESP_LOG_ERROR);
     LOOPN(i, LEN(modes)) {
-        if (strcmp(btmode_str(modes[i].mode), Config.sys.BT_MODE)) continue;
+        if (strcasecmp(btmode_str(modes[i].mode), Config.sys.BT_MODE)) continue;
         btmode_switch(modes[i].mode, false);
         return;
     }

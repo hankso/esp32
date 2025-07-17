@@ -175,6 +175,15 @@
         { "maxLength": 0 }
       ]
     },
+    "app.hid.mode": {
+      "description": "Select gamepad layout",
+      "enum": [
+        "GENERAL",
+        "XINPUT",
+        "SWITCH",
+        "DSENSE"
+      ]
+    },
     "app.ota.auto": {
       "description": "Enable auto updation checking",
       "type": "string",

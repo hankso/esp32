@@ -6,7 +6,7 @@
 */
 
 #include "console.h"
-#include "drivers.h"
+#include "drivers.h"            // for UART_NUM_XXX
 #include "config.h"
 
 #ifdef CONFIG_BASE_USE_CONSOLE
@@ -31,36 +31,42 @@
 
 static const char *TAG = "Console";
 
-static char prompt[32] = "$ ";
+static char prompt[32] = "$ ", context[32];
 
 static void *mutex = NULL;
 
-void console_register_commands(); // Implemented in commands.cpp
+void console_register_commands();                   // see commands.cpp
 
-void console_register_prompt(const char * str) {
-    if (!str || !strlen(str)) {
-        prompt[0] = '\0';
+void console_register_prompt(const char *str, const char *ctx) {
+    if (ctx) {
+        if (!strlen(ctx)) context[0] = '\0';
+        else snprintf(context, sizeof(context), "> %s ", ctx);
+    }
+    size_t slen = strlen(str ?: ""), smax = sizeof(prompt);
+    if (!slen) {
+        if (str) prompt[0] = '\0';
         return;
     }
 #ifdef CONFIG_LOG_COLORS
     const char * color = LOG_COLOR(LOG_COLOR_PURPLE);
-    size_t len = strlen(color) + strlen(str) + strlen(LOG_RESET_COLOR);
-    if (!linenoiseIsDumbMode() && len < sizeof(prompt)) {
-        snprintf(prompt, len + 1, "%s%s%s", color, str, LOG_RESET_COLOR);
+    slen += strlen(color) + strlen(LOG_RESET_COLOR) + 1;
+    if (!linenoiseIsDumbMode() && slen <= smax) {
+        snprintf(prompt, slen, "%s%s%s", color, str, LOG_RESET_COLOR);
         ESP_LOGI(TAG, "Using colorful prompt %s", prompt);
     } else
 #endif
     {
-        snprintf(prompt, sizeof(prompt), str);
+        snprintf(prompt, smax, str);
     }
 }
 
 void console_initialize() {
-    // esp_system/startup.c -> esp_vfs_console_register()
-    //  - /dev/uart/{NUM_UART}
-    //  - /dev/usbserjtag
-    //  - /dev/cdcacm
-    //  - /dev/secondary
+    /* esp_system/startup.c -> esp_vfs_console_register()
+     *  - /dev/uart/{NUM_UART}
+     *  - /dev/usbserjtag
+     *  - /dev/cdcacm
+     *  - /dev/secondary
+     */
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT)
     esp_vfs_dev_uart_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_uart_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
@@ -72,7 +78,7 @@ void console_initialize() {
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
     esp_vfs_dev_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
-    fcntl(fileno(stdout), F_SETFL, 0); // non-blocking mode
+    fcntl(fileno(stdout), F_SETFL, 0);              // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
     usb_serial_jtag_driver_config_t conf = \
         USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
@@ -81,7 +87,7 @@ void console_initialize() {
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
     esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_cdcacm_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
-    fcntl(fileno(stdout), F_SETFL, 0); // non-blocking mode
+    fcntl(fileno(stdout), F_SETFL, 0);              // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
 #endif
 
@@ -108,7 +114,7 @@ void console_initialize() {
 #endif
     };
     ESP_ERROR_CHECK( esp_console_init(&console_config) );
-    console_register_prompt(Config.app.PROMPT);
+    console_register_prompt(Config.app.PROMPT, "");
     console_register_commands();
 
     if (( mutex = MUTEX() )) {
@@ -194,7 +200,7 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
     }
     if (buf != NULL) {
         while (size && strchr(" \r\n", buf[--size])) { buf[size] = '\0'; }
-        if (!size) TRYFREE(buf); // empty string means no log output
+        if (!size) TRYFREE(buf);                    // no log output
     }
     if (history) linenoiseHistoryAdd(cmd);
     RELEASE(mutex);
@@ -202,14 +208,23 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
 }
 
 void console_handle_one() {
-    char *cmd = linenoise(prompt), *trim = strtrim(cmd, " \t\r\n");
+    char *raw = linenoise(context[0] ? context : prompt),
+         *trim = strtrim(raw, " \t\r\n"), *cmd = NULL;
+    size_t tlen = strlen(trim ?: "");
     putchar('\n'); fflush(stdout);
-    if (!cmd) return;
-    if (trim[0] && trim[0] != 0x5B) {       // ctrl keycode
-        console_handle_command(trim, false, true);
-        putchar('\n'); fflush(stdout);      // one more blank line
+    if (tlen && trim[0] != 0x5B) {                  // not ctrl keycode
+        if (!context[0] || startswith(trim, "ctx")) {
+            console_handle_command(trim, false, true);
+        } else if (EMALLOC(cmd, strlen(context) + tlen)) {
+            ESP_LOGE(TAG, "%s %s", __func__, esp_err_to_name(ESP_ERR_NO_MEM));
+        } else {
+            sprintf(cmd, "%s %s", context + 2, trim);
+            console_handle_command(cmd, false, true);
+        }
+        putchar('\n'); fflush(stdout);              // one more blank line
     }
-    linenoiseFree(cmd);
+    TRYNULL(raw, linenoiseFree);
+    TRYFREE(cmd);
 }
 
 void console_handle_loop(void *argv) {
@@ -243,10 +258,10 @@ static char * rpc_error(double code, const char *errstr) {
     return json;
 }
 
-static char * rpc_response(cJSON *id, const char *result) {
+static char * rpc_response(const char *id, const char *result) {
     cJSON *rep = cJSON_CreateObject();
-    if (id != NULL) {
-        cJSON_AddItemToObject(rep, "id", id);
+    if (id) {
+        cJSON_AddStringToObject(rep, "id", id);
     } else {
         cJSON_AddNullToObject(rep, "id");
     }
@@ -259,39 +274,37 @@ static char * rpc_response(cJSON *id, const char *result) {
 
 char * console_handle_rpc(const char *json) {
     char *ret = NULL, *cmd = NULL, *tmp = NULL;
-    cJSON *obj = cJSON_Parse(json);
+    cJSON *obj = cJSON_Parse(json),
+          *uid = cJSON_GetObjectItem(obj, "id"),
+          *method = cJSON_GetObjectItem(obj, "method"),
+          *params = cJSON_GetObjectItem(obj, "params");
     if (!obj) {
         ret = rpc_error(-32700, "Parse Error");
         goto exit;
     }
-    if (!cJSON_HasObjectItem(obj, "method")) {
-        ret = rpc_error(-32600, "Invalid JSON");
+    if (!method || (params && !cJSON_IsArray(params))) {
+        ret = rpc_error(-32600, "Invalid Request");
         goto exit;
     }
-    if (!cJSON_HasObjectItem(obj, "params")) {  // command without arguments
-        cmd = strdup(cJSON_GetObjectItem(obj, "method")->valuestring);
-    } else {                                    // command with arguments
-        cJSON *params = cJSON_GetObjectItem(obj, "params");
-        if (!cJSON_IsArray(params)) {
-            ret = rpc_error(-32600, "Invalid Request");
-            goto exit;
-        }
+    if (cJSON_GetArraySize(params)) {           // command with arguments
         size_t size = 0; FILE *buf = open_memstream(&cmd, &size);
-        fprintf(buf, "%s", cJSON_GetObjectItem(obj, "method")->valuestring);
-        LOOPN(i, cJSON_GetArraySize(params)) {
-            fprintf(buf, " %s", cJSON_GetArrayItem(params, i)->valuestring);
+        fprintf(buf, "%s", method->valuestring);
+        for (cJSON *child = params->child; child; child = child->next) {
+            fprintf(buf, " %s", child->valuestring);
         }
         fclose(buf);
+    } else {                                    // command without arguments
+        cmd = strdup(method->valuestring);
     }
     if (!cmd) {                                 // command not parsed from json
         ret = rpc_error(-32400, "System Error");
         goto exit;
     }
-    ESP_LOGI(TAG, "Got RPC command: `%s`", cmd);
+    ESP_LOGD(TAG, "Got RPC command: `%s`", cmd);
     tmp = console_handle_command(cmd, true, false);
-    if (cJSON_HasObjectItem(obj, "id"))         // this is not notification
-        ret = rpc_response(cJSON_GetObjectItem(obj, "id"), tmp ?: "");
+    if (uid) ret = rpc_response(uid->valuestring, tmp ?: "");   // not notify
 exit:
+    TRYNULL(obj, cJSON_Delete);
     TRYFREE(tmp);
     TRYFREE(cmd);
     return ret;

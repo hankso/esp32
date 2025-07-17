@@ -185,10 +185,6 @@ import {
 </template>
 
 <style scoped>
-.wrapper {
-    padding: 0 4em;
-}
-
 .logo {
     display: block;
     margin: 0 auto 0.5em;
@@ -214,6 +210,7 @@ a {
 @media (min-width: 1024px) {
     .wrapper {
         display: grid;
+        grid-gap: 2em;
         grid-template-columns: 1fr 1fr;
         grid-auto-flow: column;
     }

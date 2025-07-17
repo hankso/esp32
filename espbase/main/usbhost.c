@@ -423,7 +423,7 @@ static void msc_host_task(void *arg) {
             wprintf(L"SerialNumber %ls\n", info.iSerialNumber);
         uint64_t cap = (uint64_t)info.sector_size * info.sector_count;
         printf("Total        %s\nSector       %u Bytes\nCount        0x%08X\n",
-                format_size(cap, false), info.sector_size, info.sector_count);
+                format_size(cap), info.sector_size, info.sector_count);
         msc_host_print_descriptors(dev);
 
         if (ctx.vfs_hdl) goto close; // only one MSC device can be mounted

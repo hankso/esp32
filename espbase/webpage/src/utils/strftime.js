@@ -1,6 +1,6 @@
 // Modified based on github.com/thdoan/strftime
 
-import { type, get_timestamp } from '@/utils'
+import { type, getTimestamp } from '@/utils'
 
 const aDays = [
     'Sunday',
@@ -103,6 +103,6 @@ function cmap(char, date) {
 export default function strftime(fmt, date) {
     if (type(fmt) !== 'string') return ''
     if (date < 1e11) date *= 1e3
-    date = new Date(date ?? get_timestamp())
+    date = new Date(date ?? getTimestamp())
     return fmt.replace(/%[a-z]\b/gi, m => cmap(m.slice(1), date) + '' || m)
 }

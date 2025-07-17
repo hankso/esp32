@@ -50,6 +50,10 @@ body {
     transform: translate(-50%, 0%);
 }
 
+.hide-caret {
+    caret-color: transparent;
+}
+
 .hide-scrollbar::-webkit-scrollbar {
     display: none;
 }

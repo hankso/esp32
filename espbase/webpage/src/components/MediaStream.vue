@@ -4,7 +4,8 @@
             ref="velem"
             v-if="video"
             :alt="run ? 'Frame' : 'Thumbnail'"
-            class="d-block cursor-pointer"
+            class="d-block hide-caret cursor-pointer"
+            style="max-width: 100%"
             @click="toggle"
             @dblclick="dbl = true"
         />
@@ -112,10 +113,3 @@ watchPostEffect(() => {
 
 onMounted(() => (run.value = props.autoStart))
 </script>
-
-<style scoped>
-img {
-    max-width: 100%;
-    caret-color: transparent;
-}
-</style>

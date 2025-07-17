@@ -12,7 +12,7 @@ const components = {
 </script>
 
 <template>
-    <v-tabs v-model="tab" align-tabs="center">
+    <v-tabs v-model="tab" align-tabs="center" class="mb-8">
         <v-tab
             v-for="name in Object.keys(components)"
             :key="name"
@@ -21,11 +21,9 @@ const components = {
             {{ name }}
         </v-tab>
     </v-tabs>
-    <v-container>
-        <transition appear mode="out-in">
-            <component :is="components[tab]" />
-        </transition>
-    </v-container>
+    <transition appear mode="out-in">
+        <component :is="components[tab]" />
+    </transition>
 </template>
 
 <style scoped>

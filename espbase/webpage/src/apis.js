@@ -82,6 +82,7 @@ export async function createPath(path, isdir = true, opt = {}) {
         params: { path, type: isdir ? 'dir' : 'file' },
     })
 }
+
 export async function deletePath(path, isdir = false, opt = {}) {
     return merge(opt, {
         url: 'edit',
@@ -91,18 +92,18 @@ export async function deletePath(path, isdir = false, opt = {}) {
 }
 
 async function toFormData(data, name = 'data') {
-    let fn = name
     let tmp = data
     let dtype = type(data)
+    let fname = name
     switch (dtype) {
         case 'blob':
             break
         case 'file':
-            fn = basename(data.name)
+            fname = basename(data.name)
             break
         case 'string':
-            fn = basename(name)
-            if (fn.endsWith('.gz')) {
+            fname = basename(name)
+            if (fname.endsWith('.gz')) {
                 let bytes = await gzipCompress(tmp)
                 tmp = new Blob([bytes], { type: 'application/gzip' })
             } else {
@@ -111,7 +112,7 @@ async function toFormData(data, name = 'data') {
             break
         case 'uint8array':
         case 'arraybuffer':
-            fn = basename(name)
+            fname = basename(name)
             tmp = new Blob([tmp], { type: 'application/octet-stream' })
             break
         case 'object':
@@ -123,12 +124,12 @@ async function toFormData(data, name = 'data') {
             return Promise.reject({ message: `Invalid type ${dtype}` })
     }
     data = new FormData()
-    data.append(fn, tmp, name)
+    data.append(name, tmp, fname)
     return Promise.resolve(data)
 }
 
-export async function uploadFile(filename, file, opt = {}) {
-    return toFormData(file, filename).then(data =>
+export async function uploadFile(name, file, opt = {}) {
+    return toFormData(file, name).then(data =>
         merge(opt, {
             url: 'edit',
             method: 'POST',
@@ -171,6 +172,7 @@ export async function execCommand(cmd, opt = {}) {
         url: 'exec',
         method: 'POST',
         data: `cmd=${cmd.trim().replace('helpe', 'help')}`,
+        timeout: 30000,
     })
 }
 

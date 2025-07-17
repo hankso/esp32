@@ -13,6 +13,7 @@
 #include "update.h"
 #include "sensors.h"
 #include "screen.h"
+#include "hidtool.h"
 #include "usbmode.h"
 #include "btmode.h"
 #include "server.h"
@@ -24,27 +25,48 @@
 
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
+RTC_DATA_ATTR uint8_t count[3];
+
 void app_main(void) {
+    bool stop = false;
+    switch (esp_reset_reason()) {
+    case ESP_RST_PANIC:     stop = count[0]++ > 2; break;
+    case ESP_RST_INT_WDT:   FALLTH;
+    case ESP_RST_TASK_WDT:  FALLTH;
+    case ESP_RST_WDT:       stop = count[1]++ > 5; break;
+    case ESP_RST_POWERON:   FALLTH;
+    case ESP_RST_BROWNOUT:  stop = count[2]++ > 5; break;
+    case ESP_RST_DEEPSLEEP:
+        ESP_LOGI(Config.info.NAME, "Wake from deep sleep"); break;
+    default: memset(count, 0, sizeof(count));
+    }
+#ifdef CONFIG_BASE_DEBUG
+    if (stop) {
+        ESP_LOGE(Config.info.NAME, "Something wrong!");
+        for (;;) { msleep(1000); }
+    }
+#endif
     esp_register_shutdown_handler(shutdown);
 
-    // 1. low level drivers
+    // 1. low level drivers     // dependencies
     config_initialize();
-    driver_initialize();
+    driver_initialize();        // button, knob, led_indicator
 
     // 2. necessary modules
-    filesys_initialize();
+    filesys_initialize();       // elf_loader
     console_initialize();
-    network_initialize();
-    update_initialize();
+    network_initialize();       // iperf
+    update_initialize();        // filesys, network
 
     // 3. external devices
-    sensors_initialize();
-    screen_initialize();
+    screen_initialize();        // drivers, u8g2, lvgl, lcd
+    sensors_initialize();       // drivers
 
     // 4. optional modules
-    usbmode_initialize();
-    btmode_initialize();
-    server_initialize();
+    hidtool_initialize();       // filesys
+    usbmode_initialize();       // hidtool, esp_tinyusb, usb_host_xxx
+    btmode_initialize();        // hidtool
+    server_initialize();        // network, update, filesys, console
 
     led_set_blink(0);
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY

@@ -29,7 +29,7 @@ typedef char filesys_path_t[PATH_MAX_LEN];
 
 typedef enum {
     FILESYS_FLASH = 1,  // if defined CONFIG_BASE_USE_FFS
-    FILESYS_SDCARD,     // if defined CONFIG_BASE_USE_SDFS
+    FILESYS_SDCARD = 2, // if defined CONFIG_BASE_USE_SDFS
     FILESYS_COUNT = 2
 } filesys_type_t;
 

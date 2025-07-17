@@ -5,7 +5,7 @@
 // Author: Hank <hankso1106@gmail.com>
 // Time: 2020.10.28 17:05:10
 
-import { pause, get_monotonic } from '@/utils'
+import { pause, getMonotonic } from '@/utils'
 
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
@@ -33,11 +33,11 @@ export default class TimeSyncClient {
     }
 
     async sync(ack = true) {
-        let tc1 = get_monotonic()
+        let tc1 = getMonotonic()
         this.viewinit.setFloat64(8, tc1, true) // pack timestamp as double
         this.send(this.buffinit)
         let msg = await this.recv()
-        let tc2 = get_monotonic()
+        let tc2 = getMonotonic()
         if (decoder.decode(msg.slice(0, 8)) !== 'timesync') {
             throw new Error('Invalid response: ' + msg)
         } else {
@@ -46,7 +46,7 @@ export default class TimeSyncClient {
         let tserver = this.viewsync.getFloat64(8, true) // unpack timestamp
         this.offset = tserver - (tc1 + tc2) / 2
         if (ack) {
-            this.viewdone.setFloat64(8, (get_monotonic() + tc2) / 2, true)
+            this.viewdone.setFloat64(8, (getMonotonic() + tc2) / 2, true)
             this.viewdone.setFloat64(16, this.offset, true)
             this.send(this.buffdone)
         }

@@ -46,7 +46,8 @@ typedef struct {
 
 esp_err_t gy39_measure(gy39_data_t *dat);
 
-float als_brightness(int idx); // lux
+#define ALS_NUM 4
+float als_brightness(uint8_t idx); // lux, idx < 4
 
 typedef enum {
     ALS_TRACK_0,    // single input

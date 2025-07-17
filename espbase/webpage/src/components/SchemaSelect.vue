@@ -35,9 +35,7 @@ const isIndex = computed(() => {
 })
 
 const proxy = computed({
-    get: () =>
-        toValue(isIndex) ? props.schema.enum[props.value] : props.value,
-    set: val =>
-        props.update(toValue(isIndex) ? props.schema.enum.indexOf(val) : val),
+    get: () => (isIndex.value ? props.schema.enum[props.value] : props.value),
+    set: v => props.update(isIndex.value ? props.schema.enum.indexOf(v) : v),
 })
 </script>

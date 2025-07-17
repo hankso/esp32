@@ -6,6 +6,13 @@
 
 #pragma once
 
+#if __has_include("tusb.h")
+#   define WITH_TUSB
+#   ifndef DUAL_TUSB
+#       include "tusb.h"
+#   endif
+#endif
+
 #include "globals.h"
 #include "hidtool.h"
 

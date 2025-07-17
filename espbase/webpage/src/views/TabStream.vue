@@ -8,7 +8,7 @@
             @submit.prevent="submit"
         />
     </v-sheet>
-    <v-sheet border rounded="lg" class="mt-4">
+    <v-sheet border rounded="lg" class="mt-4 overflow-hidden">
         <MediaStream
             :video="video ? 'media?video=mjpg' : ''"
             :audio="audio ? 'media?audio=wav' : ''"
@@ -31,7 +31,7 @@ const backup = ref({})
 
 async function submit(e) {
     if (e && !(await e).valid) return
-    setCamera(toValue(config))
+    setCamera(config.value)
         .then(() => {
             notify('Camera param updated!')
             refresh()
@@ -40,7 +40,7 @@ async function submit(e) {
 }
 
 function refresh() {
-    if (isEmpty(toValue(schema))) {
+    if (isEmpty(schema.value)) {
         getSchema('camera')
             .then(({ data }) => (schema.value = data))
             .catch(({ message }) => notify(message))
@@ -49,10 +49,9 @@ function refresh() {
         .then(([vresp, aresp]) => {
             video.value = vresp.status === 200
             audio.value = aresp.status === 200
-            if (toValue(video)) {
+            if (video.value) {
                 config.value = vresp.data
-                if (isEmpty(toValue(backup)))
-                    backup.value = deepcopy(vresp.data)
+                if (isEmpty(backup.value)) backup.value = deepcopy(vresp.data)
             }
         })
         .catch(({ message }) => notify(message))

@@ -180,16 +180,35 @@ esp_err_t pwm_get_tone(int *freq, int *pcent);
 #define SMBUS_IS_WORD(reg)  ( (reg) & 0x8000 || (reg) > 0xFF )
 #define SMBUS_HI_WORD(reg)  (( (reg) >> 8 ) & ~0x80 )
 #define SMBUS_LO_WORD(reg)  ( (reg) & 0xFF )
+void i2c_detect(int bus);
+esp_err_t smbus_probe(int bus, uint8_t addr);
 esp_err_t smbus_wregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
 esp_err_t smbus_rregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
-esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
-esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit);
 esp_err_t smbus_write_byte(int bus, uint8_t addr, uint16_t reg, uint8_t val);
-esp_err_t smbus_read_byte(int bus, uint8_t addr, uint16_t reg, uint8_t *val);
 esp_err_t smbus_write_word(int bus, uint8_t addr, uint16_t reg, uint16_t val);
+esp_err_t smbus_read_byte(int bus, uint8_t addr, uint16_t reg, uint8_t *val);
 esp_err_t smbus_read_word(int bus, uint8_t addr, uint16_t reg, uint16_t *val);
-esp_err_t smbus_probe(int bus, uint8_t addr);
-void i2c_detect(int bus);
+esp_err_t smbus_clearbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask);
+esp_err_t smbus_setbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask);
+esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit);
+esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
+
+#define RT_WBYTE(r, v)      { (0 << 16) | (r), (v) }
+#define RT_WWORD(r, v)      { (1 << 16) | (r), (v) }
+#define RT_RBYTE(r)         { (2 << 16) | (r), 0 }
+#define RT_RWORD(r)         { (3 << 16) | (r), 0 }
+#define RT_CBITS(r, m)      { (4 << 16) | (r), (m) }
+#define RT_SBITS(r, m)      { (5 << 16) | (r), (m) }
+#define RT_TOGGLE(r, b)     { (6 << 16) | (r), (b) }
+#define RT_WAIT0(r, m, ms)  { (7 << 16) | (r), (m) | ((ms) << 16) }
+#define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) }
+#define RT_SLEEP(ms)        { 0xFF << 16, (ms) }
+#define RT_FIND_OPT(arr, o) ({ smbus_regval_t *p = (arr);                     \
+                               while (p && (p->reg >> 16) != (o)) p++; p; })
+#define RT_FIND_REG(arr, r) ({ smbus_regval_t *p = (arr);                     \
+                               while (p && (p->reg & 0xFFFF) != (r)) p++; p; })
+typedef struct { uint32_t reg, val; } smbus_regval_t;
+esp_err_t smbus_regtable(int bus, uint8_t addr, smbus_regval_t *, size_t);
 
 typedef enum {
     // GPIO Expander by PCF8574: Endstops | Temprature | Valves

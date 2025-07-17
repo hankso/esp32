@@ -25,7 +25,7 @@ function request() {
         .request()
         .catch(notify)
         .finally(() => {
-            if (!toValue(filter) && serial.portIds.length)
+            if (!filter.value && serial.portIds.length)
                 filter.value = serial.portIds[0]
         })
 }
@@ -39,17 +39,17 @@ function clear() {
 
 function print(msg, timestamp = true) {
     msg = msg.trimEnd()
-    if (!msg || !toValue(terminal)) return
+    if (!msg || !terminal.value) return
     msg.split('\n').forEach(line => {
         if (timestamp) line = strftime('%T ') + line
-        toValue(terminal).pushMessage({ type: 'ansi', content: line })
+        terminal.value.pushMessage({ type: 'ansi', content: line })
     })
 }
 
 function toggle(val) {
     if (val ?? !toValue(opened)) {
         return serial
-            .open(serial.options, toValue(filter))
+            .open(serial.options, filter.value)
             .then(function readloop() {
                 serial
                     .read()
@@ -81,7 +81,7 @@ onBeforeUnmount(() => toggle(false))
                 <div class="t-header">
                     <h4 style="display: inline-block">
                         <span class="t-disable-select cursor-pointer">
-                            {{ title }}
+                            TODO: {{ title }}
                         </span>
                     </h4>
                     <ul class="t-shell-dots d-flex">

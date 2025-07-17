@@ -24,7 +24,7 @@ const backup = ref({})
 
 async function submit(e) {
     if (e && !(await e).valid) return
-    setConfig(toValue(config))
+    setConfig(config.value)
         .then(() => {
             notify('Configuration saved!')
             refresh()
@@ -33,7 +33,7 @@ async function submit(e) {
 }
 
 function refresh() {
-    if (isEmpty(toValue(schema))) {
+    if (isEmpty(schema.value)) {
         getSchema('config')
             .then(({ data }) => (schema.value = data))
             .catch(({ message }) => notify(message))

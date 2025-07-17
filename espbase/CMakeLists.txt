@@ -2,6 +2,10 @@ cmake_minimum_required(VERSION 3.16)
 
 set(COMPONENTS main)
 
+set(SDKCONFIG_DEFAULTS
+    ${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults
+    ${CMAKE_CURRENT_LIST_DIR}/sdkconfig.local
+)
 set(EXTRA_COMPONENT_DIRS
     $ENV{IDF_PATH}/../components
     $ENV{IDF_PATH}/examples/common_components/iperf

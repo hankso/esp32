@@ -14,6 +14,7 @@ import {
     mdiClipboardCheckOutline as mdiClipboardCheck,
 } from '@mdi/js'
 
+import { useStorage } from '@vueuse/core'
 import { basename, resolve, extname } from 'path-browserify'
 
 const route = useRoute()
@@ -32,7 +33,7 @@ const code = ref(`body {
 
 const copied = ref(false)
 
-const config = ref({
+const config = useStorage('editor', {
     readonly: false,
     highlight: true,
     lineNumber: true,
@@ -48,9 +49,7 @@ const propIcons = {
 }
 
 const links = computed(() => {
-    let chunks = toValue(path)
-        .replace(/^\/|\/$/g, '')
-        .split('/')
+    let chunks = path.value.replace(/^\/|\/$/g, '').split('/')
     return chunks.map((v, i) => ({
         title: v,
         href: `#${chunks.slice(0, i + 1).join('/')}`,
@@ -58,7 +57,7 @@ const links = computed(() => {
 })
 
 const copyIcon = computed(() =>
-    toValue(copied) ? mdiClipboardCheck : mdiClipboardText
+    copied.value ? mdiClipboardCheck : mdiClipboardText
 )
 
 const uploadIcon = computed(() =>
@@ -66,7 +65,7 @@ const uploadIcon = computed(() =>
 )
 
 function copy() {
-    copyToClipboard(toValue(code)).then(() => {
+    copyToClipboard(code.value).then(() => {
         copied.value = true
         setTimeout(() => (copied.value = false), 3000)
     })
@@ -76,7 +75,7 @@ function upload() {
     if (toValue(loading) !== false && upload.ctrl) return upload.ctrl.abort()
     loading.value = 0
     upload.ctrl = new AbortController()
-    uploadFile(toValue(path), toValue(code), {
+    uploadFile(path.value, code.value, {
         signal: upload.ctrl.signal,
         onUploadProgress(e) {
             if (e.total === undefined) {
@@ -93,7 +92,7 @@ function upload() {
 
 watchPostEffect(() => {
     let filename = resolve('/', route.hash.slice(1))
-    if (!filename.slice(1) || toValue(path) === filename) return
+    if (!filename.slice(1) || path.value === filename) return
     readFile(filename)
         .then(resp => {
             path.value = filename
@@ -111,7 +110,7 @@ watchPostEffect(() => {
 </script>
 
 <template>
-    <div class="d-flex flex-column flex-lg-row-reverse ga-4">
+    <div class="d-flex flex-lg-column ga-4">
         <v-scale-transition>
             <TabFileman
                 v-show="config.treeView"

@@ -7,7 +7,7 @@ const notify = inject('notify', console.log)
 const mode = import.meta.env.MODE
 const info = process.env.BUILD_INFO
 
-const runtime = ref({
+const runtime = reactive({
     ap: '',
     sta: '',
     lshw: '',
@@ -19,12 +19,12 @@ const runtime = ref({
 })
 
 onMounted(() => {
-    let cmds = Object.keys(toValue(runtime))
+    let cmds = Object.keys(runtime)
     Promise.all(cmds.map(cmd => execCommand(cmd)))
         .then(rsts => {
             for (let [idx, rst] of rsts.entries()) {
                 if (!rst.data.includes('Unrecognized command'))
-                    runtime.value[cmds[idx]] = unescape(rst.data)
+                    runtime[cmds[idx]] = unescape(rst.data)
             }
         })
         .catch(({ message }) => notify(message))

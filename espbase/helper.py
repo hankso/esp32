@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # coding=utf-8
 #
-# File: manager.py
+# File: esphelper.py
 # Author: Hankso
 # Webpage: https://github.com/hankso
 # Time: Sun 02 Jun 2019 00:46:30 CST
@@ -30,6 +30,7 @@ import subprocess
 from io import StringIO
 from os import path as op, environ as ENV
 from datetime import datetime
+from contextlib import suppress
 from urllib.parse import urljoin
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer
@@ -69,6 +70,17 @@ IDF_PATH = ENV['IDF_PATH'] if op.isdir(ENV.get('IDF_PATH', '')) else ''
 def fromroot(*a): return op.join(ROOT_DIR, *a)
 
 
+def findone(tpl, string, default='', pos=0, endpos=sys.maxsize):
+    if not isinstance(tpl, re.Pattern):
+        tpl = re.compile(tpl)
+    try:
+        m = next(tpl.finditer(string, pos, endpos))
+        gs = m.groups()
+        return m.group() if not gs else (gs[0] if len(gs) == 1 else gs)
+    except StopIteration:
+        return default
+
+
 def execute(cmd, **kwargs):
     kwargs.setdefault('bufsize', 1)
     kwargs.setdefault('encoding', 'utf8')
@@ -101,8 +113,8 @@ def load_gitignore(start=ROOT_DIR):
     else:
         return []
     with open(ignore, encoding='utf8') as f:
-        content = f.read().splitlines()
-        return sorted(set(filter(lambda v: v and v[0] != '#', content)))
+        lines = f.read().splitlines()
+    return sorted(set(filter(lambda v: v.strip() and v[0] != '#', lines)))
 
 
 def walk_exclude(root, include_exts=[], excludes=None):
@@ -131,25 +143,9 @@ def walk_exclude(root, include_exts=[], excludes=None):
         yield root, dirs, files
 
 
-def random_id(length=None):
-    #  from random import choice
-    #  from string import hexdigits
-    #  return ''.join([choice(hexdigits) for i in range(len)])
-    return uuid.uuid4().hex[:length].upper()
-
-
 def project_name():
-    try:
-        with open(fromroot('CMakeLists.txt'), encoding='utf8') as f:
-            content = f.read()
-        return re.findall(r'project\((\w+)[ \)]', content)[0]
-    except Exception:
-        return 'testing'
-
-
-def firmware_url(filename='app.bin', port=PORT):
-    host = socket.gethostbyname(socket.gethostname())
-    return urljoin('https://%s:%d' % (host, port), filename)
+    with open(fromroot('CMakeLists.txt'), encoding='utf8') as f:
+        return findone(r'project\((\w+)[ \)]', f.read(), 'unknown')
 
 
 def process_nvs(args):
@@ -199,11 +195,13 @@ def process_nvs(args):
 def gencfg(args):
     if not op.isfile(args.tpl):
         return
+    name = project_name()
+    addr = (socket.gethostbyname(socket.gethostname()), PORT)
     with open(args.tpl, encoding='utf8') as f:
-        prefix = project_name()
         data = f.read().format(**{
-            'NAME': prefix, 'UID': random_id(args.len),
-            'URL': firmware_url(prefix + '.bin'),
+            'NAME': name,
+            'UID': uuid.uuid4().hex[:args.len].upper(),
+            'URL': urljoin('https://%s:%d' % addr, name + '.bin'),
         }).replace('\n\n', '\n').replace(' ', '')
     if args.output is sys.stdout and IDF_PATH:
         args.output = tempfile.mktemp()
@@ -408,13 +406,11 @@ def update_dependencies(comps):
     try:
         with open(compcmk, encoding='utf8') as f:
             old_content = f.read()
-        new_content = tpl.sub('REQUIRES ' + ' '.join(sorted(
-            set(comps).union(tpl.findall(old_content)[0].split())
-        )), old_content)
-        if new_content == old_content:
-            return
-        with open(compcmk, 'w', encoding='utf8') as f:
-            f.write(new_content)
+        comps = sorted(set(comps).union(findone(tpl, old_content).split()))
+        new_content = tpl.sub('REQUIRES ' + ' '.join(comps), old_content)
+        if new_content != old_content:
+            with open(compcmk, 'w', encoding='utf8') as f:
+                f.write(new_content)
     except Exception as e:
         print('Update main/CMakeLists.txt failed:', e)
 
@@ -455,11 +451,9 @@ def gendeps(args):
 
 def prebuild(args):
     print('-- Running prebuild scripts (%s) ...' % __file__)
-    try:
+    with suppress(Exception):
         os.unlink(fromroot(
             'managed_components', 'espressif__elf_loader', '.component_hash'))
-    except Exception:
-        pass
     try:
         srcdir = fromroot('webpage')
         dstdir = fromroot('files', 'www')
@@ -480,19 +474,77 @@ def prebuild(args):
     gendeps(args)
 
 
+def sdkconfig_modify(text, targets, mapping):
+    for act, name in targets:
+        if name not in mapping:
+            bak, name = name, 'defaults.' + name
+            if name not in mapping:
+                print('skip', bak)
+                continue
+        path = mapping[name]
+        head = '# >>> ' + path + '\n'
+        tail = '# <<< ' + path + '\n'
+        tpl = re.compile(head + '.*' + tail, re.DOTALL)
+        exist = findone(tpl, text)
+        if act != 1 and exist:
+            text = tpl.sub('', text)
+            print(path, 'deleted')
+        if act != -1 and not exist:
+            with open(path, encoding='utf8') as f:
+                text += head + f.read() + tail
+            print(path, 'appended')
+    return text
+
+
+def sdkconfig_merge(lsrc, lines):
+    for line in lines:
+        key = line.split('=')[0]
+        for i, tmp in enumerate(lsrc):
+            if tmp.startswith(key):
+                lsrc[i] = line
+                break
+        else:
+            lsrc.append(line)
+    return lsrc
+
+
 def sdkconfig(args):
+    tpl = [re.compile(i) for i in (r'[\w.]+$', r'^#|\s*$', r'(.*)=n')]
+    targets = [
+        (-1 if i[0] == '-' else int(i[0] == '+'), findone(tpl[0], i, '~'))
+        for i in (args.targets + args.unknown_args) if i
+    ]
+    mapping = {
+        op.basename(path)[10:]: path.replace('\\', '/')
+        for path in glob.glob(fromroot('sdkconfig*'))
+    }
+    mapping.setdefault('local', fromroot('sdkconfig.local'))
     try:
-        with open(fromroot('sdkconfig')) as f:
-            configs = f.read().splitlines()
-        with open(fromroot('sdkconfig.defaults')) as f:
-            defaults = f.read().splitlines()
+        with open(mapping['local'], 'a', encoding='utf8') as f:
+            f.seek(0)
+            local = f.read()
     except Exception:
-        pass
-    tpl = [re.compile(r'^#|\s*$'), re.compile(r'(.*)=n')]
-    for line in defaults:
-        if tpl[0].match(line) or tpl[1].sub(
+        local = ''
+    if targets:
+        modified = sdkconfig_modify(local, targets, mapping)
+        if modified != local:
+            with open(mapping['local'], 'w', encoding='utf8') as f:
+                f.write(modified)
+        return
+    print('Found %d files:\n-' % len(mapping),
+          '\n- '.join(map(relpath, mapping.values())))
+    if '' not in mapping:
+        return print('`sdkconfig` not found! Run idf.py menuconfig first')
+    if 'defaults' not in mapping:
+        return print('`sdkconfig.defaults` not found! Skip')
+    with open(mapping['defaults'], encoding='utf8') as fsrc:
+        lsrc = sdkconfig_merge(fsrc.read().splitlines(), local.splitlines())
+    with open(mapping[''], encoding='utf8') as fdst:
+        ldst = fdst.read().splitlines()
+    for line in lsrc:
+        if tpl[1].match(line) or tpl[2].sub(
             lambda m: f'# {m.groups()[0]} is not set', line
-        ) in configs:
+        ) in ldst:
             continue
         print(line, 'is set but has no effect')
 
@@ -506,10 +558,10 @@ def size_components(quiet=False, files=False, **k):
         return print(op.basename(mapfile) + ' not found. Did you build?')
     tpl = [re.compile(i) for i in (r'lib(.*)\.a', r'lib_a-(.*)', r'(.*)\.obj')]
     try:
-        comps = json.loads(execute([
+        comps = json.loads(execute(' '.join([
             sys.executable, idfsize, mapfile, '--json',
             '--files' if files else '--archives'
-        ], quiet=quiet))
+        ]), quiet=quiet))
         for comp in list(comps):
             if not any(comps[comp].values()):
                 comps.pop(comp)
@@ -663,10 +715,8 @@ def search(args):
 
 
 def relpath(p, maxlen=True, ref='.'):
-    try:
+    with suppress(ValueError):
         p = op.normpath(op.relpath(p, ref))
-    except ValueError:
-        pass
     try:
         if maxlen is True:
             maxlen = os.get_terminal_size().columns
@@ -869,11 +919,8 @@ def on_media(**k):
         print_request(attr='forms')
         data = json.loads(bottle.request.forms.get('video', '{}'))
         for key, val in data.items():
-            try:
-                if not isinstance(val, (int, float)):
-                    data[key] = re.findall(r'^\d+', str(val))[0]
-            except Exception:
-                data[key] = 0
+            if not isinstance(val, (int, float)):
+                data[key] = int(findone(r'^\d+', str(val), 0))
         return on_media.data.update(data)
     if 'video' in bottle.request.params:
         if not tj and not cv2:
@@ -895,8 +942,10 @@ def rpc_hid(*args):
     parser = getattr(rpc_hid, 'parser', None)
     if parser is None:
         parser = rpc_hid.parser = argparse.ArgumentParser()
-        for i in ('-k', '-s', '-m', '-d', '-t', '--ts', '--to'):
-            parser.add_argument(i, type=i in ('-t', '--ts') and int or str)
+        for i in ('-k', '-s', '-m', '-p', '-c', '-d', '--to'):
+            parser.add_argument(i, type=str)
+        for i in ('-t', '--ts'):
+            parser.add_argument(i, type=int)
     try:
         args = vars(parser.parse_known_args(args)[0])
     except SystemExit:
@@ -908,10 +957,8 @@ def rpc_hid(*args):
 
 
 def rpc_sleep(sec, *a):
-    try:
+    with suppress(Exception):
         time.sleep(float(sec))
-    except Exception:
-        pass
     return time.strftime('%F %T')
 
 
@@ -1277,8 +1324,7 @@ def webserver(args):
     except Exception:
         try:
             args.esphost = 'http://' + search(argparse.Namespace(
-                service='id', all=False, oneshot=True, timeout=3, quiet=True
-            ))
+                service='id', all=False, oneshot=True, timeout=3, quiet=True))
         except Exception:
             if args.test:
                 return print('Could not find alive ESP device')
@@ -1311,10 +1357,9 @@ def webserver(args):
 
     if not args.quiet:
         print('WebServer running at', relpath(args.root))
-    if not args.quiet and not args.static:
-        if args.esphost:
+        if not args.static and args.esphost:
             print('Redirect requests to alive ESP32 at', args.esphost)
-        else:
+        elif not args.static:
             print('Simulate ESP32 APIs: exec/edit/config/update etc.')
 
     app = bottle.Bottle()
@@ -1439,7 +1484,10 @@ def make_parser():
     sparser.set_defaults(func=prebuild)
 
     sparser = subparsers.add_parser(
-        'sdkconfig', help='Fix sdkconfig.defaults files')
+        'sdkconfig', help='Fix sdkconfig related files')
+    sparser.add_argument(
+        'targets', nargs='*', metavar='[+|-]TARGET',
+        help='append/delete/toggle config to sdkconfig.local')
     sparser.set_defaults(func=sdkconfig)
 
     return parser

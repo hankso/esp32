@@ -1,14 +1,14 @@
-export function get_timestamp() {
+export function getTimestamp() {
     return Date.now()
 }
 
-export function get_monotonic() {
+export function getMonotonic() {
     // See https://www.w3.org/TR/hr-time/
     // Monotonic High Resolution Time
     return performance.now()
 }
 
-export function random_id(length = 8) {
+export function randomId(length = 8) {
     return Math.random().toString(16).substr(2, length)
 }
 
@@ -176,12 +176,13 @@ export function downloadAsFile(data, fn = 'data.txt', type = 'text/plain') {
 }
 
 export function toggleFullscreen(e) {
+    let tstr = type(e)
     let elem = document.documentElement
-    if (e instanceof String) {
+    if (tstr === 'string') {
         elem = document.querySelector(e)
-    } else if (type(e) === 'element') {
+    } else if (tstr === 'element') {
         elem = e
-    } else if (type(e).includes('event')) {
+    } else if (tstr.includes('event')) {
         elem = e.target
     }
     if (!elem || !elem.requestFullscreen) return
@@ -201,7 +202,7 @@ export var rules = {
         return Number(v) === parseInt(v) || 'Must be an integer'
     },
     length(v, r0, r1) {
-        if (type(v) !== 'array') return 'This field is required'
+        if (type(v) !== 'array') return v ? true : 'This field is required'
         if (r0 !== undefined && r1 !== undefined)
             return v =>
                 (r0 <= v.length && v.length <= r1) ||

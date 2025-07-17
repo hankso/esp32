@@ -29,13 +29,12 @@ const commands = ref([
 ])
 
 function refresh() {
-    return Promise.all([getConfig(), getCommands()])
+    let opt = { timeout: 0 }
+    return Promise.all([getConfig(opt), getCommands(opt)])
         .then(([cfg, cmds]) => {
             if (cfg.data['app.prompt']) prompt.value = cfg.data['app.prompt']
             cmds.data.forEach(cmd => {
-                let idx = toValue(commands)
-                    .map(_ => _.key)
-                    .indexOf(cmd.key)
+                let idx = commands.value.map(_ => _.key).indexOf(cmd.key)
                 if (idx < 0) {
                     commands.value.push(cmd)
                 } else {

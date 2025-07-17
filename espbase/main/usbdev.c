@@ -66,11 +66,10 @@ void usbdev_status(usbmode_t mode) {
         LOOPN(i, NUM_DISK) {
             if (info[i].pdrv == FF_DRV_NOT_USED) {
                 printf("Disk[%d]: not mouned / supported\n", i);
-            } else {
-                printf("Disk[%d]: pdrv=%u, ssize=%u, total=%s\n",
-                    i, info[i].pdrv, info[i].blksize,
-                    format_size(info[i].total, false));
+                continue;
             }
+            printf("Disk[%d]: pdrv=%u, ssize=%u, total=%s\n",
+                i, info[i].pdrv, info[i].blksize, format_size(info[i].total));
         }
     }
 #endif
@@ -82,11 +81,7 @@ void usbdev_status(usbmode_t mode) {
 bool usbdev_interest(const void *arg) {
     const usb_device_desc_t *desc = arg;
     return (
-#if CONFIG_TINYUSB_DESC_USE_ESPRESSIF_VID
-        desc->idVendor == USB_ESPRESSIF_VID ||
-#else
-        desc->idVendor == CONFIG_TINYUSB_DESC_CUSTOM_VID ||
-#endif
+        desc->idVendor == HIDTool.vid ||
 #ifdef CONFIG_BASE_USB_CDC_HOST
         desc->bDeviceClass == TUSB_CLASS_CDC ||
 #endif
@@ -188,8 +183,13 @@ uint8_t const *tud_descriptor_configuration_cb(uint8_t i) { // overwrite weak
 static esp_err_t usbd_common_init() {
     if (inited) return ESP_OK;
     LOOPN(i, NUM_DISK) { info[i].pdrv = FF_DRV_NOT_USED; }
-    hid_desc_version(&desc_dev.bcdDevice);
-    hid_desc_serial(desc_str + 3);
+
+    // FIXME: should we set USB VID&PID same like bluetooth?
+    // desc_dev.idVendor                   = HIDTool.vid;
+    // desc_dev.idProduct                  = HIDTool.pid;
+    desc_dev.bcdDevice                  = HIDTool.ver;
+    desc_str[desc_dev.iManufacturer]    = HIDTool.vendor;
+    desc_str[desc_dev.iSerialNumber]    = HIDTool.serial;
 
     tinyusb_config_t tusb_conf = {
         .external_phy = false,
@@ -517,38 +517,23 @@ static struct {
 } hid = { NULL, NULL, NULL };
 
 static bool send_report(const hid_report_t *rpt, bool intask, uint16_t ms) {
-    if (!hid_enabled || !mounted) return false;
+    if (!hid_enabled || !mounted || !HID_VALID_REPORT(rpt)) return false;
 #ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
     if (!intask) return hid.queue && xQueueSend(hid.queue, rpt, TIMEOUT(ms));
 #endif
-    bool sent = false;
     if (tud_suspended()) {
         ESP_LOGI(TAG, "%s suspended (reset queue)", HID);
         tud_remote_wakeup();
-    } else if (rpt->id == REPORT_ID_DIAL) {
-        sent = tud_hid_report(rpt->id, rpt->dial, sizeof(rpt->dial));
-        ESP_LOGI(HID, "dial Key 0x%04X SENT %d", *(uint16_t *)rpt->dial, sent);
-    } else if (rpt->id == REPORT_ID_MOUSE) {
-        sent = tud_hid_report(rpt->id, &rpt->mouse, sizeof(rpt->mouse));
-        ESP_LOGI(HID, "mouse Btn %s X %d Y %d V %d H %d SENT %d",
-                hid_btncode_str(rpt->mouse.buttons),
-                rpt->mouse.x, rpt->mouse.y,
-                rpt->mouse.wheel, rpt->mouse.pan, sent);
-    } else if (rpt->id == REPORT_ID_KEYBD) {
-        sent = tud_hid_report(rpt->id, &rpt->keybd, sizeof(rpt->keybd));
-        uint8_t mod = rpt->keybd.modifier;
-        ESP_LOGI(HID, "keybd Mod 0x%02X Key %s SENT %d",
-                mod, hid_keycodes_str(mod, rpt->keybd.keycode), sent);
+        return false;
     }
+    bool sent = tud_hid_report(rpt->id, (void *)rpt, rpt->size);
 #ifdef TARGET_IDF_4
 #   ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
     if (sent && !( sent = ulTaskNotifyTake(pdTRUE, TIMEOUT(ms)) == pdTRUE ))
 #   else
     if (sent && !( sent = xSemaphoreTake(hid.semphr, TIMEOUT(ms)) == pdTRUE ))
 #   endif
-    {
         ESP_LOGW(HID, "report not sent");
-    }
 #endif
     return sent;
 }

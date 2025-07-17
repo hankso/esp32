@@ -31,7 +31,7 @@
 </template>
 
 <script setup>
-import { rules } from '@/utils'
+import { rules, type } from '@/utils'
 import { updateOTA, execCommand } from '@/apis'
 
 const notify = inject('notify', console.log)
@@ -42,11 +42,13 @@ const loading = ref(false)
 const firmware = ref([])
 
 async function upgrade(e) {
-    if (toValue(loading) !== false && upgrade.ctrl) return upgrade.ctrl.abort()
+    if (loading.value !== false && upgrade.ctrl) return upgrade.ctrl.abort()
     if (!(await e).valid) return
+    let file = firmware.value
+    if (type(file) === 'array') file = file[0]
     loading.value = 0
     upgrade.ctrl = new AbortController()
-    updateOTA(toValue(firmware)[0], {
+    updateOTA(file, {
         signal: upgrade.ctrl.signal,
         onUploadProgress(e) {
             if (e.total === undefined) {

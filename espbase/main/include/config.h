@@ -51,6 +51,7 @@ typedef struct config_application {
     const char * MDNS_HOST; // Register mDNS hostname
     const char * SNTP_RUN;  // Enable SNTP service
     const char * SNTP_HOST; // NTP server to sync time from
+    const char * HID_MODE;  // Select gamepad layout
     const char * OTA_AUTO;  // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
     const char * TIMEZONE;  // Set local timezone (see tzset(3) man)

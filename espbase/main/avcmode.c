@@ -14,7 +14,7 @@
 
 ESP_EVENT_DEFINE_BASE(AVC_EVENT);
 
-static const char *TAG = "AVCMode";
+static UNUSED const char *TAG = "AVCMode";
 
 static UNUSED bool audio_run, video_run;
 static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
@@ -251,14 +251,14 @@ static void cam_initialize() {
     CAM_RELEASE();
 }
 
-STATIC_ASSERT(sizeof(sensor_t) <= UINT8_MAX);
+static_assert(sizeof(sensor_t) <= UINT8_MAX, "offset overflow: use uint16_t");
 
 static struct {
     const char *key;
     uint8_t coff, voff, vsize;
 } cam_attrs[] = {
 #   define ATTR(s, a, b)                                                    \
-    { #a, offsetof(s, set_##a), offsetof(s, b), sizeof(((s *)0)->b) }
+    { #a, offsetof(s, set_##a), offsetof(s, b), SIZEOF(s, b) }
 #   define X(a)    ATTR(sensor_t, a, a)
 #   define Y(a)    ATTR(sensor_t, a, status.a)
 #   define Z(a, b) ATTR(sensor_t, a, status.b)
@@ -489,7 +489,7 @@ esp_err_t avc_command(
                 msleep(ms);
             }
         } else {
-            void *arg = (void *)(tout_ms ?: UINT32_MAX);
+            UNUSED void *arg = (void *)(tout_ms ?: UINT32_MAX);
 #ifdef CONFIG_BASE_USE_I2S
             if (atgt && !atask) {
                 audio_run = true;
