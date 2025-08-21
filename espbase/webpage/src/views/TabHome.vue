@@ -22,7 +22,7 @@ const prompt = ref()
 const commands = ref([
     {
         key: 'reload',
-        group: 'web',
+        group: 'webui',
         usage: 'reload',
         description: 'Reload configuration of current terminal',
     },
@@ -32,7 +32,10 @@ function refresh() {
     let opt = { timeout: 0 }
     return Promise.all([getConfig(opt), getCommands(opt)])
         .then(([cfg, cmds]) => {
-            if (cfg.data['app.prompt']) prompt.value = cfg.data['app.prompt']
+            if (cfg.data['app.prompt'])
+                prompt.value = cfg.data['app.prompt']
+                    .replace('>', '')
+                    .replace(' ', '')
             cmds.data.forEach(cmd => {
                 let idx = commands.value.map(_ => _.key).indexOf(cmd.key)
                 if (idx < 0) {

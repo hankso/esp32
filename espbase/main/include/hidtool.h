@@ -231,6 +231,23 @@ typedef struct {
 #endif
 
 typedef struct {
+    uint8_t buttons;
+    int16_t x, y;
+    int8_t wheel, pan;
+} PACKED hid_abmse_report_t;
+
+typedef struct {
+    struct {
+        uint8_t tip : 1;
+        uint8_t : 3;
+        uint8_t cid : 4;
+        uint16_t x, y;
+    } fingers[10];
+    uint16_t scan_time;
+    uint8_t count;
+} PACKED hid_touch_report_t;
+
+typedef struct {
     int16_t lx, ly, rx, ry;                         // -32767~32767
     uint8_t lt, rt;                                 // 0~255
     uint8_t dpad;                                   // 0~8 4-bit hat x 2
@@ -292,7 +309,9 @@ typedef struct {
 
 enum {
     REPORT_ID_KEYBD = 1,
-    REPORT_ID_MOUSE,
+    REPORT_ID_MOUSE = 2,
+    REPORT_ID_ABMSE,
+    REPORT_ID_TOUCH,
     REPORT_ID_GMPAD,
     REPORT_ID_SCTRL,
     REPORT_ID_SDIAL,
@@ -314,17 +333,19 @@ extern hidtool_t HIDTool;
 void hidtool_initialize();  // calculate HIDTool from Config.app.HID_MODE
 
 typedef enum {
-    HID_TARGET_USB,     // USB Device | USB Host
-    HID_TARGET_BLE,     // BT Device | BT Host
-    HID_TARGET_SCN,     // Screen input device
-    HID_TARGET_ALL,
-    HID_TARGET_MAX
+    HID_TARGET_USB = 0x01,  // USB Device | USB Host
+    HID_TARGET_BLE = 0x02,  // BT Device | BT Host
+    HID_TARGET_UDP = 0x04,  // UDP sendto host | broadcast
+    HID_TARGET_SCN = 0x08,  // Screen input device
+    HID_TARGET_ALL = 0xFF,
 } hid_target_t;         // interface the HID report is sent to or received from
 
 typedef struct {
     union {
         hid_keybd_report_t keybd;
         hid_mouse_report_t mouse;
+        hid_abmse_report_t abmse;
+        hid_touch_report_t touch;
         hid_gmpad_report_t gmpad;
         uint8_t sctrl;
         uint8_t sdial[2];
@@ -340,12 +361,9 @@ bool hid_report_send(hid_target_t, hid_report_t *);
  * Keyboard
  */
 
-uint8_t str2modifier(const char *str);
-const uint8_t * str2keycodes(const char *str, uint8_t *modifier);
-const char * keycode2str(uint8_t keycode, uint8_t modifier);
+const char * hid_keycode_str(uint8_t keycode, uint8_t modifier);
+const char * hid_keycodes_str(const uint8_t keycodes[6], uint8_t modifier);
 const char * hid_modifier_str(uint8_t modifier);
-const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycodes[6]);
-
 bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
 bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
 
@@ -353,15 +371,20 @@ bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
  * Mouse
  */
 
-uint8_t str2btncode(const char *str);
-const char * btncode2str(uint8_t bit);
-const char * hid_btncode_str(uint8_t bits);
-
+const char * hid_btncode_str(uint8_t btns);
 bool hid_report_mouse(hid_target_t, uint8_t, int8_t, int8_t, int8_t, int8_t);
 bool hid_report_mouse_click(hid_target_t, const char *str, uint32_t ms);
+bool hid_report_mouse_moveto(hid_target_t, uint16_t, uint16_t);
 #define hid_report_mouse_move(t, x, y)   hid_report_mouse((t), 0, (x), (y), 0, 0)
 #define hid_report_mouse_scroll(t, v, h) hid_report_mouse((t), 0, 0, 0, (v), (h))
 #define hid_report_mouse_button(t, btn)  hid_report_mouse((t), (btn), 0, 0, 0, 0)
+
+/*
+ * Touch
+ */
+
+bool hid_report_touch(hid_target_t, uint16_t, uint16_t);
+bool hid_report_touch_tip(hid_target_t, uint16_t x, uint16_t y, uint32_t ms);
 
 /*
  * Gamepad
@@ -411,8 +434,8 @@ typedef enum {
     SCTRL_MHELP = 0x07, // menu help
     SCTRL_MEXIT = 0x08, // menu exit
     SCTRL_MSEL  = 0x09, // menu select
-    SCTRL_MRT   = 0x0A, // menu left
-    SCTRL_MLT   = 0x0B, // menu right
+    SCTRL_MLT   = 0x0A, // menu left
+    SCTRL_MRT   = 0x0B, // menu right
     SCTRL_MUP   = 0x0C, // menu up
     SCTRL_MDN   = 0x0D, // menu down
     SCTRL_RCOLD = 0x0E, // cold restart
@@ -446,6 +469,7 @@ bool hid_report_sdial_click(hid_target_t, uint32_t ms);
 typedef void (*hid_key_cb)(uint8_t keycode, bool pressed);
 typedef void (*hid_pos_cb)(int x, int y, int8_t dx, int8_t dy);
 void hid_handle_mouse(hid_target_t, hid_mouse_report_t *, hid_key_cb, hid_pos_cb);
+void hid_handle_abmse(hid_target_t, hid_abmse_report_t *, hid_key_cb, hid_pos_cb);
 void hid_handle_keybd(hid_target_t, hid_keybd_report_t *, hid_key_cb);
 
 #ifdef __cplusplus

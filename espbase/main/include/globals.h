@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <inttypes.h>
 #include <assert.h>
 #include <unistd.h>
 
@@ -22,6 +23,8 @@
 #include "esp_log.h"
 #include "esp_event.h"
 #include "esp_idf_version.h"
+
+#undef CONFIG_BASE_USE_WIFI
 
 // GCC tricks
 
@@ -37,8 +40,8 @@
 #define CASESTRV(v, x, l)   case x: (v) = #x + l; break
 #define SIZEOF(s, a)        sizeof(((s *)0)->a)
 #define LEN(arr)            ( sizeof(arr) / sizeof(*arr) )
-#define LOOP(x, l, h)       for (int x = (l); x < (h); x++)
-#define LOOPD(x, h, l)      for (int x = (h); x > (l); x--)
+#define LOOP(x, l, h)       for (typeof(h) x = (l); x < (h); x++)
+#define LOOPD(x, h, l)      for (typeof(h) x = (h); x > (l); x--)
 #define LOOPN(x, n)         LOOP(x, 0, (n))
 #define LOOPND(x, n)        LOOPD(x, (n) - 1, -1)
 #define LPCHR(c, n)         do { LOOPN(x, (n)) putchar(c); } while (0)
@@ -48,6 +51,8 @@
 
 // ESP specific
 
+#define TIMEOUT(m)                                                          \
+        ( (m) == (typeof(m))(-1) ? portMAX_DELAY : pdMS_TO_TICKS(m) )
 #define EMALLOC(v, size)                                                    \
         ( (v = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
 #define ECALLOC(v, num, size)                                               \
@@ -64,7 +69,6 @@
         for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
 #define ITERP(v, a)         ITERPN(v, (a), LEN((a)))
 #define ITERV(v, a)         ITERVN(v, (a), LEN((a)))
-#define TIMEOUT(m)          ( (m) == -1 ? portMAX_DELAY: pdMS_TO_TICKS((m)) )
 #define MUTEX()             xSemaphoreCreateBinary()
 #define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
 #define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
@@ -119,17 +123,17 @@
 #endif
 
 #ifndef bitread
-#   define bitsread(v, o, m)   ( ((v) >> (o)) & (m) )
-#   define bitnread(v, o, n)   bitsread((v), (o), BIT(n) - 1)
-#   define bitread(v, o)       bitsread((v), (o), 1)
+#   define bitsread(v, o, m)    ( ((v) >> (o)) & (m) )
+#   define bitnread(v, o, n)    bitsread((v), (o), BIT(n) - 1)
+#   define bitread(v, o)        bitsread((v), (o), 1)
 #endif
 
 // Version aliases
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-#   define TARGET_IDF_5
+#   define IDF_TARGET_V5
 #elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
-#   define TARGET_IDF_4
+#   define IDF_TARGET_V4
 #else
 #   warning "This project has only been tested on ESP-IDF v4.4 & v5.x"
 #endif
@@ -152,12 +156,18 @@ char * b64encode(const char *src, char *dst, size_t slen);
 bool endswith(const char *, const char *tail);
 bool startswith(const char *, const char *head);
 
-bool parse_int(const char *, int *ptr);
-bool parse_uint16(const char *, uint16_t *ptr);
-bool parse_float(const char *, float *ptr);
+bool parse_f64(const char *, double *val);
+bool parse_f32(const char *, float *val);
+bool parse_s64(const char *, int64_t *val);
+bool parse_s32(const char *, int32_t *val);
+bool parse_u32(const char *, uint32_t *val);
+bool parse_u16(const char *, uint16_t *val);
+bool parse_u8(const char *, uint8_t *val);
 size_t parse_all(const char *, int *arr, size_t arrlen);
+size_t parse_pin(const char *, int *arr, size_t arrlen, const char **names);
 
 void hexdump(const void *src, size_t bytes, size_t maxlen);
+void hexdumpl(const void *src, size_t bytes, size_t maxlen);
 char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen);
 
 typedef struct {

@@ -75,10 +75,11 @@
 
 #if !defined(CONFIG_BASE_USE_USB) \
  && !defined(CONFIG_BASE_USE_BT)  \
- && !defined(CONFIG_BASE_USE_SCREEN)
+ && !defined(CONFIG_BASE_USE_WIFI) \
+ && !defined(CONFIG_BASE_USE_SCN)
 #   undef CONSOLE_APP_HID
 #endif
-#ifndef CONFIG_BASE_USE_SCREEN
+#ifndef CONFIG_BASE_USE_SCN
 #   undef CONSOLE_APP_SCN
 #endif
 #ifndef CONFIG_BASE_ALS_TRACK
@@ -248,9 +249,9 @@ static esp_err_t enable_gpio_deep_wakeup() {
     int pin_cnt = sys_sleep_args.pin->count;
     if (!pin_cnt) return ESP_OK;
     int lvl = ARG_INT(sys_sleep_args.lvl, 0);
-    const char *lvls = lvl ? "ANY_HIGH" : "ALL_LOW";
+    const char *lvls = lvl ? "ANY_HIGH" : "ANY_LOW";
     esp_sleep_ext1_wakeup_mode_t mode = \
-        lvl ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ALL_LOW;
+        lvl ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ANY_LOW;
     gpio_num_t pin;
     uint64_t mask = 0;
     LOOPN(i, pin_cnt) {
@@ -526,12 +527,12 @@ static int drv_led(int argc, char **argv) {
         snprintf(buf, sizeof(buf), " %d", idx);
     }
     if (light) {
-        int bval = 0;
+        uint8_t bval = 0;
         if (strstr(light, "off")) {
             bval = 0;
         } else if (strstr(light, "on")) {
             bval = 255;
-        } else if (!parse_int(light, &bval) || bval < 0 || bval > 255) {
+        } else if (!parse_u8(light, &bval)) {
             printf("Invalid brightness: `%s`\n", light);
             return ESP_ERR_INVALID_ARG;
         }
@@ -540,8 +541,8 @@ static int drv_led(int argc, char **argv) {
         printf("LED%s: set brightness to %d\n", buf, bval);
     }
     if (color) {
-        int rgb = 0;
-        if (!parse_int(color, &rgb) || rgb < 0 || rgb > 0xFFFFFF) {
+        uint32_t rgb = 0;
+        if (!parse_u32(color, &rgb)) {
             printf("Unsupported color: `%s`\n", color);
             return ESP_ERR_INVALID_ARG;
         }
@@ -638,11 +639,7 @@ static struct {
     arg_int_t *tout;
     arg_end_t *end;
 } drv_adc_args = {
-#   ifdef PIN_ADC2
-    .idx  = arg_int0(NULL, NULL, "0|1", "index of ADC channel"),
-#   else
-    .idx  = arg_int0(NULL, NULL, "0", "index of ADC channel"),
-#   endif
+    .idx  = arg_int0(NULL, NULL, NULL, "index of ADC channel"),
     .joy  = arg_lit0(NULL, "joy", "read joystick value"),
     .hall = arg_lit0(NULL, "hall", "read hall sensor value"),
     .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
@@ -795,7 +792,7 @@ static esp_err_t register_drv() {
         ESP_CMD_ARG(drv, dac, "Write DAC and calculate value in mV"),
 #endif
 #ifdef CONSOLE_DRV_PWM
-        ESP_CMD_ARG(drv, pwm, "Control rotation of servo by PWM"),
+        ESP_CMD_ARG(drv, pwm, "Set / get PWM frequence and duty"),
 #endif
     };
     return register_commands(cmds, LEN(cmds));
@@ -1307,7 +1304,7 @@ static struct {
 static int net_ping(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ping_args);
     if (net_ping_args.dry->count)
-        return network_parse_addr(net_ping_args.host->sval[0], NULL);
+        return network_parse_host(net_ping_args.host->sval[0], NULL);
     return ping_command(
         net_ping_args.host->sval[0],
         ARG_INT(net_ping_args.intv, 0),
@@ -1394,10 +1391,10 @@ static int net_tsync(int argc, char **argv) {
 static esp_err_t register_net() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_NET_STA
-        ESP_CMD_ARG(net, sta, "Query / Scan / Connect / Disconnect APs"),
+        ESP_CMD_ARG(net, sta, "Query / scan / connect / disconnect APs"),
 #endif
 #ifdef CONSOLE_NET_AP
-        ESP_CMD_ARG(net, ap, "Query / Start / Stop SoftAP"),
+        ESP_CMD_ARG(net, ap, "Query / start / stop SoftAP"),
 #endif
 #ifdef CONSOLE_NET_BT
         ESP_CMD_ARG(net, bt, "Set / get BT working mode"),
@@ -1406,10 +1403,10 @@ static esp_err_t register_net() {
         ESP_CMD_ARG(net, ftm, "RTT Fine Timing Measurement between STA & AP"),
 #endif
 #ifdef CONSOLE_NET_MDNS
-        ESP_CMD_ARG(net, mdns, "Query / Set mDNS hostname and service info"),
+        ESP_CMD_ARG(net, mdns, "Query / set mDNS hostname and service info"),
 #endif
 #ifdef CONSOLE_NET_SNTP
-        ESP_CMD_ARG(net, sntp, "Query / Set SNTP server and sync status"),
+        ESP_CMD_ARG(net, sntp, "Query / set SNTP server and sync status"),
 #endif
 #ifdef CONSOLE_NET_PING
         ESP_CMD_ARG(net, ping, "Send ICMP ECHO_REQUEST to specified hosts"),
@@ -1449,7 +1446,7 @@ static struct {
     .dial = arg_str0("d", NULL, "LRUD", "report S-Dial"),
     .tout = arg_int0("t", NULL, "0-65535", "event timeout in ms"),
     .tevt = arg_dbl0(NULL, "ts", "MSEC", "event unix timestamp in ms"),
-    .tgt  = arg_str0(NULL, "to", "0-2|UBS", "report to USB/BT/SCN"),
+    .tgt  = arg_str0(NULL, "to", "0-3|UBWS", "report to USB/BT/WIFI/SCN"),
     .end  = arg_end(9)
 };
 
@@ -1464,11 +1461,10 @@ static int app_hid(int argc, char **argv) {
     const char *tstr = ARG_STR(app_hid_args.tgt, NULL);
     uint16_t tout_ms = ARG_INT(app_hid_args.tout, 50);
     double tevt_ms = ARG_DBL(app_hid_args.tevt, 0);
-    int idx = stridx(tstr, "UBS");
+    int idx = stridx(tstr, "UBWS");
+    if (tstr && (idx < 0 || idx > 3)) return ESP_ERR_INVALID_ARG;
+    hid_target_t to = tstr ? (hid_target_t)BIT(idx) : HID_TARGET_ALL;
     esp_err_t err = ESP_OK;
-
-    hid_target_t to = idx >= 0 ? (hid_target_t)idx : HID_TARGET_ALL;
-    if (tstr && idx < 0) return ESP_ERR_INVALID_ARG;
 
     if (keybd) {
         hid_report_keybd_press(to, keybd, tout_ms);
@@ -1512,6 +1508,20 @@ static int app_hid(int argc, char **argv) {
         case 'l': FALLTH; case 'L': hid_report_sdial(to, SDIAL_L); break;
         default: if (strbool(sdial)) hid_report_sdial_click(to, tout_ms);
         }
+    } else {
+        printf(
+            "Current HID is %d: %s\n"
+            "VID=0x%04X PID=0x%04X VER=0x%04X %s %s\n",
+            HIDTool.pad, HIDTool.dstr,
+            HIDTool.vid, HIDTool.pid, HIDTool.ver,
+            HIDTool.vendor, HIDTool.serial);
+#ifdef CONFIG_BASE_DEBUG
+        if (HIDTool.dlen) {
+            printf("HID Descriptor (%d Bytes):\n", HIDTool.dlen);
+            hexdump(HIDTool.desc, HIDTool.dlen, 80);
+        }
+#endif
+        return 0;
     }
 
     if (tevt_ms) {
@@ -1526,33 +1536,37 @@ static int app_hid(int argc, char **argv) {
 #ifdef CONSOLE_APP_SCN
 static struct {
     arg_int_t *btn;
-    arg_int_t *bar;
     arg_int_t *rot;
+    arg_int_t *gap;
     arg_int_t *fps;
+    arg_int_t *bar;
     arg_str_t *font;
     arg_end_t *end;
 } app_scn_args = {
     .btn  = arg_int0(NULL, NULL, "0-6", "trigger virtual button press"),
-    .bar  = arg_int0("p", NULL, "0-100", "draw progress bar on screen"),
     .rot  = arg_int0("r", NULL, "0-3", "software rotation of screen"),
+    .gap  = arg_int0("g", NULL, "0-2^15", "x and y gaps of screen"),
     .fps  = arg_int0("f", NULL, "0-100", "set LVGL refresh period in FPS"),
+    .bar  = arg_int0("p", NULL, "0-100", "draw progress bar on screen"),
     .font = arg_str0(NULL, "font", "PATH", "load font from file"),
-    .end  = arg_end(5)
+    .end  = arg_end(6)
 };
 
 static int app_scn(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_scn_args);
     int btn = ARG_INT(app_scn_args.btn, -1);
-    int bar = ARG_INT(app_scn_args.bar, -1);
     int rot = ARG_INT(app_scn_args.rot, -1);
+    int gap = ARG_INT(app_scn_args.gap, -1);
     int fps = ARG_INT(app_scn_args.fps, -1);
+    int bar = ARG_INT(app_scn_args.bar, -1);
     const char *font = ARG_STR(app_scn_args.font, NULL);
-    if (bar >= 0) return screen_command(SCN_PBAR, &bar);
-    if (btn >= 0) return screen_command(SCN_BTN, &btn);
-    if (rot >= 0) return screen_command(SCN_ROT, &rot);
-    if (fps >= 0) return screen_command(SCN_FPS, &fps);
-    if (font) return screen_command(SCN_FONT, font);
-    screen_status();
+    if (font) return scn_command(SCN_FONT, font);
+    if (bar >= 0) return scn_command(SCN_PBAR, &bar);
+    if (fps >= 0) return scn_command(SCN_FPS, &fps);
+    if (gap >= 0) return scn_command(SCN_GAP, &gap);
+    if (rot >= 0) return scn_command(SCN_ROT, &rot);
+    if (btn >= 0) return scn_command(SCN_BTN, &btn);
+    scn_status();
     return ESP_OK;
 }
 #endif // CONSOLE_APP_SCN
@@ -1563,7 +1577,7 @@ static struct {
     arg_str_t *rlt;
     arg_end_t *end;
 } app_als_args = {
-    .idx = arg_int0(NULL, NULL, "0-3", "index of ALS chip"),
+    .idx = arg_int0(NULL, NULL, "0-3", "index of ALS sensor"),
     .rlt = arg_str0("t", NULL, "0-3|HVA", "run light tracking"),
     .end = arg_end(2)
 };
@@ -1633,12 +1647,12 @@ static int app_avc(int argc, char **argv) {
 
 #ifdef CONSOLE_APP_SEN
 static struct {
-    arg_str_t *sen;
+    arg_str_t *name;
     arg_int_t *intv;
     arg_int_t *tout;
     arg_end_t *end;
 } app_sen_args = {
-    .sen  = arg_str1(NULL, NULL, "0-5", "temp|tpad|tscn|dist|gy39|pwr"),
+    .name = arg_str1(NULL, NULL, "0-5", "temp|tpad|tscn|dist|gy39|pwr"),
     .intv = arg_int0("i", NULL, "10-1000", "interval in ms, default 500"),
     .tout = arg_int0("t", NULL, "0-2^31", "loop until timeout in ms"),
     .end  = arg_end(3)
@@ -1646,8 +1660,8 @@ static struct {
 
 static int app_sen(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_sen_args);
-    const char *sensor = ARG_STR(app_sen_args.sen, "0");
-    const char *itpl = app_sen_args.sen->hdr.glossary;
+    const char *sensor = ARG_STR(app_sen_args.name, "0");
+    const char *itpl = app_sen_args.name->hdr.glossary;
     const char *istr = strstr(itpl, sensor);
     uint8_t index = istr ? strcnt(itpl, "|", istr - itpl) : sensor[0] - '0';
     uint16_t intv_ms = CONS(ARG_INT(app_sen_args.intv, 500), 10, 1000);
@@ -1664,26 +1678,10 @@ static int app_sen(int argc, char **argv) {
             fprintf(stderr, "\rTouch pad: %4d", val);
         } else if (index == 2) {
             tscn_data_t dat;
-            if (tscn_probe(&dat)) goto error;
-            fprintf(stderr, "\rTouch screen:");
-            LOOPN(i, dat.num) {
-                fprintf(stderr, " ID %d, EVT %c, X %3d, Y %3d",
-                    dat.pts[i].id, "PRC-"[dat.pts[i].evt],
-                    dat.pts[i].x, dat.pts[i].y);
-            }
-            const char *gstr = NULL;
-            switch (dat.ges) {
-            case GES_MOVE_UP: gstr = "Move Up";     break;
-            case GES_MOVE_RT: gstr = "Move Right";  break;
-            case GES_MOVE_DN: gstr = "Move Down";   break;
-            case GES_MOVE_LT: gstr = "Move Left";   break;
-            case GES_ZOOM_IN: gstr = "Zoom In";     break;
-            case GES_ZOOM_OT: gstr = "Zoom Out";    break;
-            }
-            if (gstr) fprintf(stderr, " Gesture %s", gstr);
-            if (!dat.num && !dat.ges) fprintf(stderr, " not touched");
+            if (tscn_read(&dat)) goto error;
+            tscn_print(&dat, stderr, false);
         } else if (index == 3) {
-            uint16_t val = vlx_probe();
+            uint16_t val = vlx_read();
             if (val == UINT16_MAX) goto error;
             fprintf(stderr, "\rDistance: range ");
             if (val > 1000) {
@@ -1693,7 +1691,7 @@ static int app_sen(int argc, char **argv) {
             }
         } else if (index == 4) {
             gy39_data_t dat;
-            if (gy39_measure(&dat)) goto error;
+            if (gy39_read(NUM_I2C, &dat)) goto error;
             fprintf(stderr, "\rGY39: %.2flux %.2fdegC %.3fkPa %.2f%% %.2fm",
                 dat.brightness, dat.temperature,
                 dat.atmosphere, dat.humidity, dat.altitude);
@@ -1769,13 +1767,27 @@ extern "C" void console_register_commands() {
     drv_led_args.idx->hdr.datatype = lb;
     drv_led_args.blk->hdr.datatype = bb;
 #endif
+#ifdef CONSOLE_DRV_ADC
+    static char ab[6] = "";
+    size_t al = sizeof(ab), as = 0;
+#   ifdef PIN_ADC0
+    as += snprintf(ab + as, al - as, "%s0", as ? "|" : "");
+#   endif
+#   ifdef PIN_ADC1
+    as += snprintf(ab + as, al - as, "%s1", as ? "|" : "");
+#   endif
+#   ifdef PIN_ADC2
+    as += snprintf(ab + as, al - as, "%s2", as ? "|" : "");
+#   endif
+    drv_adc_args.idx->hdr.datatype = ab;
+#endif
 #ifdef CONSOLE_DRV_GPIO
     static char gb[22];
     size_t gl = sizeof(gb), gs = snprintf(gb, gl, "0-%d", GPIO_PIN_COUNT - 1);
-#   ifdef CONFIG_BASE_GPIOEXP_I2C
+#   ifdef CONFIG_BASE_GEXP_I2C
     gs += snprintf(gb + gs, gl - gs, "|%d-%d", PIN_I2C_BASE, PIN_I2C_MAX - 1);
 #   endif
-#   ifdef CONFIG_BASE_GPIOEXP_SPI
+#   ifdef CONFIG_BASE_GEXP_SPI
     gs += snprintf(gb + gs, gl - gs, "|%d-%d", PIN_SPI_BASE, PIN_SPI_MAX - 1);
 #   endif
     drv_gpio_args.pin->hdr.datatype = gb; NOTUSED(gs);

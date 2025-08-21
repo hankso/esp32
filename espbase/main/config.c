@@ -24,8 +24,9 @@ config_t Config = {
         .DIR_DOCS  = "/docs/",
         .DIR_HTML  = "/www/",
         .BTN_HIGH  = "0",
-        .INT_EDGE  = "NEG",
-        .USB_MODE  = "HID_DEVICE",
+        .INT_EDGE  = "ANY",
+        .ADC_MULT  = "16",
+        .USB_MODE  = "SERIAL_JTAG",
         .BT_MODE   = "BLE_HIDD",
         .BT_SCAN   = "1",
     },
@@ -36,6 +37,9 @@ config_t Config = {
         .AP_SSID   = "espbase",
         .AP_PASS   = "16011106",
         .AP_HOST   = "10.0.2.1",
+        .AP_CHAN   = "1",
+        .AP_NCON   = "4",
+        .AP_NAPT   = "1",
         .AP_HIDE   = "0",
         .AP_AUTO   = "1",
         .SC_AUTO   = "1",
@@ -52,11 +56,19 @@ config_t Config = {
         .MDNS_HOST = "",
         .SNTP_RUN  = "1",
         .SNTP_HOST = "pool.ntp.org",
+        .TSCN_MODE = "REL",
+        .HID_MODE  = "GENERAL",
+        .HID_HOST  = "10.0.2.255",
         .OTA_AUTO  = "1",
         .OTA_URL   = "",
-        .HID_MODE  = "GENERAL",
         .TIMEZONE  = "CST-8",   // China Standard Time
+#if defined(CONFIG_IDF_TARGET_ESP32S3)
+        .PROMPT    = "esp32s3> ",
+#elif defined(CONFIG_IDF_TARGET_ESP32)
         .PROMPT    = "esp32> ",
+#else
+        .PROMPT    = "esp> ",
+#endif
     },
     .info = {
         .NAME      = "",
@@ -73,8 +85,8 @@ config_t Config = {
 // not be deallocated. Field `freeval` is designed to hold strdup of new value.
 // Feel free to call `config_set` on `char *` (without memory leak).
 typedef struct {
-    const char *key;
-    const char * *value;
+    const char * key;
+    const char ** val;
     char * freeval;
 } config_entry_t;
 
@@ -84,6 +96,7 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"sys.dir.html",    &Config.sys.DIR_HTML,   NULL},
     {"sys.btn.high",    &Config.sys.BTN_HIGH,   NULL},
     {"sys.int.edge",    &Config.sys.INT_EDGE,   NULL},
+    {"sys.adc.mult",    &Config.sys.ADC_MULT,   NULL},
     {"sys.usb.mode",    &Config.sys.USB_MODE,   NULL},
     {"sys.bt.mode",     &Config.sys.BT_MODE,    NULL},
     {"sys.bt.scan",     &Config.sys.BT_SCAN,    NULL},
@@ -94,6 +107,9 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"net.ap.ssid",     &Config.net.AP_SSID,    NULL},
     {"net.ap.pass",     &Config.net.AP_PASS,    NULL},
     {"net.ap.host",     &Config.net.AP_HOST,    NULL},
+    {"net.ap.chan",     &Config.net.AP_CHAN,    NULL},
+    {"net.ap.ncon",     &Config.net.AP_NCON,    NULL},
+    {"net.ap.napt",     &Config.net.AP_NAPT,    NULL},
     {"net.ap.hide",     &Config.net.AP_HIDE,    NULL},
     {"net.ap.auto",     &Config.net.AP_AUTO,    NULL},
     {"net.sc.auto",     &Config.net.SC_AUTO,    NULL},
@@ -108,7 +124,9 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
     {"app.sntp.host",   &Config.app.SNTP_HOST,  NULL},
+    {"app.tscn.mode",   &Config.app.TSCN_MODE,  NULL},
     {"app.hid.mode",    &Config.app.HID_MODE,   NULL},
+    {"app.hid.host",    &Config.app.HID_HOST,   NULL},
     {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
     {"app.ota.url",     &Config.app.OTA_URL,    NULL},
     {"app.timezone",    &Config.app.TIMEZONE,   NULL},
@@ -121,11 +139,13 @@ static config_entry_t rolst[] = {       // readonly entries
     {"uid",  &Config.info.UID,  NULL},
 };
 
-static const uint16_t rwlen = LEN(rwlst);
+static uint16_t rwlen = LEN(rwlst);
 
 /******************************************************************************
  * Configuration I/O
  */
+
+ESP_EVENT_DEFINE_BASE(CFG_EVENT);
 
 static struct {
     bool init;                      // whether nvs flash has been initialized
@@ -144,13 +164,13 @@ static int16_t config_index(const char *key) {
 static esp_err_t config_set_safe(
     config_entry_t *ent, const char *value, bool commit
 ) {
-    if (!strcmp(*ent->value, value)) return ESP_OK;
+    if (!strcmp(*ent->val, value)) return ESP_OK;
     char *tmp = strdup(value);
     if (!tmp) return ESP_ERR_NO_MEM;
     TRYFREE(ent->freeval);
-    *ent->value = ent->freeval = tmp;
+    *ent->val = ent->freeval = tmp;
     if (commit && !config_nvs_open(NAMESPACE_CFG, false)) {
-        nvs_set_str(ctx.handle, ent->key, *ent->value);
+        nvs_set_str(ctx.handle, ent->key, *ent->val);
         config_nvs_close();
     }
     return ESP_OK;
@@ -159,12 +179,14 @@ static esp_err_t config_set_safe(
 bool config_set(const char *key, const char *value) {
     int16_t idx = config_index(key);
     if (idx == -1) return false;
-    return config_set_safe(rwlst + idx, value ?: "", true) == ESP_OK;
+    if (config_set_safe(rwlst + idx, value ?: "", true)) return false;
+    esp_event_post(CFG_EVENT, CFG_UPDATE, (void *)key, strlen(key), 0);
+    return true;
 }
 
 const char * config_get(const char *key) {
     int16_t idx = config_index(key);
-    return idx == -1 ? "Unknown" : *rwlst[idx].value;
+    return idx == -1 ? "Unknown" : *rwlst[idx].val;
 }
 
 void config_stats() {
@@ -178,9 +200,9 @@ void config_stats() {
     LOOPN(i, rwlen) {
         printf("  %-*s ", keylen, rwlst[i].key);
         if (endswith(rwlst[i].key, "pass")) {
-            LPCHR('*', MIN(strlen(*rwlst[i].value), 16));
+            LPCHR('*', MIN(strlen(*rwlst[i].val), 16));
         } else {
-            printf(*rwlst[i].value);
+            printf(*rwlst[i].val);
         }
         printf("%s\n", rwlst[i].freeval ? " (modified)" : "");
     }
@@ -242,7 +264,7 @@ bool config_loads(const char *json) {
 char * config_dumps() {
     cJSON *obj = cJSON_CreateObject();
     LOOPN(i, rwlen) {
-        cJSON_AddStringToObject(obj, rwlst[i].key, *rwlst[i].value);
+        cJSON_AddStringToObject(obj, rwlst[i].key, *rwlst[i].val);
     }
     char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -428,7 +450,7 @@ bool config_nvs_dump() {
     if (config_nvs_open(NAMESPACE_CFG, false)) return false;
     bool success = true;
     LOOPN(i, rwlen) {
-        if (nvs_set_str(ctx.handle, rwlst[i].key, *rwlst[i].value)) {
+        if (nvs_set_str(ctx.handle, rwlst[i].key, *rwlst[i].val)) {
             success = false;
             break;
         }
@@ -557,4 +579,5 @@ void config_initialize() {
         }
         config_nvs_close();
     }
+    esp_event_loop_create_default();
 }

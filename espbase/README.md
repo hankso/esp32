@@ -237,12 +237,20 @@ PIN Value Usage
 
 - ESP32-S3 LuatOS
     + LED: GPIO10, GPIO11
-    + Export: GPIO0-18
-- ESP32-S3 NoLogo
+    + PIN: GPIO0-18
+
+- ESP32-S3 NoLogo SuperMini
     + LED: GPIO48
-    + Export: GPIO1-13
-    + Export: GPIO14-48 by pad
+    + PIN: GPIO1-13
+    + PAD: GPIO14-48
     + No GPIO0
+
+- ESP32-S3 NoLogo LCD-1.91
+    + PIN: GPIO1-3, 10-13, 16-18, 21, 43, 44
+
+- ESP32-S3 USBOTG
+    + LED: GPIO15, 16
+    + PAD: GPIO3, 26, 39-42, 45-48
 
 ```
 Native GPIO 0-48
@@ -292,4 +300,96 @@ PIN Value Usage
 46    LOW Strapping PD
 47    LOW
 48    LOW LED
+```
+
+### Board specific
+
+#### ESP32-S3 USB OTG
+
+```
+PIN Usage
+0   BTN OK
+1   ADC VHOST (ADC1 CHAN0)
+2   ADC VBAT  (ADC1 CHAN1)
+3
+4   SPI Screen D/C
+5   SPI Screen CS
+6   SPI Screen SCLK
+7   SPI Screen MOSI
+8   SPI Screen RST
+9   SPI Screen BL
+10  BTN UP
+11  BTN DN
+12  EN DEV_VBUS
+13  EN BOOST
+14  BTN MENU
+15  LED GREEN
+16  LED YELLOW
+17  EN ILIMIT
+18  EN USB_HOST
+19  USB DN
+20  USB DP
+21  OVER CURRENT
+26
+33  SDIO D2
+34  SDIO D3
+35  SDIO CMD
+36  SDIO SCK
+37  SDIO D0
+38  SDIO D1
+39
+40
+41
+42
+43  UART TX0
+44  UART RX0
+45
+46
+47
+48
+```
+
+#### ESP32-S3 NoLogo 1.91
+
+```
+PIN Usage
+0   BTN 1
+1
+2
+3
+4   ADC VBAT
+5   LCD RST
+6   LCD CS
+7   LCD D/C
+8   LCD WR
+9   LCD RD
+10
+11
+12
+13
+14  BTN 2
+15  PWR ON
+16  TOUCH INT
+17  I2C SCL
+18  I2C SDA
+19  USB DN
+20  USB DP
+21  TOUCH RST
+26
+33
+34
+35
+36
+37
+38  LCD BL
+39  LCD D0
+40  LCD D1
+41  LCD D2
+42  LCD D3
+43  UART TX0
+44  UART RX0
+45  LCD D4
+46  LCD D5
+47  LCD D6
+48  LCD D7
 ```

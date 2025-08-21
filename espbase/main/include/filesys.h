@@ -42,6 +42,10 @@ typedef struct {
     size_t blkcnt;
     size_t blksize;
     int pdrv; // available if FAT Flash or FAT SDCard
+    union {
+        wl_handle_t wlhdl;
+        sdmmc_card_t *card;
+    };
 } filesys_info_t;
 
 void filesys_initialize();

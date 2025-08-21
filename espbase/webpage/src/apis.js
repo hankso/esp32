@@ -186,7 +186,7 @@ function parseCommand(str) {
     if (lines.length < 2) return
     let cmd = {
         key: lines[0].split(' ')[0].replace('help', 'helpe'),
-        group: 'server',
+        group: 'esp32',
         usage: lines[0].trim(),
         description: lines[1].trim(),
     }

@@ -40,13 +40,15 @@
 #define GPIO_NUMBER(num) _GPIO_NUMBER(num)
 
 #ifdef CONFIG_BASE_USE_LED
-#   if defined(CONFIG_BASE_CAM_ATCAM)
+#   if defined(CONFIG_BASE_BOARD_ATCAM)
 #       define PIN_LED  GPIO_NUMBER(33)
-#   elif defined(CONFIG_BASE_BOARD_ESP32_DEVKIT)
+#   elif defined(CONFIG_BASE_BOARD_DEVKIT)
 #       define PIN_LED  GPIO_NUMBER(2)
-#   elif defined(CONFIG_BASE_BOARD_ESP32S3_LUATOS)
+#   elif defined(CONFIG_BASE_BOARD_USBOTG)
+#       define PIN_LED  GPIO_NUMBER(15)
+#   elif defined(CONFIG_BASE_BOARD_S3LUAT)
 #       define PIN_LED  GPIO_NUMBER(10)
-#   elif defined(CONFIG_BASE_BOARD_ESP32S3_NOLOGO)
+#   elif defined(CONFIG_BASE_BOARD_S3XMINI)
 #       define PIN_LED  GPIO_NUMBER(48)
 #       undef CONFIG_BASE_LED_MODE_GPIO
 #       undef CONFIG_BASE_LED_MODE_LEDC
@@ -70,19 +72,18 @@
 #   define PIN_DAT      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_DAT)
 #endif
 
-
 #ifdef CONFIG_BASE_USE_I2C
 #   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
-#   if defined(CONFIG_BASE_USE_CAM) && CONFIG_BASE_I2C_NUM == 0
-#       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_CAM_SDA)
-#       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_CAM_SCL)
+#   if CONFIG_BASE_BOARD_SDA >= 0 && CONFIG_BASE_I2C_NUM == 0
+#       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_BOARD_SDA)
+#       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_BOARD_SCL)
 #   elif defined(CONFIG_BASE_USE_I2C0)
 #       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA0)
 #       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL0)
 #   endif
-#   if defined(CONFIG_BASE_USE_CAM) && CONFIG_BASE_I2C_NUM == 1
-#       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_CAM_SDA)
-#       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_CAM_SCL)
+#   if CONFIG_BASE_BOARD_SDA >= 0 && CONFIG_BASE_I2C_NUM == 1
+#       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_BOARD_SDA)
+#       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_BOARD_SCL)
 #   elif defined(CONFIG_BASE_USE_I2C1)
 #       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA1)
 #       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL1)
@@ -105,31 +106,35 @@
 #ifdef CONFIG_BASE_SDFS_SPI
 #   define PIN_CS0      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS0)
 #endif
-#ifdef CONFIG_BASE_SCREEN_SPI
+#ifdef CONFIG_BASE_SCN_SPI
 #   define PIN_CS1      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS1)
-#   define PIN_SDC      GPIO_NUMBER(CONFIG_BASE_GPIO_SCN_DC)
-#   ifdef CONFIG_BASE_GPIO_SCN_RST
-#       define PIN_SRST GPIO_NUMBER(CONFIG_BASE_GPIO_SCN_RST)
-#   else
-#       define PIN_SRST GPIO_NUM_NC
-#   endif
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
 #   define PIN_CS2      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS2)
 #endif
 
-#ifdef CONFIG_BASE_GPIOEXP_INT
-#   define PIN_INT      GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
+#ifdef CONFIG_BASE_GPIO_INT
+#   ifdef CONFIG_BASE_BOARD_S3NL191
+#       define PIN_INT  GPIO_NUMBER(16)
+#   else
+#       define PIN_INT  GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
+#   endif
 #endif
 
 #if defined(CONFIG_BASE_ADC_HALL_SENSOR)
-#   define PIN_ADC1     GPIO_NUMBER(36)
-#   define PIN_ADC2     GPIO_NUMBER(39)
+#   define PIN_ADC0     GPIO_NUMBER(36)
+#   define PIN_ADC1     GPIO_NUMBER(39)
 #elif defined(CONFIG_BASE_ADC_JOYSTICK)
+#   define PIN_ADC0     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC0)
 #   define PIN_ADC1     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC1)
-#   define PIN_ADC2     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC2)
 #elif defined(CONFIG_BASE_USE_ADC)
-#   define PIN_ADC1     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC1)
+#   define PIN_ADC0     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC0)
+#endif
+#if defined(CONFIG_BASE_BOARD_S3NL191)
+#   ifndef CONFIG_BASE_USE_ADC
+#       define CONFIG_BASE_USE_ADC
+#   endif
+#   define PIN_ADC2     GPIO_NUMBER(4)
 #endif
 
 #ifdef CONFIG_BASE_USE_DAC
@@ -141,7 +146,11 @@
 #endif
 
 #ifdef CONFIG_BASE_BTN_INPUT
-#   define PIN_BTN      GPIO_NUMBER(CONFIG_BASE_GPIO_BTN)
+#   ifdef CONFIG_BASE_BOARD_S3NL191
+#       define PIN_BTN  GPIO_NUMBER(14)
+#   else
+#       define PIN_BTN  GPIO_NUMBER(CONFIG_BASE_GPIO_BTN)
+#   endif
 #endif
 
 #ifdef CONFIG_BASE_USE_KNOB
@@ -165,7 +174,7 @@ extern "C" {
 void driver_initialize();
 
 int adc_hall(); // return 0 if error
-int adc_read(uint8_t idx); // return -1 if error, else measured mV
+int adc_read(uint8_t idx); // return -1 if error, else measured 0-3300 mV
 int adc_joystick(int *dx, int *dy); // return -1 if error, else x << 16 | y
 
 esp_err_t dac_write(uint8_t val);
@@ -200,8 +209,9 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
 #define RT_CBITS(r, m)      { (4 << 16) | (r), (m) }
 #define RT_SBITS(r, m)      { (5 << 16) | (r), (m) }
 #define RT_TOGGLE(r, b)     { (6 << 16) | (r), (b) }
-#define RT_WAIT0(r, m, ms)  { (7 << 16) | (r), (m) | ((ms) << 16) }
-#define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) }
+#define RT_WAIT0(r, m, ms)  { (7 << 16) | (r), (m) | ((ms) << 16) } // wait none
+#define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) } // wait any
+#define RT_WAIT2(r, m, ms)  { (9 << 16) | (r), (m) | ((ms) << 16) } // wait all
 #define RT_SLEEP(ms)        { 0xFF << 16, (ms) }
 #define RT_FIND_OPT(arr, o) ({ smbus_regval_t *p = (arr);                     \
                                while (p && (p->reg >> 16) != (o)) p++; p; })
@@ -213,7 +223,7 @@ esp_err_t smbus_regtable(int bus, uint8_t addr, smbus_regval_t *, size_t);
 typedef enum {
     // GPIO Expander by PCF8574: Endstops | Temprature | Valves
     PIN_I2C_MIN = GPIO_PIN_COUNT - 1,
-#ifdef CONFIG_BASE_GPIOEXP_I2C
+#ifdef CONFIG_BASE_GEXP_I2C
     // endstops
     PIN_XMIN, PIN_XMAX, PIN_YMIN, PIN_YMAX,
     PIN_ZMIN, PIN_ZMAX, PIN_EVAL, PIN_PROB,
@@ -230,7 +240,7 @@ typedef enum {
 
     // GPIO Expander by cascaded 74HC595s (SPI connection): Steppers
     PIN_SPI_MIN = PIN_I2C_MAX - 1,
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
     // stepper direction & step (pulse)
     PIN_XDIR,  PIN_XSTEP,  PIN_YDIR,  PIN_YSTEP,  PIN_ZDIR,  PIN_ZSTEP,
     PIN_E1DIR, PIN_E1STEP, PIN_E2DIR, PIN_E2STEP, PIN_E3DIR, PIN_E3STEP,

@@ -1,0 +1,6 @@
+# Serial flasher config
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+
+# Partition_table
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions-8m.csv"
+CONFIG_PARTITION_TABLE_FILENAME="partitions-8m.csv"

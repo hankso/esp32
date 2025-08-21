@@ -22,7 +22,8 @@ extern "C" {
 #endif
 
 void network_initialize();
-esp_err_t network_parse_addr(const char *host, void *dst);
+esp_err_t network_parse_host(const char *host, void *ipaddr);
+esp_err_t network_parse_addr(const char *host, uint16_t port, void *sockaddr);
 
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip);
 esp_err_t wifi_ap_stop();
@@ -57,7 +58,7 @@ esp_err_t iperf_command(const char *host, uint16_t port,
 #define   iperf_abort() iperf_command(NULL, 0, 0, 0, 0, false, true)
 
 esp_err_t tsync_command(const char *host, uint16_t port,
-                           uint32_t timeout_ms, bool abort);
+                        uint32_t timeout_ms, bool abort);
 #define   tsync_abort() tsync_command(NULL, 0, 0, true)
 
 #ifdef __cplusplus

@@ -32,6 +32,12 @@
         "HIGH"
       ]
     },
+    "sys.adc.mult": {
+      "description": "ADC multi-sampling to filter noise",
+      "type": "number",
+      "minumum": 1,
+      "maximum": 255
+    },
     "sys.usb.mode": {
       "description": "Select USB work mode",
       "enum": [
@@ -98,12 +104,29 @@
       ]
     },
     "net.ap.host": {
-      "description": "IP address of Gateway",
+      "description": "Gateway IP address",
       "type": "string",
       "anyOf": [
         { "format": "ipv4" },
         { "maxLength": 0 }
       ]
+    },
+    "net.ap.chan": {
+      "description": "Channel of AP",
+      "type": "number",
+      "minumum": 1,
+      "maximum": 14
+    },
+    "net.ap.ncon": {
+      "description": "Max number of stations of AP",
+      "type": "number",
+      "minumum": 1,
+      "maximum": 253
+    },
+    "net.ap.napt": {
+      "description": "Enable WiFi NAT router (ESP-IDF v5+)",
+      "type": "string",
+      "pattern": "^[01yn]?$"
     },
     "net.ap.hide": {
       "description": "Hide AP SSID (not shown on scan)",
@@ -175,6 +198,14 @@
         { "maxLength": 0 }
       ]
     },
+    "app.tscn.mode": {
+      "description": "Select touchscreen mode",
+      "enum": [
+        "REL",
+        "ABS",
+        "TCH"
+      ]
+    },
     "app.hid.mode": {
       "description": "Select gamepad layout",
       "enum": [
@@ -182,6 +213,14 @@
         "XINPUT",
         "SWITCH",
         "DSENSE"
+      ]
+    },
+    "app.hid.host": {
+      "description": "UDP target hostname or IP address",
+      "type": "string",
+      "anyOf": [
+        { "format": "hostname" },
+        { "maxLength": 0 }
       ]
     },
     "app.ota.auto": {

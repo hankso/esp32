@@ -684,7 +684,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     if (gmpad_tricks) {
         snprintf(name, sizeof(name), "%s-%s",
                  Config.info.NAME, Config.app.HID_MODE);
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
         uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_BT);
         mac[1] += HIDTool.pad;      // set different MAC for difference layout
         if (!err) err = esp_iface_mac_addr_set(mac, ESP_MAC_BT);

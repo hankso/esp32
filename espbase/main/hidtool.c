@@ -4,24 +4,38 @@
  * Time: 2024/4/17 12:56:20
  */
 
-#include "hidtool.h"
 #include "hiddesc.h"
+#include "hidtool.h"
+#include "network.h"            // for network_parse_addr
 #include "filesys.h"            // for filesys_load
 #include "usbmode.h"            // for hidu_send_report
 #include "btmode.h"             // for hidb_send_report
-#include "screen.h"             // for screen_command
+#include "screen.h"             // for scn_command
 #include "config.h"
+
+#include "lwip/sockets.h"
 
 static const char *TAG = "HIDTool";
 
+#ifdef CONFIG_BASE_USE_WIFI
+static struct {
+    int sock;
+    struct sockaddr_storage addr;
+} uctx;
+#endif
+
+static hid_gmpad_data_t gctx;   // defined here for logging
+
 hidtool_t HIDTool = {
     .pad = 0, .rlen = {
-        0,
-        SIZEOF(hid_report_t, keybd),
-        SIZEOF(hid_report_t, mouse),
-        SIZEOF(hid_report_t, gmpad),
-        SIZEOF(hid_report_t, sctrl),
-        SIZEOF(hid_report_t, sdial),
+        [0]               = 0,
+        [REPORT_ID_KEYBD] = SIZEOF(hid_report_t, keybd),
+        [REPORT_ID_MOUSE] = SIZEOF(hid_report_t, mouse),
+        [REPORT_ID_ABMSE] = SIZEOF(hid_report_t, abmse),
+        [REPORT_ID_TOUCH] = SIZEOF(hid_report_t, touch),
+        [REPORT_ID_GMPAD] = SIZEOF(hid_report_t, gmpad),
+        [REPORT_ID_SCTRL] = SIZEOF(hid_report_t, sctrl),
+        [REPORT_ID_SDIAL] = SIZEOF(hid_report_t, sdial),
     },
     .desc = { 0 }, .dlen = 0,
     .vid = 0xCAFE, .pid = 0x4000, .ver = 0,
@@ -46,11 +60,12 @@ void hidtool_initialize() {
         HIDTool.vid = 0x16C0;   // libusb debug vendor id
         HIDTool.vid = 0x05DF;
         HIDTool.pad = GMPAD_GENERAL;
-        HIDTool.dstr = "Keybd(1), Mouse(2), Joyst(3), SCtrl(4), SDial(5)";
+        HIDTool.dstr = "Keybd(1), Mouse(2-4), Joyst(5), SCtrl(6), SDial(7)";
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, general);
         uint8_t desc[] = {
             HID_REPORT_DESC_KEYBD(HID_REPORT_ID(REPORT_ID_KEYBD)),  // 69 Bytes
             HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE)),  // 63 Bytes
+            HID_REPORT_DESC_ABMSE(HID_REPORT_ID(REPORT_ID_ABMSE)),  // 74 Bytes
             HID_REPORT_DESC_GMPAD(HID_REPORT_ID(REPORT_ID_GMPAD)),  // 70 Bytes
             HID_REPORT_DESC_SCTRL(HID_REPORT_ID(REPORT_ID_SCTRL)),  // 23 Bytes
             HID_REPORT_DESC_SDIAL(HID_REPORT_ID(REPORT_ID_SDIAL)),  // 56 Bytes
@@ -92,19 +107,16 @@ void hidtool_initialize() {
         if (desc) memcpy(HIDTool.desc, desc, HIDTool.dlen = dlen);
         TRYFREE(desc);
     }
-#ifdef CONFIG_BASE_DEBUG
-    if (HIDTool.dlen) {
-        printf("HID Descriptor (%d Bytes):", HIDTool.dlen);
-        LOOPN(i, HIDTool.dlen) {
-            if (i % 16 == 0) putchar('\n');
-            printf("%02X ", HIDTool.desc[i]);
+#ifdef CONFIG_BASE_USE_WIFI
+    if (!network_parse_addr(Config.app.HID_HOST, 4950, &uctx.addr)) {
+        if (uctx.addr.ss_family == AF_INET) {
+            uctx.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
+        } else {
+            uctx.sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_IPV6);
         }
-        putchar('\n');
     }
 #endif
 }
-
-static hid_gmpad_data_t gctx;   // defined here for logging
 
 bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
     bool sent = false;
@@ -119,27 +131,35 @@ bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
     }
     if (!rpt->size) rpt->size = HIDTool.rlen[rpt->id];
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-    if (to == HID_TARGET_USB || to == HID_TARGET_ALL)
-        sent |= hidu_send_report(rpt);
+    if (to | HID_TARGET_USB) sent |= hidu_send_report(rpt);
 #endif
 #ifdef CONFIG_BASE_USE_BT
-    if (to == HID_TARGET_BLE || to == HID_TARGET_ALL)
-        sent |= hidb_send_report(rpt);
+    if (to | HID_TARGET_BLE) sent |= hidb_send_report(rpt);
 #endif
-#ifdef CONFIG_BASE_USE_SCREEN
-    if (to == HID_TARGET_SCN || to == HID_TARGET_ALL)
-        sent |= screen_command(SCN_INP, rpt) == ESP_OK;
+#ifdef CONFIG_BASE_USE_WIFI
+    if (to | HID_TARGET_UDP)
+        sent |= uctx.sock && sendto(
+            uctx.sock, (void *)rpt, rpt->size, 0,
+            (struct sockaddr *)&uctx.addr, sizeof(uctx.addr)
+        ) >= 0;
 #endif
-    if (to == HID_TARGET_SCN || !sent) {
+#ifdef CONFIG_BASE_USE_SCN
+    if (to | HID_TARGET_SCN) sent |= scn_command(SCN_INP, rpt) == ESP_OK;
+#endif
+    if (to | HID_TARGET_SCN || !sent) {
         // do nothing
     } else if (rpt->id == REPORT_ID_KEYBD) {
         uint8_t mod = rpt->keybd.modifier;
         ESP_LOGI(TAG, "KEYBD MOD 0x%02X KEY %s",
-                mod, hid_keycodes_str(mod, rpt->keybd.keycode));
+                mod, hid_keycodes_str(rpt->keybd.keycode, mod));
     } else if (rpt->id == REPORT_ID_MOUSE) {
         ESP_LOGI(TAG, "MOUSE X %4d Y %4d V %3d H %3d BTN %s",
                 rpt->mouse.x, rpt->mouse.y, rpt->mouse.wheel, rpt->mouse.pan,
                 hid_btncode_str(rpt->mouse.buttons));
+    } else if (rpt->id == REPORT_ID_ABMSE) {
+        ESP_LOGI(TAG, "ABMSE X %5u Y %5u V %3d H %3d BTN %s",
+                rpt->abmse.x, rpt->abmse.y, rpt->abmse.wheel, rpt->abmse.pan,
+                hid_btncode_str(rpt->abmse.buttons));
     } else if (rpt->id == REPORT_ID_GMPAD) {
         ESP_LOGI(TAG, "GMPAD L %4d %-4d R %4d %-4d H %02X T %02X%02X BTN %s",
                 gctx.lx >> 8, gctx.ly >> 8, gctx.rx >> 8, gctx.ry >> 8,
@@ -166,7 +186,7 @@ bool hid_report_sdial(hid_target_t to, hid_sdial_keycode_t k) {
 
 bool hid_report_sdial_click(hid_target_t to, uint32_t ms) {
     bool sent = hid_report_sdial(to, SDIAL_D);
-    if (sent && ms) {
+    if (sent && ms != UINT32_MAX) {
         msleep(ms);
         sent = hid_report_sdial(to, SDIAL_U);
     }
@@ -321,7 +341,7 @@ bool hid_report_gmpad_click(hid_target_t to, const char *str, uint32_t ms) {
     } else if (idx < 20) {  // index 16~19 -> hid_gmpad_dpad_t 2,4,6,8
         sent = hid_report_gmpad_dpad(to, 2 * idx - 30, 2 * idx - 30);
     }
-    if (sent && ms) {
+    if (sent && ms != UINT32_MAX) {
         msleep(ms);
         if (idx < 16) {
             sent = hid_report_gmpad_btn_del(to, BIT(idx));
@@ -359,18 +379,11 @@ static const char * BUTTON_STR[] = {
     "Left", "Right", "Middle", "Backward", "Forward"
 };
 
-uint8_t str2btncode(const char *str) {
+static uint8_t str2btncode(const char *str) {
     LOOPN(i, LEN(BUTTON_STR)) {
         if (!strcasecmp(str, BUTTON_STR[i])) return 1 << i;
     }
     return 0;
-}
-
-const char *btncode2str(uint8_t btn) {
-    LOOPN(i, LEN(BUTTON_STR)) {
-        if (btn & (1 << i)) return BUTTON_STR[i];
-    }
-    return "Unknown";
 }
 
 const char * hid_btncode_str(uint8_t btns) {
@@ -400,7 +413,7 @@ bool hid_report_mouse(
 bool hid_report_mouse_click(hid_target_t to, const char *str, uint32_t ms) {
     uint8_t btncode = str2btncode(str);
     bool sent = hid_report_mouse_button(to, btncode);
-    if (sent && btncode && ms) {
+    if (sent && btncode && ms != UINT32_MAX) {
         msleep(ms);
         sent = hid_report_mouse_button(to, 0);
     }
@@ -411,21 +424,58 @@ void hid_handle_mouse(
     hid_target_t from, hid_mouse_report_t *rpt,
     hid_key_cb key_cb, hid_pos_cb pos_cb
 ) {
-    if (!rpt) return;
-    static int xs[HID_TARGET_MAX], ys[HID_TARGET_MAX], btns[HID_TARGET_MAX];
-    xs[from] += rpt->x;
-    ys[from] += rpt->y;
-    if (pos_cb) pos_cb(xs[from], ys[from], rpt->x, rpt->y);
+    int idx = -1;
+    LOOPN(i, 8) { if (from & BIT(i)) idx = idx == -1 ? i : -2; }
+    if (idx < 0 || !rpt) return;
+    static int xs[8], ys[8], btns[8];
+    xs[idx] += rpt->x;
+    ys[idx] += rpt->y;
+    if (pos_cb) pos_cb(xs[idx], ys[idx], rpt->x, rpt->y);
     if (key_cb) LOOPN(i, 5) {
         uint8_t btn = BIT(i);
-        if ((rpt->buttons & btn) == (btns[from] & btn)) continue;
+        if ((rpt->buttons & btn) == (btns[idx] & btn)) continue;
         key_cb(btn, rpt->buttons & btn);
     }
-    btns[from] = rpt->buttons;
-    ESP_LOGI(TAG, "X: %06d Y: %06d |%c|%c|%c|", xs[from], ys[from],
-             btns[from] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
-             btns[from] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
-             btns[from] & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
+    btns[idx] = rpt->buttons;
+    ESP_LOGI(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
+             xs[idx], ys[idx], rpt->wheel, rpt->pan,
+             btns[idx] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
+             btns[idx] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
+             btns[idx] & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
+}
+
+bool hid_report_mouse_moveto(hid_target_t to, uint16_t x, uint16_t y) {
+    hid_report_t report = {
+        .id = REPORT_ID_ABMSE,
+        .abmse = { 0, x, y, 0, 0 }
+    };
+    return hid_report_send(to, &report);
+}
+
+void hid_handle_abmse(
+    hid_target_t from, hid_abmse_report_t *rpt,
+    hid_key_cb key_cb, hid_pos_cb pos_cb
+) {
+    int idx = -1;
+    LOOPN(i, 8) { if (from & BIT(i)) idx = idx == -1 ? i : -2; }
+    if (idx < 0 || !rpt) return;
+    static int xs[8], ys[8], btns[8];
+    int dx = rpt->x - (xs[idx] ?: rpt->x);
+    int dy = rpt->y - (ys[idx] ?: rpt->y);
+    if (pos_cb) pos_cb(rpt->x, rpt->y, dx, dy);
+    if (key_cb) LOOPN(i, 5) {
+        uint8_t btn = BIT(i);
+        if ((rpt->buttons & btn) == (btns[idx] & btn)) continue;
+        key_cb(btn, rpt->buttons & btn);
+    }
+    xs[idx] = rpt->x;
+    ys[idx] = rpt->y;
+    btns[idx] = rpt->buttons;
+    ESP_LOGI(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
+             xs[idx], ys[idx], rpt->wheel, rpt->pan,
+             btns[idx] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
+             btns[idx] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
+             btns[idx] & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
 }
 
 /******************************************************************************
@@ -503,7 +553,7 @@ static const char * modifier_names[] = {
       "Ctrl",   "Shift",   "Alt",   "Meta",
 };
 
-uint8_t str2modifier(const char *str) {
+static uint8_t str2modifier(const char *str) {
     uint8_t mod = 0;
     LOOPN(i, LEN(modifier_names)) {
         if (strcasestr(str, modifier_names[i])) {
@@ -513,7 +563,7 @@ uint8_t str2modifier(const char *str) {
     return mod;
 }
 
-const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
+static const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
     static uint8_t buf[6];
     size_t len = strlen(str ?: ""), klen = 0, blen = sizeof(buf);
     if (!len) goto exit;
@@ -524,8 +574,8 @@ const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
     char *dup = strdup(str);
     for (str = strtok(dup, "|"); str && klen < blen; str = strtok(NULL, "|")) {
         if (str2modifier(str)) continue;
-        int fkey;
-        bool has_fkey = parse_int(str + 1, &fkey) && fkey > 0 && fkey < 13;
+        uint8_t fkey;
+        bool has_fkey = parse_u8(str + 1, &fkey) && fkey < 13;
         if (has_fkey && (str[0] == 'F' || str[0] == 'f')) {
             buf[klen++] = fkey - 1 + HID_KEY_F1;
             continue;
@@ -560,7 +610,7 @@ exit:
     return buf;
 }
 
-const char * keycode2str(uint8_t code, uint8_t modifier) {
+const char * hid_keycode_str(uint8_t code, uint8_t modifier) {
     static char buf[32];
     bool shift = KEYBD_MOD_HAS_SHIFT(modifier);
     if (HID_KEY_A <= code && code <= HID_KEY_Z) {
@@ -585,6 +635,20 @@ const char * keycode2str(uint8_t code, uint8_t modifier) {
     return buf;
 }
 
+const char * hid_keycodes_str(const uint8_t keycode[6], uint8_t modifier) {
+    static char buf[64];
+    size_t blen = sizeof(buf), size = 0;
+    LOOPN(i, 6) {
+        if (keycode[i] == HID_KEY_NONE) {
+            buf[size] = '\0';
+            break;
+        }
+        size += snprintf(buf + size, blen - size, "%s%s",
+            i ? " | " : "", hid_keycode_str(keycode[i], modifier));
+    }
+    return buf;
+}
+
 const char * hid_modifier_str(uint8_t modifier) {
     static char buf[64];
     size_t blen = sizeof(buf), size = 0;
@@ -595,20 +659,6 @@ const char * hid_modifier_str(uint8_t modifier) {
         } else {
             buf[size] = '\0';
         }
-    }
-    return buf;
-}
-
-const char * hid_keycodes_str(uint8_t modifier, const uint8_t keycode[6]) {
-    static char buf[64];
-    size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, 6) {
-        if (keycode[i] == HID_KEY_NONE) {
-            buf[size] = '\0';
-            break;
-        }
-        size += snprintf(buf + size, blen - size, "%s%s",
-            i ? " | " : "", keycode2str(keycode[i], modifier));
     }
     return buf;
 }
@@ -629,7 +679,7 @@ bool hid_report_keybd_press(hid_target_t to, const char *str, uint32_t ms) {
     const uint8_t *keycode = str2keycodes(str, &modifier);
     while (klen < 6) { if (keycode[klen] == HID_KEY_NONE) break; klen++; }
     bool sent = hid_report_keybd(to, modifier, keycode, klen);
-    if (sent && (modifier || klen) && ms) {
+    if (sent && (modifier || klen) && ms != UINT32_MAX) {
         msleep(ms);
         sent = hid_report_keybd(to, 0, NULL, 0);
     }
@@ -639,10 +689,11 @@ bool hid_report_keybd_press(hid_target_t to, const char *str, uint32_t ms) {
 void hid_handle_keybd(
     hid_target_t from, hid_keybd_report_t *rpt, hid_key_cb key_cb
 ) {
-    if (!rpt) return;
-    static uint8_t pmods[HID_TARGET_MAX];
-    static uint8_t prevs[HID_TARGET_MAX][LEN(rpt->keycode)];
-    uint8_t *next = rpt->keycode, *prev = prevs[from];
+    int idx = -1;
+    LOOPN(i, 8) { if (from & BIT(i)) idx = idx == -1 ? i : -2; }
+    if (idx < 0 || !rpt) return;
+    static uint8_t pmods[8], prevs[8][LEN(rpt->keycode)];
+    uint8_t *next = rpt->keycode, *prev = prevs[idx];
     LOOPN(i, LEN(rpt->keycode)) {
         bool prev_found = false, next_found = false;
         LOOPN(j, LEN(rpt->keycode)) {
@@ -651,15 +702,15 @@ void hid_handle_keybd(
         }
         if (prev[i] > HID_KEY_ERROR_UNDEFINED && !next_found) {
             if (key_cb) key_cb(prev[i], false);
-            ESP_LOGI(TAG, "%s released", keycode2str(prev[i], pmods[from]));
+            ESP_LOGI(TAG, "%s released", hid_keycode_str(prev[i], pmods[idx]));
         }
         if (next[i] > HID_KEY_ERROR_UNDEFINED && !prev_found) {
             if (key_cb) key_cb(next[i], true);
             ESP_LOGI(TAG, "%s pressed modifier %s",
-                     keycode2str(next[i], rpt->modifier),
+                     hid_keycode_str(next[i], rpt->modifier),
                      hid_modifier_str(rpt->modifier));
         }
     }
     memcpy(prev, next, LEN(rpt->keycode));
-    pmods[from] = rpt->modifier;
+    pmods[idx] = rpt->modifier;
 }

@@ -53,8 +53,6 @@ static esp_netif_t *if_sta = NULL, *if_ap = NULL;
 
 static wifi_config_t config_ap = {
     .ap = {
-        .channel = CONFIG_BASE_AP_CHANNEL,
-        .max_connection = CONFIG_BASE_AP_MAX_CONN,
         .ftm_responder = true
     }
 };
@@ -185,7 +183,7 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
     esp_netif_ip_info_t ip = { 0 };
     if (!if_ptr) {
         wifi_mode_t mode = WIFI_MODE_NULL;
-        wifi_mode_switch(UNCHANGED, UNCHANGED, &mode);
+        esp_wifi_get_mode(&mode);
         if (HAS_STA(mode) && getBits(WIFI_CONNECTED_BIT)) {
             if_ptr = if_sta;
         } else if (HAS_AP(mode)) {
@@ -198,7 +196,7 @@ static uint32_t wifi_local_ip(esp_netif_t *if_ptr) {
     return ip.ip.addr;
 }
 
-static void wifi_print_dnsinfo(esp_netif_t * if_ptr, FILE *stream) {
+static void wifi_print_dnsinfo(esp_netif_t *if_ptr, FILE *stream) {
     const char *types[] = { "main", "backup", "fallback" };
     const char *desc = esp_netif_get_desc(if_ptr), *tstr;
     esp_netif_dns_info_t dns;
@@ -226,7 +224,7 @@ static void wifi_print_dnsinfo(esp_netif_t * if_ptr, FILE *stream) {
     }
 }
 
-static void wifi_print_ipinfo(esp_netif_t * if_ptr, FILE *stream) {
+static void wifi_print_ipinfo(esp_netif_t *if_ptr, FILE *stream) {
     const char *desc = esp_netif_get_desc(if_ptr);
     esp_netif_ip_info_t ip;
     esp_netif_get_ip_info(if_ptr, &ip);
@@ -284,7 +282,7 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
         } else if (aps[i].ftm_initiator) {
             ftm = "REQ";
         }
-        printf("%-*s " MACSTR "  %-3d %c%c%c%c %3s %3s %-6s %c%c %2d",
+        printf("%-*s " MACSTR "  %-3d %c%c%c%c %3s %3s %-6s %c%c %-2d",
             maxlen, (char *)aps[i].ssid, MAC2STR(aps[i].bssid), aps[i].rssi,
             aps[i].phy_11b ? 'b' : ' ', aps[i].phy_11g ? 'g' : ' ',
             aps[i].phy_11n ? 'n' : ' ', aps[i].phy_lr ? 'l' : 'h',
@@ -294,6 +292,22 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
             printf(" (%d-%d)", aps[i].country.schan, aps[i].country.nchan);
         putchar('\n');
     }
+}
+
+static UNUSED esp_err_t wifi_update_dnsinfo() {
+    uint8_t val = OFFER_DNS;
+    wifi_mode_t mode;
+    esp_netif_dns_info_t info;
+    esp_netif_dhcp_option_mode_t op = ESP_NETIF_OP_SET;
+    esp_netif_dhcp_option_id_t id = ESP_NETIF_DOMAIN_NAME_SERVER;
+    esp_err_t err = esp_wifi_get_mode(&mode);
+    if (!err) err = HAS_AP(mode) ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (!err) err = esp_netif_get_dns_info(if_sta, ESP_NETIF_DNS_MAIN, &info);
+    if (!err) err = wifi_dhcp_switch(UNCHANGED, false);
+    if (!err) err = esp_netif_dhcps_option(if_ap, op, id, &val, sizeof(val));
+    if (!err) err = esp_netif_set_dns_info(if_ap, ESP_NETIF_DNS_MAIN, &info);
+    if (!err) err = wifi_dhcp_switch(UNCHANGED, true);
+    return err;
 }
 
 static uint16_t s_nap = 0;
@@ -338,25 +352,23 @@ static UNUSED esp_err_t wifi_find_ap_record(
     return wifi_find_ap_record(ssid, bssid, false, record);
 }
 
-static esp_err_t wifi_mode_check(wifi_interface_t interface) {
+static esp_err_t wifi_mode_check(wifi_interface_t interface, bool verbose) {
     wifi_mode_t mode;
-    esp_err_t err = wifi_mode_switch(UNCHANGED, UNCHANGED, &mode);
+    esp_err_t err = esp_wifi_get_mode(&mode);
     if (!err) {
         if (interface == WIFI_IF_AP && !HAS_AP(mode)) {
-            puts("AP not enabled");
+            if (verbose) puts("AP not enabled");
             err = ESP_ERR_INVALID_STATE;
         }
         if (interface == WIFI_IF_STA && !HAS_STA(mode)) {
-            puts("STA not enabled");
+            if (verbose) puts("STA not enabled");
             err = ESP_ERR_INVALID_STATE;
         }
     }
     return err;
 }
 
-static void cb_network(
-    void *if_ptr, esp_event_base_t base, int32_t id, void *data
-) {
+static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
     static int retry = 0;
     if (base == IP_EVENT) {
         if (id == IP_EVENT_STA_GOT_IP) {
@@ -364,8 +376,15 @@ static void cb_network(
             if (evt->ip_changed) wifi_print_ipinfo(evt->esp_netif, NULL);
             setBits(WIFI_CONNECTED_BIT);
             clearBits(WIFI_FAILURE_BIT | WIFI_DISCONNECT_BIT);
-            if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
             if (strbool(Config.app.SNTP_RUN)) sntp_control("sync");
+            if (strbool(Config.net.AP_AUTO)) wifi_ap_stop();
+#if defined(IDF_TARGET_V5) && defined(CONFIG_LWIP_IPV4_NAPT)
+            if (strbool(Config.net.AP_NAPT)) {
+                esp_err_t err = wifi_update_dnsinfo();
+                if (!err) err = esp_netif_napt_enable(if_ap);
+                if (err) ESP_LOGE(TAG, "NAPT failed: %s", esp_err_to_name(err));
+            }
+#endif
         } else if (id == IP_EVENT_GOT_IP6) {
             ip_event_got_ip6_t *evt = data;
             wifi_print_ipinfo(evt->esp_netif, NULL);
@@ -459,14 +478,14 @@ static void cb_network(
 }
 
 void network_initialize() {
+    if (esp_netif_init()) return;
+    esp_event_loop_create_default();
+
     const char * tags[] = {
         "wifi", "wifi_init", "iperf",
         "esp_netif_lwip", "esp_netif_handlers",
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
-
-    ESP_ERROR_CHECK( esp_netif_init() );
-    ESP_ERROR_CHECK( esp_event_loop_create_default() );
 
     if (!if_ap) if_ap = esp_netif_create_default_wifi_ap();
     if (!if_sta) if_sta = esp_netif_create_default_wifi_sta();
@@ -489,6 +508,12 @@ void network_initialize() {
     if (strbool(Config.app.SNTP_RUN) && ( err = sntp_control("on") ))
         ESP_LOGE(TAG, "Failed to start SNTP: %s", esp_err_to_name(err));
 
+    uint8_t val;
+    if (parse_u8(Config.net.AP_CHAN, &val) && val < 15)
+        config_ap.ap.channel = val;
+    if (parse_u8(Config.net.AP_NCON, &val) && val < 254)
+        config_ap.ap.max_connection = val;
+
     size_t slen = strlen((char *)config_sta.sta.ssid);
     const char *ssid = slen ? (char *)config_sta.sta.ssid : NULL;
     const char *pass = slen ? (char *)config_sta.sta.password : NULL;
@@ -503,7 +528,7 @@ void network_initialize() {
         ESP_LOGE(TAG, "Failed to start AP: %s", esp_err_to_name(err));
 }
 
-esp_err_t network_parse_addr(const char *host, void *dst) {
+esp_err_t network_parse_host(const char *host, void *ipaddr) {
     ip_addr_t tmp = { 0 };
     struct addrinfo *res = NULL, *ptr;
     if (getaddrinfo(host, NULL, NULL, &res) != 0) return ESP_ERR_INVALID_ARG;
@@ -515,14 +540,37 @@ esp_err_t network_parse_addr(const char *host, void *dst) {
             struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)ptr->ai_addr;
             inet6_addr_to_ip6addr(ip_2_ip6(&tmp), &addr6->sin6_addr);
         }
-        if (!dst) {
+        if (!ipaddr) {
             puts(ipaddr_ntoa(&tmp));
         } else if (ptr == res) {
-            *(ip_addr_t *)dst = tmp;
+            *(ip_addr_t *)ipaddr = tmp;
         }
     }
     freeaddrinfo(res);
     return ESP_OK;
+}
+
+esp_err_t network_parse_addr(const char *host, uint16_t port, void *sockaddr) {
+    ip_addr_t tmp;
+    esp_err_t err = network_parse_host(host, &tmp);
+    if (!err) {
+        struct sockaddr_in *p4 = sockaddr;
+        struct sockaddr_in6 *p6 = sockaddr;
+        if (IP_IS_V4(&tmp)) {
+            p4->sin_len = sizeof(*p4);
+            p4->sin_family = AF_INET;
+            p4->sin_port = htons(port);
+            inet_addr_from_ip4addr(&p4->sin_addr, ip_2_ip4(&tmp));
+            memset(p4->sin_zero, 0, SIN_ZERO_LEN);
+        } else {
+            p6->sin6_len = sizeof(*p6);
+            p6->sin6_family = AF_INET6;
+            p6->sin6_port = htons(port);
+            inet6_addr_from_ip6addr(&p6->sin6_addr, ip_2_ip6(&tmp));
+            p6->sin6_scope_id = ip6_addr_zone(ip_2_ip6(&tmp));
+        }
+    }
+    return err;
 }
 
 esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
@@ -575,9 +623,9 @@ esp_err_t wifi_sta_stop() {
 }
 
 esp_err_t wifi_sta_scan(
-    const char * ssid, uint8_t channel, uint16_t tout_ms, bool verbose
+    const char *ssid, uint8_t channel, uint16_t tout_ms, bool verbose
 ) {
-    esp_err_t err = wifi_mode_check(WIFI_IF_STA);
+    esp_err_t err = wifi_mode_check(WIFI_IF_STA, false);
     if (!err) err = esp_wifi_scan_stop();
     if (!err) err = esp_wifi_clear_ap_list();
     if (err) return err;
@@ -617,8 +665,8 @@ esp_err_t wifi_sta_wait(uint16_t tout_ms) {
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     if (!ssid && !strlen(Config.net.AP_SSID)) return ESP_ERR_INVALID_ARG;
     if (!ip && strlen(Config.net.AP_HOST)) ip = Config.net.AP_HOST;
-    if (!ssid) ssid = Config.net.STA_SSID;
-    if (!pass) pass = Config.net.STA_PASS;
+    if (!ssid) ssid = Config.net.AP_SSID;
+    if (!pass) pass = Config.net.AP_PASS;
 
     esp_err_t err = wifi_mode_switch(UNCHANGED, true, NULL);
     if (err) return err;
@@ -651,7 +699,7 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
 esp_err_t wifi_ap_stop() { return wifi_mode_switch(UNCHANGED, false, NULL); }
 
 esp_err_t wifi_sta_list_ap() {
-    esp_err_t err = wifi_mode_check(WIFI_IF_STA);
+    esp_err_t err = wifi_mode_check(WIFI_IF_STA, true);
     if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
     if (err) return err;
     if (strlen((char *)config_sta.sta.ssid)) {
@@ -679,7 +727,7 @@ esp_err_t wifi_sta_list_ap() {
 }
 
 esp_err_t wifi_ap_list_sta() {
-    esp_err_t err = wifi_mode_check(WIFI_IF_AP);
+    esp_err_t err = wifi_mode_check(WIFI_IF_AP, true);
     if (err == ESP_ERR_INVALID_STATE) return ESP_OK;
     if (err) return err;
     printf("AP SSID %s Channel %d\n", config_ap.ap.ssid, config_ap.ap.channel);
@@ -721,7 +769,7 @@ esp_err_t wifi_ap_list_sta() {
 
 esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm) {
 #ifdef CONFIG_ESP_WIFI_FTM_RESPONDER_SUPPORT
-    esp_err_t err = wifi_mode_check(WIFI_IF_AP);
+    esp_err_t err = wifi_mode_check(WIFI_IF_AP, false);
     if (err) return err;
     if (offset_cm && !( err = esp_wifi_ftm_resp_set_offset(offset_cm) )) {
         ESP_LOGI(TAG, "FTM responder set offset to %dcm", offset_cm);
@@ -743,7 +791,7 @@ esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm) {
 
 esp_err_t ftm_request(const char *ssid, uint8_t count) {
 #ifdef CONFIG_ESP_WIFI_FTM_INITIATOR_SUPPORT
-    esp_err_t err = wifi_mode_check(WIFI_IF_STA);
+    esp_err_t err = wifi_mode_check(WIFI_IF_STA, false);
     if (err) return err;
 
     wifi_ap_record_t record;
@@ -925,7 +973,7 @@ static esp_err_t sntp_setserverhost(uint8_t idx, const char *host) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
     if (idx > SNTP_MAX_SERVERS || !strlen(host ?: "")) return err;
     ip_addr_t addr = { 0 };
-    err = network_parse_addr(host, &addr);
+    err = network_parse_host(host, &addr);
     if (getBits(WIFI_CONNECTED_BIT) && err) return err;
     bool updated = false;
 #if SNTP_SERVER_DNS
@@ -1068,7 +1116,7 @@ esp_err_t ping_command(
     }
 
     esp_ping_config_t config = ESP_PING_DEFAULT_CONFIG();
-    if (network_parse_addr(host, &config.target_addr)) {
+    if (network_parse_host(host, &config.target_addr)) {
         printf("Invalid host to ping: %s\n", host);
         return ESP_ERR_INVALID_ARG;
     }
@@ -1143,7 +1191,7 @@ esp_err_t iperf_command(
 }
 
 typedef struct {
-    const char * host;
+    const char *host;
     uint16_t port;
     uint32_t tout;
 } timesync_param_t;
@@ -1220,8 +1268,12 @@ esp_err_t tsync_command(
 
 void network_initialize() {};
 
-esp_err_t network_parse_addr(const char *h, void *d) {
+esp_err_t network_parse_host(const char *h, void *d) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(d);
+}
+
+esp_err_t network_parse_addr(const char *h, uint16_t p, void *d) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(p); NOTUSED(d);
 }
 
 esp_err_t wifi_ap_start(const char *s, const char *p, const char *i) {

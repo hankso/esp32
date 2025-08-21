@@ -28,8 +28,8 @@
 #endif
 
 #define TIMEOUT_IDLE        10
-#define TIMEOUT_LOOP        50
-#define TIMEOUT_WAIT        200
+#define TIMEOUT_LOOP        250
+#define TIMEOUT_WAIT        500
 #define BIT_USBLIB_INIT     BIT0
 #define BIT_USBLIB_EXIT     BIT1
 #define BIT_CLIENT_INIT     BIT2
@@ -43,13 +43,13 @@ static struct {
     esp_err_t err;
     bool running;
     void * vfs_hdl;
-    union {
-        void * dev_hdl;
-        uint8_t address;
-        uint32_t vid_pid;
-    };
+    QueueHandle_t queue;
     EventGroupHandle_t evtgrp;
-} ctx = { ESP_OK, false, NULL, { 0 }, NULL };
+    union {
+        uint8_t address;    // for MSC
+        uint32_t vid_pid;   // for CDC
+    };
+} ctx = { ESP_OK, false, NULL, NULL, NULL, { 0 } };
 
 /******************************************************************************
  * Helper functions
@@ -91,7 +91,7 @@ static uint32_t usb_dev_vid_pid(void *dev_hdl) {
     return desc->idVendor << 16 | desc->idProduct;
 }
 
-static const char * vid_pid_str(uint32_t vp) {
+static const char * vpstr(uint32_t vp) {
     static char buf[14]; // 0xXXXX:0xXXXX
     snprintf(buf, sizeof(buf), "0x%04X:0x%04X", vp >> 16, vp & 0xFFFF);
     return buf;
@@ -112,20 +112,21 @@ static void print_devinfo(usb_device_handle_t dev_hdl) {
     }
     ESP_LOGI(TAG, "USB Client: Found new device: %d", dev_info.dev_addr);
     if (dev_info.str_desc_manufacturer) {
-        printf("Manufacturer ");
+        printf("Manufacturer : ");
         usb_print_string_descriptor(dev_info.str_desc_manufacturer);
     }
     if (dev_info.str_desc_product) {
-        printf("Product      ");
+        printf("Product      : ");
         usb_print_string_descriptor(dev_info.str_desc_product);
     }
     if (dev_info.str_desc_serial_num) {
-        printf("SerialNumber ");
+        printf("SerialNumber : ");
         usb_print_string_descriptor(dev_info.str_desc_serial_num);
     }
-    printf("Speed mode   %s\nbConfigValue %d\n",
-            dev_info.speed == USB_SPEED_LOW ? "Low" : "Full",
-            dev_info.bConfigurationValue);
+    printf("Speed mode   : %s\n"
+           "bConfigValue : %d\n",
+           dev_info.speed == USB_SPEED_LOW ? "Low" : "Full",
+           dev_info.bConfigurationValue);
     usb_print_device_descriptor(dev_desc);
     usb_print_config_descriptor(cfg_desc, NULL);
 }
@@ -141,8 +142,9 @@ static void usb_lib_task(void *arg) {
         ctx.running = false;
         goto exit;
     }
-    setBits(BIT_USBLIB_INIT); // host library is installed
-    msleep(TIMEOUT_IDLE); // let client task spin up
+    setBits(BIT_USBLIB_INIT);   // host library is installed
+    msleep(TIMEOUT_IDLE);       // let client task spin up
+    TickType_t timeout = TIMEOUT(TIMEOUT_LOOP);
     bool has_clients = ctx.running, has_devices = ctx.running;
     while (has_clients || has_devices) {
         if (!ctx.running) {
@@ -153,7 +155,7 @@ static void usb_lib_task(void *arg) {
             ESP_LOGI(TAG, "USB LIB devices %d clients %d",
                     info.num_devices, info.num_clients);
         }
-        usb_host_lib_handle_events(pdMS_TO_TICKS(TIMEOUT_LOOP), &flags);
+        usb_host_lib_handle_events(timeout, &flags);
         if (flags & USB_HOST_LIB_EVENT_FLAGS_NO_CLIENTS) {
             ESP_LOGI(TAG, "USB LIB all clients deregistered");
             usb_host_device_free_all();
@@ -167,21 +169,23 @@ static void usb_lib_task(void *arg) {
     ESP_LOGI(TAG, "USB LIB no more clients and devices");
     usb_host_uninstall();
 exit:
-    setBits(BIT_USBLIB_EXIT); // host library is uninstalled
+    setBits(BIT_USBLIB_EXIT);   // host library is uninstalled
     vTaskDelete(NULL);
 }
 
 static esp_err_t usbh_common_init(void (*client)(void *), const char *cname) {
     if (ctx.running) return ESP_OK;
+    if (!ctx.queue) ctx.queue = xQueueCreate(5, sizeof(void *));
     if (!ctx.evtgrp) ctx.evtgrp = xEventGroupCreate();
-    clearBits(0xFFF); // EventBits_t accepts 24 bits
-    ctx.running = true;
+    if (!ctx.queue || !ctx.evtgrp) return ESP_ERR_NO_MEM;
+    clearBits(0xFFF);           // EventBits_t accepts 24 bits
+    ctx.running = true;         // before usb_lib_task
     if (xTaskCreate(usb_lib_task, "USB-LIB", 4096, NULL, 10, NULL) != pdPASS) {
         ctx.err = ESP_ERR_NO_MEM;
         ctx.running = false;
     }
     if (!ctx.err) {
-        char taskname[16];
+        char taskname[16];      // after usb_lib_task
         snprintf(taskname, sizeof(taskname), "USB-%s", cname);
         xTaskCreate(client, taskname, 4096, NULL, 6, NULL);
         waitBits(BIT_CLIENT_INIT, TIMEOUT_IDLE + TIMEOUT_WAIT);
@@ -206,7 +210,7 @@ static esp_err_t usbh_common_exit() {
 
 #ifdef CONFIG_BASE_USB_CDC_HOST
 
-static const char * CDC = "CDC Host";
+static const char * CDC = "CDC";
 
 static bool cdc_acm_rx_cb(const uint8_t *data, size_t size, void *arg) {
     ESP_LOGI(TAG, "%s got data[%u]", CDC, size);
@@ -226,9 +230,9 @@ static void cdc_acm_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
         break;
     case CDC_ACM_HOST_DEVICE_DISCONNECTED:
         if (( vp = usb_dev_vid_pid(event->data.cdc_hdl) )) {
-            ESP_LOGI(TAG, "%s lost device %s", CDC, vid_pid_str(vp));
+            ESP_LOGI(TAG, "%s closed %s", CDC, vpstr(vp));
         } else {
-            ESP_LOGI(TAG, "%s lost device", CDC);
+            ESP_LOGI(TAG, "%s closed", CDC);
         }
         cdc_acm_host_close(event->data.cdc_hdl);
         setBits(BIT_DEVICE_EXIT);
@@ -293,7 +297,7 @@ static void cdc_host_task(void *arg) {
         }
 
         ESP_LOGI(TAG, "%s opened device %s %u,%u%c%c",
-                CDC, vid_pid_str(ctx.vid_pid),
+                CDC, vpstr(ctx.vid_pid),
                 line_coding.dwDTERate,
                 line_coding.bDataBits,
                 "NOEMS"[line_coding.bParityType],
@@ -344,7 +348,7 @@ esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #ifdef CONFIG_BASE_USB_MSC_HOST
 
-static const char * MSC = "MSC Host";
+static const char * MSC = "MSC";
 static const char * MMP = "/msc";
 
 static void msc_host_cb(const msc_host_event_t *event, void *arg) {
@@ -358,10 +362,10 @@ static void msc_host_cb(const msc_host_event_t *event, void *arg) {
     case MSC_DEVICE_DISCONNECTED:
         dev = event->device.handle;
         if (!msc_host_get_device_info(dev, &info)) {
-            uint32_t vp = info.idVendor << 16 | info.idProduct;
-            ESP_LOGI(TAG, "%s lost device %s", MSC, vid_pid_str(vp));
+            ESP_LOGI(TAG, "%s closed %s",
+                     MSC, vpstr(info.idVendor << 16 | info.idProduct));
         } else {
-            ESP_LOGI(TAG, "%s lost device", MSC);
+            ESP_LOGI(TAG, "%s closed", MSC);
         }
         if (ctx.vfs_hdl) {
             msc_host_vfs_unregister(ctx.vfs_hdl);
@@ -416,14 +420,16 @@ static void msc_host_task(void *arg) {
 
         ESP_LOGI(TAG, "%s opened device %d", MSC, ctx.address);
         if (wcslen(info.iManufacturer))
-            wprintf(L"Manufacturer %ls\n", info.iManufacturer);
+            wprintf(L"Manufacturer : %ls\n", info.iManufacturer);
         if (wcslen(info.iProduct))
-            wprintf(L"Product      %ls\n", info.iProduct);
+            wprintf(L"Product      : %ls\n", info.iProduct);
         if (wcslen(info.iSerialNumber))
-            wprintf(L"SerialNumber %ls\n", info.iSerialNumber);
+            wprintf(L"SerialNumber : %ls\n", info.iSerialNumber);
         uint64_t cap = (uint64_t)info.sector_size * info.sector_count;
-        printf("Total        %s\nSector       %u Bytes\nCount        0x%08X\n",
-                format_size(cap), info.sector_size, info.sector_count);
+        printf("Total        : %s\n"
+               "Sector       : %u Bytes\n"
+               "Count        : 0x%08X\n",
+               format_size(cap), info.sector_size, info.sector_count);
         msc_host_print_descriptors(dev);
 
         if (ctx.vfs_hdl) goto close; // only one MSC device can be mounted
@@ -469,10 +475,8 @@ esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #ifdef CONFIG_BASE_USB_HID_HOST
 
-static const char * HID = "HID Host";
-
 static const char * hid_protocol_str(hid_protocol_t proto) {
-    if (proto == HID_PROTOCOL_NONE)     return "Generic";
+    if (proto == HID_PROTOCOL_NONE)     return "None";
     if (proto == HID_PROTOCOL_KEYBOARD) return "Keyboard";
     if (proto == HID_PROTOCOL_MOUSE)    return "Mouse";
     static char buf[4];
@@ -486,46 +490,53 @@ static void hid_event_cb(
     void *arg
 ) {
     // see esp-idf-5.2/examples/peripherals/usb/host/hid
-    hid_host_dev_info_t info;
+    char addr[64];
     hid_host_dev_params_t params;
-    if (hid_host_device_get_params(dev, &params)) return;
-    switch (event) {
-    case HID_HOST_INTERFACE_EVENT_INPUT_REPORT: break;
-    case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
-        ESP_LOGD(TAG, "%s address %d transfer_error", HID, params.addr);
-        return;
-    case HID_HOST_INTERFACE_EVENT_DISCONNECTED:
-        if (!hid_host_get_device_info(dev, &info)) {
-            ESP_LOGI(TAG, "%s lost device %s",
-                     HID, vid_pid_str(info.VID << 16 | info.PID));
-        } else {
-            ESP_LOGI(TAG, "%s lost device", HID);
-        }
-        hid_host_device_close(dev);
-        setBits(BIT_DEVICE_EXIT);
-        return;
-    default:
-        ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
+    if (( ctx.err = hid_host_device_get_params(dev, &params) )) {
+        ESP_LOGE(TAG, "HID %p getparam: %s", dev, esp_err_to_name(ctx.err));
         return;
     }
-    uint8_t data[64];
+    snprintf(addr, sizeof(addr), "HID %u-%u", params.addr, params.iface_num);
+    switch (event) {
+    case HID_HOST_INTERFACE_EVENT_INPUT_REPORT:
+        break;
+    case HID_HOST_INTERFACE_EVENT_TRANSFER_ERROR:
+        ESP_LOGD(TAG, "%s transfer_error", addr);
+        return;
+    case HID_HOST_INTERFACE_EVENT_DISCONNECTED: {
+        hid_host_dev_info_t info;
+        if (!hid_host_get_device_info(dev, &info)) {
+            ESP_LOGI(TAG, "%s closed %s",
+                     addr, vpstr(info.VID << 16 | info.PID));
+        } else {
+            ESP_LOGI(TAG, "%s closed", addr);
+        }
+        hid_host_device_close(dev);
+    }   return;
+    default:
+        ESP_LOGW(TAG, "%s unhandled event: %d", addr, event);
+        return;
+    }
     size_t size = 0;
+    uint8_t data[64], *ptr = data;
     hid_host_device_get_raw_input_report_data(dev, data, sizeof(data), &size);
-    if (params.proto == HID_PROTOCOL_KEYBOARD) {
-        hid_keybd_report_t *kbd = (hid_keybd_report_t *)data;
-        if (size < sizeof(*kbd)) return;
+    if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
+        hexdump(data, size, 80);
+    } else if (params.proto == HID_PROTOCOL_KEYBOARD && size >= 8) {
+        if (size > sizeof(hid_keybd_report_t)) ptr += 1;
+        hid_keybd_report_t *kbd = (hid_keybd_report_t *)ptr;
         hid_report_t report = { .id = REPORT_ID_KEYBD, .keybd = *kbd };
         hid_report_send(HID_TARGET_SCN, &report);
-        hid_handle_keybd(HID_TARGET_USB, kdb, NULL);
-    } else if (params.proto == HID_PROTOCOL_MOUSE) {
-        hid_mouse_report_t *mse = (hid_mouse_report_t *)data;
-        if (size < sizeof(*mse)) return;
+        hid_handle_keybd(HID_TARGET_USB, kbd, NULL);
+    } else if (params.proto == HID_PROTOCOL_MOUSE && size >= 3) {
+        if (size > sizeof(hid_mouse_report_t)) ptr += 1;
+        hid_mouse_report_t *mse = (hid_mouse_report_t *)ptr;
         hid_report_t report = { .id = REPORT_ID_MOUSE, .mouse = *mse };
         hid_report_send(HID_TARGET_SCN, &report);
         hid_handle_mouse(HID_TARGET_USB, mse, NULL, NULL);
-    } else if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
-        int offset = printf("%s %s ", HID, hid_protocol_str(params.proto));
-        if (offset > 0) hexdump(data, size, 80 - offset);
+    } else {
+        int offset = printf("%s %s ", addr, hid_protocol_str(params.proto));
+        if (offset > 0) hexdumpl(data, size, 80 - offset);
     }
 }
 
@@ -534,12 +545,10 @@ static void hid_host_cb(
     const hid_host_driver_event_t event,
     void *arg
 ) {
-    switch (event) {
-    case HID_HOST_DRIVER_EVENT_CONNECTED:
-        ctx.dev_hdl = dev;
-        setBits(BIT_DEVICE_INIT);
-        break;
-    default: ESP_LOGW(TAG, "%s unhandled event: %d", HID, event);
+    if (event == HID_HOST_DRIVER_EVENT_CONNECTED) {
+        xQueueSend(ctx.queue, &dev, TIMEOUT(10000));    // 10s
+    } else {
+        ESP_LOGW(TAG, "HID unhandled event: %d", event);
     }
 }
 
@@ -550,7 +559,7 @@ static void hid_host_task(void *arg) {
         .stack_size = 4096,
         .task_priority = 5,
         .core_id = tskNO_AFFINITY,
-        .callback = hid_host_cb,
+        .callback = hid_host_cb
     };
     const hid_host_device_config_t device_conf = { .callback = hid_event_cb };
     if (( ctx.err = hid_host_install(&driver_conf) )) {
@@ -558,66 +567,107 @@ static void hid_host_task(void *arg) {
         goto exit;
     }
     setBits(BIT_CLIENT_INIT);
+    TickType_t timeout = TIMEOUT(TIMEOUT_LOOP);
+    hid_host_device_handle_t ifaces[3] = { NULL, NULL, NULL };
     while (1) {
         if (!ctx.running) {
-            ESP_LOGI(TAG, "%s trying to uninstall client", HID);
+            ESP_LOGI(TAG, "HID trying to uninstall client");
             if (!( ctx.err = hid_host_uninstall() )) break;
-            ESP_LOGE(TAG, "%s uninstall failed: continue running", HID);
+            ESP_LOGE(TAG, "HID uninstall failed: continue running");
             ctx.running = true;
         }
-        if (!waitBits(BIT_DEVICE_INIT, TIMEOUT_LOOP)) continue;
-        clearBits(BIT_DEVICE_EXIT);
-
+        char addr[64];
+        size_t dlen = 0;
+        const uint8_t *desc = NULL;
         hid_host_dev_info_t info;
         hid_host_dev_params_t params;
-        hid_host_device_handle_t dev = ctx.dev_hdl;
-        if (
-            ( ctx.err = hid_host_device_get_params(dev, &params) ) ||
-            ( ctx.err = hid_host_device_open(dev, &device_conf) )
-        ) {
-            ESP_LOGE(TAG, "%s not opened: %s", HID, esp_err_to_name(ctx.err));
+        hid_host_device_handle_t dev;
+        if (!xQueueReceive(ctx.queue, &dev, timeout)) continue;
+        if (( ctx.err = hid_host_device_get_params(dev, &params) )) {
+            ESP_LOGE(TAG, "HID %p getparam: %s", dev, esp_err_to_name(ctx.err));
             goto close;
         }
-        if (( ctx.err = hid_host_get_device_info(dev, &info) )) {
-            ESP_LOGE(TAG, "%s no devinfo: %s", HID, esp_err_to_name(ctx.err));
+        snprintf(addr, sizeof(addr), "HID %u-%u", params.addr, params.iface_num);
+        if (( ctx.err = hid_host_device_open(dev, &device_conf) )) {
+            ESP_LOGE(TAG, "%s not opened: %s", addr, esp_err_to_name(ctx.err));
+            goto close;
+        } else if (( ctx.err = hid_host_get_device_info(dev, &info) )) {
+            ESP_LOGE(TAG, "%s no devinfo: %s", addr, esp_err_to_name(ctx.err));
             goto close;
         }
+        ESP_LOGD(TAG, "%s opened %s", addr, vpstr(info.VID << 16 | info.PID));
 
-        ESP_LOGI(TAG, "%s opened device %d", HID, params.addr);
-        if (wcslen(info.iManufacturer))
-            wprintf(L"Manufacturer %ls\n", info.iManufacturer);
-        if (wcslen(info.iProduct))
-            wprintf(L"Product      %ls\n", info.iProduct);
-        if (wcslen(info.iSerialNumber))
-            wprintf(L"SerialNumber %ls\n", info.iSerialNumber);
-        printf("SubClass     %s\nProto        %s\n",
-               params.sub_class ? "BOOT" : "", hid_protocol_str(params.proto));
+        // patch for 20250723 TouchScreen
+        bool patchts = info.VID == 0x27C0 && info.PID == 0x0859;
+        if (patchts && params.iface_num < LEN(ifaces))
+            ifaces[params.iface_num] = dev;
 
         if (params.sub_class == HID_SUBCLASS_BOOT_INTERFACE) {
-            hid_class_request_set_protocol(dev, HID_REPORT_PROTOCOL_BOOT);
+            hid_report_protocol_t prot;
+            if (!hid_class_request_get_protocol(dev, &prot))
+                ESP_LOGD(TAG, "%s protocol: %s", addr, hid_protocol_str(prot));
+            if (!hid_class_request_set_protocol(dev, HID_REPORT_PROTOCOL_BOOT))
+                ESP_LOGD(TAG, "%s protocol change to BOOT", addr);
             if (params.proto == HID_PROTOCOL_KEYBOARD) {
-                if (( ctx.err = hid_class_request_set_idle(dev, 0, 0) ))
-                    goto close;
+                hid_class_request_set_idle(dev, 0, REPORT_ID_KEYBD);
+            } else if (params.proto == HID_PROTOCOL_MOUSE) {
+                hid_class_request_set_idle(dev, 0, REPORT_ID_MOUSE);
+            } else {
+                // this should not happen: BOOT interface but not mouse/keybd
             }
+        } else {
+            uint8_t idle_rate;
+            if (!patchts && !hid_class_request_get_idle(dev, 0, &idle_rate))
+                ESP_LOGD(TAG, "%s get idle: %u", addr, idle_rate);
+            if (!hid_class_request_set_idle(dev, 0, 0))
+                ESP_LOGD(TAG, "%s set idle all report id to 0", addr);
         }
-        if (( ctx.err = hid_host_device_start(dev) )) {
-            ESP_LOGE(TAG, "%s not start: %s", HID, esp_err_to_name(ctx.err));
+
+        if (!(patchts && params.iface_num == 2) &&
+            !( desc = hid_host_get_report_descriptor(dev, &dlen) ))
+            ESP_LOGE(TAG, "%s get desc failed", addr);
+
+        if (patchts && params.iface_num == 0) {
+            uint8_t get[2] = { 0x00, 0x00 }, set[3] = { 0x21, 0x02, 0x00 };
+            size_t len = sizeof(get);
+            if (!hid_class_request_get_report(
+                ifaces[0], HID_REPORT_TYPE_FEATURE, 0x0A, get, &len
+            ) && len == 2 && get[0] == 0x0A)
+                ESP_LOGD(TAG, "%s get feature id=10, val=0x%02X", addr, get[1]);
+            if (( ctx.err = hid_host_device_start(ifaces[0]) )) goto close;
+            if (!hid_class_request_set_report(
+                ifaces[0], HID_REPORT_TYPE_FEATURE, 0x21, set, sizeof(set)
+            ))
+                ESP_LOGD(TAG, "%s set feature id=33, val=0x210200", addr);
+        } else if (( ctx.err = hid_host_device_start(dev) )) {
+            ESP_LOGE(TAG, "%s not start: %s", addr, esp_err_to_name(ctx.err));
             goto close;
         }
-        ESP_LOGI(TAG, "%s start awaiting interface events", HID);
+        ESP_LOGD(TAG, "%s started", addr);
+
+        continue; // SKIP LOGs
+        if (wcslen(info.iManufacturer))
+            wprintf(L"Manufacturer : %ls\n", info.iManufacturer);
+        if (wcslen(info.iProduct))
+            wprintf(L"Product      : %ls\n", info.iProduct);
+        if (wcslen(info.iSerialNumber))
+            wprintf(L"SerialNumber : %ls\n", info.iSerialNumber);
+        printf("SubClass     : %s\n"
+               "Proto        : %s\n"
+               "Descriptor   : %u\n",
+               params.sub_class ? "BOOT" : "",
+               hid_protocol_str(params.proto), dlen);
+        hexdump(desc, dlen, 80);
         continue;
 close:
-        if (dev && !getBits(BIT_DEVICE_EXIT)) {
-            hid_host_device_close(dev);
-            setBits(BIT_DEVICE_EXIT);
-        }
+        hid_host_device_close(dev);
     }
 exit:
     setBits(BIT_CLIENT_EXIT); // client is deregistered
     vTaskDelete(NULL);
 }
 
-esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, HID); }
+esp_err_t hid_host_init() { return usbh_common_init(hid_host_task, "HID"); }
 esp_err_t hid_host_exit() { return usbh_common_exit(); }
 
 #else // CONFIG_BASE_USB_HID_HOST

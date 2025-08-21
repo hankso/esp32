@@ -193,13 +193,12 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
 #ifdef CONFIG_BASE_USE_FFS
     if (type == FILESYS_FLASH) {
 #   ifdef CONFIG_BASE_FFS_FAT
-        wl_handle_t wlhdl = devs[0].wlhdl;
-        if (wlhdl == WL_INVALID_HANDLE) return false;
-        info->pdrv = ff_diskio_get_pdrv_wl(wlhdl);
+        if (devs[0].wlhdl == WL_INVALID_HANDLE) return false;
+        info->pdrv = ff_diskio_get_pdrv_wl(info->wlhdl = devs[0].wlhdl);
         FATFS *fs;
         DWORD free_clust;
         char drv[] = { '0' + info->pdrv, ':', '\0' };
-        uint64_t ssize = wl_sector_size(wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
+        uint64_t ssize = wl_sector_size(info->wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
         if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
             info->used = ssize * (fs->n_fatent - 2 - free_clust) * fs->csize;
             info->total = ssize * (fs->n_fatent - 2) * fs->csize;
@@ -217,9 +216,9 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
 #endif // CONFIG_BASE_USE_FFS
 #ifdef CONFIG_BASE_USE_SDFS
     if (type == FILESYS_SDCARD && devs[1].card) {
-        info->pdrv = ff_diskio_get_pdrv_card(devs[1].card);
-        info->blkcnt = devs[1].card->csd.capacity;
-        info->blksize = devs[1].card->csd.sector_size;
+        info->pdrv = ff_diskio_get_pdrv_card(info->card = devs[1].card);
+        info->blkcnt = info->card->csd.capacity;
+        info->blksize = info->card->csd.sector_size;
         FATFS *fs;
         DWORD free_clust;
         char drv[] = { '0' + info->pdrv, ':', '\0' };
@@ -244,8 +243,7 @@ void filesys_print_info(filesys_type_t type) {
             info.used / 1024, info.total / 1024,
             100 * info.used / (info.total ?: 1));
 #ifdef CONFIG_BASE_USE_SDFS
-    if (type != FILESYS_SDCARD || !devs[1].card) return;
-    sdmmc_card_t *card = devs[1].card;
+    if (info.type != FILESYS_SDCARD || !info.card) return;
     printf( // see sdmmc_card_print_info
         "Name: %s\n"
         "S/N:  %d\n"
@@ -255,16 +253,17 @@ void filesys_print_info(filesys_type_t type) {
         "Freq: %d %cHz%s\n"
         "CSD:  sector_size=%d, read_block_len=%d, capacity=0x%0*X\n"
         "SCR:  sd_spec=%d, bus_width=%d (valid if type = SDIO)\n",
-        card->cid.name, card->cid.serial,
-        card->cid.mfg_id, card->cid.oem_id,
-        card->is_sdio ? "SDIO" : card->is_mmc ? "MMC" :
-        card->ocr & SD_OCR_SDHC_CAP ? "SDHC/SDXC" : "SDSC",
-        format_size(card->csd.capacity * card->csd.sector_size),
-        card->max_freq_khz / (card->max_freq_khz < 1000 ? 1 : 1000),
-        card->max_freq_khz < 1000 ? 'K' : 'M', card->is_ddr ? ", DDR" : "",
-        card->csd.sector_size, card->csd.read_block_len,
-        card->csd.capacity >> 16 ? 8 : 4, card->csd.capacity,
-        card->scr.sd_spec, card->scr.bus_width
+        info.card->cid.name, info.card->cid.serial,
+        info.card->cid.mfg_id, info.card->cid.oem_id,
+        info.card->is_sdio ? "SDIO" : info.card->is_mmc ? "MMC" :
+        info.card->ocr & SD_OCR_SDHC_CAP ? "SDHC/SDXC" : "SDSC",
+        format_size(info.card->csd.capacity * info.card->csd.sector_size),
+        info.card->max_freq_khz / (info.card->max_freq_khz < 1000 ? 1 : 1000),
+        info.card->max_freq_khz < 1000 ? 'K' : 'M',
+        info.card->is_ddr ? ", DDR" : "",
+        info.card->csd.sector_size, info.card->csd.read_block_len,
+        info.card->csd.capacity >> 16 ? 8 : 4, info.card->csd.capacity,
+        info.card->scr.sd_spec, info.card->scr.bus_width
     );
 #endif
 }
@@ -685,7 +684,7 @@ esp_err_t filesys_readelf(filesys_type_t type, const char *path, int level) {
             0, "REL (relocatable)", "EXEC (executable)", "DYN (shared)", "CORE"
         };
         puts("ELF Header:");
-        K("Magic");     hexdump(ehdr->ident, sizeof(ehdr->ident), -1);
+        K("Magic");     hexdumpl(ehdr->ident, sizeof(ehdr->ident), -1);
         K("Class");     printf("%c%c%c%s\n", p[1], p[2], p[3], V(bits, p[4]));
         K("Data");      printf("%s-endian\n", V(endian, p[5]));
         K("Version");   printf("%d (%s)\n", p[6], V(version, p[6]));

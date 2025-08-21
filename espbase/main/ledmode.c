@@ -20,11 +20,14 @@
 #define LED_RES     LEDC_TIMER_13_BIT
 #define LED_CH      LEDC_CHANNEL_0
 
-static const char * TAG = "LEDMode";
-static led_blink_t state = LED_BLINK_RESET;
+static UNUSED const char * TAG = "LEDMode";
+static UNUSED led_blink_t state = LED_BLINK_RESET;
+
+#ifndef CONFIG_BASE_LED_NUM
+#   define CONFIG_BASE_LED_NUM  0
+#endif
 
 #if !defined(CONFIG_BASE_USE_LED)           // led disabled
-
 static void *led_handle = NULL;
 void led_initialize() {}
 
@@ -34,18 +37,6 @@ void led_initialize() {}
 static const blink_step_t double_red_blink[] = {
     /*!< Set color to red by R:255 G:0 B:0 */
     {LED_BLINK_RGB, SET_RGB(255, 0, 0), 0},
-    {LED_BLINK_HOLD, LED_STATE_ON, 500},
-    {LED_BLINK_HOLD, LED_STATE_OFF, 500},
-    {LED_BLINK_HOLD, LED_STATE_ON, 500},
-    {LED_BLINK_HOLD, LED_STATE_OFF, 500},
-    {LED_BLINK_STOP, 0, 0},
-};
-
-static const blink_step_t triple_green_blink[] = {
-    /*!< Set color to green by R:0 G:255 B:0 */
-    {LED_BLINK_RGB, SET_RGB(0, 255, 0), 0},
-    {LED_BLINK_HOLD, LED_STATE_ON, 500},
-    {LED_BLINK_HOLD, LED_STATE_OFF, 500},
     {LED_BLINK_HOLD, LED_STATE_ON, 500},
     {LED_BLINK_HOLD, LED_STATE_OFF, 500},
     {LED_BLINK_HOLD, LED_STATE_ON, 500},
@@ -104,7 +95,6 @@ static const blink_step_t * LED_BLINK_LIST[] = {
     [LED_BLINK_WHITE_BREATHE_FAST]  = breath_white_fast_blink,
     [LED_BLINK_BLUE_BREATH]         = breath_blue_blink,
     [LED_BLINK_DOUBLE_RED]          = double_red_blink,
-    [LED_BLINK_TRIPLE_GREEN]        = triple_green_blink,
     [LED_BLINK_COLOR_HSV_RING]      = color_hsv_ring_blink,
     [LED_BLINK_COLOR_RGB_RING]      = color_rgb_ring_blink,
     [LED_BLINK_FLOWING]             = flowing_blink,
@@ -147,7 +137,7 @@ void led_initialize() {
         },
         .led_strip_driver = LED_STRIP_RMT,
         .led_strip_rmt_cfg = {
-#       ifdef TARGET_IDF_4
+#       ifdef IDF_TARGET_V4
             .rmt_channel = 0,
 #       else
             .clk_src = RMT_CLK_SRC_DEFAULT,

@@ -2,17 +2,33 @@ menu "ESP Base Configuration"
 
     choice
         prompt "Select Target ESP32 Board"
-        default BASE_BOARD_ESP32_DEVKIT if IDF_TARGET_ESP32
-        default BASE_BOARD_ESP32S3_NOLOGO if IDF_TARGET_ESP32S3
-        config BASE_BOARD_ESP32_DEVKIT
+        default BASE_BOARD_DEVKIT if IDF_TARGET_ESP32
+        default BASE_BOARD_S3LUAT if IDF_TARGET_ESP32S3
+        config BASE_BOARD_DEVKIT
             bool "ESP32 DevKit by Espressif" if IDF_TARGET_ESP32
-        config BASE_BOARD_ESP32_PICOKIT
+        config BASE_BOARD_PICOD4
             bool "ESP32 PicoKit by Espressif" if IDF_TARGET_ESP32
-        config BASE_BOARD_ESP32S3_NOLOGO
+        config BASE_BOARD_ESPEYE
+            bool "ESP32 CAM EYE by Espressif" if IDF_TARGET_ESP32
+        config BASE_BOARD_ATCAM
+            bool "ESP32 CAM DEV by AiThinker" if IDF_TARGET_ESP32
+        config BASE_BOARD_M5WIDE
+            bool "ESP32 CAM WIDE by M5STACK" if IDF_TARGET_ESP32
+        config BASE_BOARD_M5PSRAM
+            bool "ESP32 CAM PSRAM by M5STACK" if IDF_TARGET_ESP32
+        config BASE_BOARD_WRCAM
+            bool "ESP32 CAM WROVER by Freenove" if IDF_TARGET_ESP32
+        config BASE_BOARD_USBOTG
+            bool "ESP32S3 USB OTG by Espressif" if IDF_TARGET_ESP32S3
+        config BASE_BOARD_S3WRCAM
+            bool "ESP32S3 CAM WROOM by Freenove" if IDF_TARGET_ESP32S3
+        config BASE_BOARD_S3LUAT
+            bool "ESP32S3 CORE DEV by LuaTOS" if IDF_TARGET_ESP32S3
+        config BASE_BOARD_S3NL191
+            bool "ESP32S3 LCD 1.91 by NoLogo" if IDF_TARGET_ESP32S3
+        config BASE_BOARD_S3XMINI
             bool "ESP32S3 SuperMini by NoLogo" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_ESP32S3_LUATOS
-            bool "ESP32S3 CORE DEV by LuatOS" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_ESP32_CUSTOM
+        config BASE_BOARD_CUSTOM
             bool "Custom ESP32 Board"
     endchoice
 
@@ -54,6 +70,7 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_LED
         bool "Enable LED"
+        depends on !BASE_BOARD_S3NL191
         default y
     if BASE_USE_LED
         config BASE_LED_NUM
@@ -79,19 +96,14 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_ADC
         bool "Enable ADC"
-        depends on !BASE_CAM_ATCAM
-        select ADC_CAL_EFUSE_VREF_ENABLE
-        select ADC_CAL_EFUSE_TP_ENABLE
-        select ADC_CAL_LUT_ENABLE
+        depends on !BASE_BOARD_ATCAM
+        select ADC_CAL_EFUSE_VREF_ENABLE if IDF_TARGET_ESP32
+        select ADC_CAL_EFUSE_TP_ENABLE if IDF_TARGET_ESP32
+        select ADC_CAL_LUT_ENABLE if IDF_TARGET_ESP32
         default y
         help
             Enable adc_xxx functions (~5KB)
     if BASE_USE_ADC
-        config BASE_ADC_MULTISAMPLING
-            int "ADC raw value multi-sampling to filter noise"
-            range 0 1024
-            default 64
-
         config BASE_ADC_HALL_SENSOR
             bool "Read HALL sensor value"
             depends on IDF_TARGET_ESP32
@@ -101,9 +113,8 @@ menu "ESP Base Configuration"
 
         choice
             prompt "Select ADC sensor features"
-            default BASE_ADC_JOYSTICK
             config BASE_ADC_SINGLE
-                bool "Try to use Read ADC normally"
+                bool "Read single channel ADC"
             config BASE_ADC_JOYSTICK
                 bool "Read joystick value by ADC"
         endchoice
@@ -111,7 +122,7 @@ menu "ESP Base Configuration"
 
     config BASE_USE_DAC
         bool "Enable DAC"
-        depends on IDF_TARGET_ESP32 && !BASE_CAM_ATCAM
+        depends on IDF_TARGET_ESP32 && !BASE_BOARD_ATCAM
         default n
         help
             Enable dac_xxx functions (~3KB)
@@ -132,11 +143,35 @@ menu "ESP Base Configuration"
 
         config BASE_USE_I2C0
             bool "Enable I2C Bus 0" if BASE_I2C_NUM = 1
-            default y if BASE_I2C_NUM = 0 || BASE_SCREEN_I2C_ALT
+            default y if BASE_I2C_NUM = 0 || BASE_SCN_I2C_ALT
 
         config BASE_USE_I2C1
             bool "Enable I2C Bus 1" if BASE_I2C_NUM = 0
-            default y if BASE_I2C_NUM = 1 || BASE_SCREEN_I2C_ALT
+            default y if BASE_I2C_NUM = 1 || BASE_SCN_I2C_ALT
+
+        config BASE_BOARD_SDA
+            int
+            default 26 if BASE_BOARD_ATCAM
+            default 26 if BASE_BOARD_WRCAM
+            default 18 if BASE_BOARD_ESPEYE
+            default 22 if BASE_BOARD_M5WIDE
+            default 25 if BASE_BOARD_M5PSRAM
+            default 4  if BASE_BOARD_S3WRCAM
+            default 18 if BASE_BOARD_S3NL191
+            help
+                Board PIN for I2C SDA
+
+        config BASE_BOARD_SCL
+            int
+            default 27 if BASE_BOARD_ATCAM
+            default 27 if BASE_BOARD_WRCAM
+            default 23 if BASE_BOARD_ESPEYE
+            default 23 if BASE_BOARD_M5WIDE
+            default 23 if BASE_BOARD_M5PSRAM
+            default 5  if BASE_BOARD_S3WRCAM
+            default 17 if BASE_BOARD_S3NL191
+            help
+                Board PIN for I2C SCL
 
         config BASE_ALS_TRACK
             bool "Enable Ambient Light Sensor"
@@ -153,6 +188,10 @@ menu "ESP Base Configuration"
         config BASE_USE_TSCN
             bool "Enable touch screen"
             default n
+
+        config BASE_USE_MSCN
+            bool "Enable multi screen"
+            default n
     endif
 
     menuconfig BASE_USE_SPI
@@ -167,8 +206,8 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_PWM
         bool "Enable PWM"
-        depends on !BASE_CAM_ATCAM
-        default y
+        depends on !BASE_BOARD_ATCAM
+        default n
     if BASE_USE_PWM
         config BASE_USE_SERVO
             bool "Enable Servo control"
@@ -185,6 +224,7 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_I2S
         bool "Enable I2S"
+        depends on !BASE_BOARD_ATCAM
         default n
         help
             Enable avc_command -> audio_xxx functions (~20KB)
@@ -207,121 +247,82 @@ menu "ESP Base Configuration"
     menuconfig BASE_USE_CAM
         bool "Enable Camera"
         select BASE_USE_I2C
-        imply BASE_SCREEN_I2C_ALT
+        imply BASE_SCN_I2C_ALT
         default n
         help
             Enable avc_command -> video_xxx functions (~40KB)
-    if BASE_USE_CAM
-        choice
-            prompt "Select Camera Board"
-            default BASE_CAM_ATCAM
-            config BASE_CAM_ATCAM
-                bool "ESP32-CAM by AiThinker"
-            config BASE_CAM_M5WIDE
-                bool "M5CAM-WIDE by M5STACK"
-            config BASE_CAM_M5PSRAM
-                bool "M5CAM-PSRAM by M5STACK"
-            config BASE_CAM_ESP_EYE
-                bool "ESP-EYE by Espressif"
-            config BASE_CAM_WROOM_S3
-                bool "ESP32S3-WROOM by Espressif"
-            config BASE_CAM_WROVER_KIT
-                bool "ESP32-WROVER-KIT by Espressif"
-            config BASE_CAM_CUSTOM
-                bool "Custom camera board and connections"
-        endchoice
 
-        config BASE_CAM_SDA
-            int
-            default 26 if BASE_CAM_ATCAM
-            default 22 if BASE_CAM_M5WIDE
-            default 25 if BASE_CAM_M5PSRAM
-            default 18 if BASE_CAM_ESP_EYE
-            default 4  if BASE_CAM_WROOM_S3
-            default 26 if BASE_CAM_WROVER_KIT
-            help
-                Camera PIN for I2C SDA
-
-        config BASE_CAM_SCL
-            int
-            default 27 if BASE_CAM_ATCAM
-            default 23 if BASE_CAM_M5WIDE
-            default 23 if BASE_CAM_M5PSRAM
-            default 23 if BASE_CAM_ESP_EYE
-            default 5  if BASE_CAM_WROOM_S3
-            default 27 if BASE_CAM_WROVER_KIT
-            help
-                Camera PIN for I2C SCL
-
-        config BASE_CAM_PINS
-            string
-            default "32,-1,0,25,23,22,35,34,39,36,21,19,18,5" if BASE_CAM_ATCAM
-            default "-1,15,27,25,26,21,19,36,18,39,5,34,35,32" if BASE_CAM_M5WIDE
-            default "-1,25,27,22,26,21,19,36,18,39,5,34,35,32" if BASE_CAM_M5PSRAM
-            default "-1,-1,4,5,27,25,36,37,38,39,35,14,13,34" if BASE_CAM_ESP_EYE
-            default "38,-1,15,6,7,13,16,17,18,12,10,8,9,11" if BASE_CAM_WROOM_S3
-            default "-1,-1,21,25,23,22,35,34,39,36,19,18,5,4" if BASE_CAM_WROVER_KIT
-            help
-                Camera PINs in order PWDN,RESET,XCLK,VSYNC,HREF,PCLK,D7...D0
-    endif
-
-    menuconfig BASE_USE_SCREEN
+    menuconfig BASE_USE_SCN
         bool "Enable Screen"
-        depends on (BASE_USE_I2C || BASE_USE_SPI) && !BASE_CAM_ATCAM
-        default y
+        depends on (BASE_USE_I2C || BASE_USE_SPI) && !BASE_BOARD_ATCAM
+        default n
         help
             Enable scn_xxx functions (200KB+)
-    if BASE_USE_SCREEN
+    if BASE_USE_SCN
         choice
             prompt "Select Screen interface"
-            config BASE_SCREEN_I2C
+            config BASE_SCN_I80
+                bool "I80" if BASE_BOARD_S3NL191
+            config BASE_SCN_I2C
                 bool "I2C" if BASE_USE_I2C
-            config BASE_SCREEN_SPI
+            config BASE_SCN_SPI
                 bool "SPI" if BASE_USE_SPI
         endchoice
 
-        if BASE_SCREEN_I2C
-            config BASE_SCREEN_I2C_ADDR
+        if BASE_SCN_I2C
+            config BASE_SCN_I2C_ADDR
                 hex "I2C Screen 7bit address"
                 default 0x3C
 
-            config BASE_SCREEN_I2C_ALT
+            config BASE_SCN_I2C_ALT
                 bool "I2C Screen use dedicated I2C bus"
                 default n
 
-            config BASE_SCREEN_I2C_SPEED
+            config BASE_SCN_I2C_SPEED
                 int "I2C Screen clock speed in Hz"
-                depends on BASE_SCREEN_I2C_ALT
+                depends on BASE_SCN_I2C_ALT
                 range 1 1000000
                 default 400000
         endif
 
-        if BASE_SCREEN_SPI
-            config BASE_SCREEN_SPI_MODE
+        if BASE_SCN_SPI
+            config BASE_SCN_SPI_MODE
                 hex "SPI Screen mode (CPOL | CPHA)"
                 range 0x00 0x03
                 default 0x00
 
-            config BASE_SCREEN_SPI_SPEED
+            config BASE_SCN_SPI_SPEED
                 int "SPI Screen clock speed in Hz"
                 range 1 80000000
                 default 20000000
         endif
 
-        config BASE_SCREEN_HRES
-            int "Screen horizontal Resolution in pixel"
-            default 128 if BASE_SCREEN_I2C
-            default 320 if BASE_SCREEN_SPI
+        if BASE_SCN_I80
+            config BASE_SCN_I80_SPEED
+                int "I80 Screen clock speed in Hz"
+                range 1 80000000
+                default 16000000
+        endif
 
-        config BASE_SCREEN_VRES
+        config BASE_SCN_HRES
+            int "Screen horizontal Resolution in pixel"
+            default 128 if BASE_SCN_I2C
+            default 320 if BASE_SCN_SPI
+            default 320 if BASE_SCN_I80
+
+        config BASE_SCN_VRES
             int "Screen vertical resolution in pixel"
-            default 64  if BASE_SCREEN_I2C
-            default 240 if BASE_SCREEN_SPI
+            default 64  if BASE_SCN_I2C
+            default 240 if BASE_SCN_SPI
+            default 170 if BASE_SCN_I80
+
+        config BASE_SCN_PATCH_ST7789
+            bool "Patch for ST7789V" if BASE_USE_SPI || BASE_SCN_I80
     endif
 
     menuconfig BASE_USE_BTN
         bool "Enable Button"
-        depends on !BASE_CAM_ATCAM
+        depends on !BASE_BOARD_ATCAM
         default y
     if BASE_USE_BTN
         config BASE_BTN_INPUT
@@ -334,26 +335,26 @@ menu "ESP Base Configuration"
 
         config BASE_USE_KNOB
             bool "Enable Knob input"
-            default y
+            default n
     endif
 
-    menuconfig BASE_USE_GPIOEXP
+    menuconfig BASE_USE_GEXP
         bool "Enable GPIO Expander"
-        depends on BASE_USE_I2C || BASE_USE_SPI
+        depends on (BASE_USE_I2C || BASE_USE_SPI) && !BASE_BOARD_ATCAM
         help
             Enable gexp_xxx functions (~19KB)
-    if BASE_USE_GPIOEXP
-        config BASE_GPIOEXP_I2C
+    if BASE_USE_GEXP
+        config BASE_GEXP_I2C
             bool "Enable GPIO Expander on I2C"
             depends on BASE_USE_I2C
 
-        config BASE_GPIOEXP_SPI
+        config BASE_GEXP_SPI
             bool "Enable GPIO Expander on SPI"
             depends on BASE_USE_SPI
 
-        config BASE_GPIOEXP_INT
+        config BASE_GEXP_INT
             bool "Handle interrupt from expander"
-            depends on BASE_GPIOEXP_I2C || BASE_GPIOEXP_SPI
+            depends on BASE_GEXP_I2C || BASE_GEXP_SPI
             default y
     endif
 
@@ -363,11 +364,11 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE & Bluedroid host"
-        depends on !BASE_CAM_ATCAM
+        depends on !BASE_BOARD_ATCAM
         select BT_ENABLED
         select BT_BLE_DYNAMIC_ENV_MEMORY
         select BT_BLE_42_FEATURES_SUPPORTED if IDF_TARGET_ESP32S3
-        default n
+        default y if IDF_TARGET_ESP32S3
         help
             Enable btmode_xxx functions (~500KB)
     if BASE_USE_BT
@@ -398,16 +399,6 @@ menu "ESP Base Configuration"
         help
             Enable wifi_xxx functions (~400KB)
     if BASE_USE_WIFI
-        config BASE_AP_CHANNEL
-            int "Channel of AP mode"
-            range 1 13
-            default 1
-
-        config BASE_AP_MAX_CONN
-            int "Max STA connections of AP mode"
-            range 0 16
-            default 3
-
         config BASE_USE_SMARTCONFIG
             bool "Enable SmartConfig on STA interface"
             default n
@@ -570,8 +561,8 @@ menu "ESP Base Configuration"
         default 5
 
     if BASE_USE_ADC
-        config BASE_GPIO_ADC1
-            int "ADC input 1"
+        config BASE_GPIO_ADC0
+            int "ADC input 0"
             range 36 36 if BASE_ADC_HALL_SENSOR
             range 32 39 if IDF_TARGET_ESP32
             range 1 10 if IDF_TARGET_ESP32S3
@@ -579,8 +570,8 @@ menu "ESP Base Configuration"
             default 1 if IDF_TARGET_ESP32S3
             default 36
 
-        config BASE_GPIO_ADC2
-            int "ADC input 2"
+        config BASE_GPIO_ADC1
+            int "ADC input 1"
             depends on BASE_ADC_JOYSTICK
             range 39 39 if BASE_ADC_HALL_SENSOR
             range 32 39 if IDF_TARGET_ESP32
@@ -652,26 +643,32 @@ menu "ESP Base Configuration"
 
         config BASE_GPIO_SPI_CS1
             int "SPI CS1 (for Screen)"
-            depends on BASE_SCREEN_SPI
+            depends on BASE_SCN_SPI
             range 0 48
             default 9 if IDF_TARGET_ESP32S3
             default 18
 
         config BASE_GPIO_SPI_CS2
             int "SPI CS2 (for GPIOExp)"
-            depends on BASE_GPIOEXP_SPI
+            depends on BASE_GEXP_SPI
             range 0 48
             default 10 if IDF_TARGET_ESP32S3
             default 19
     endif
 
-    if BASE_SCREEN_SPI
+    if BASE_USE_SCN
+        config BASE_GPIO_SCN_BL
+            int "Screen backlight"
+            range -1 48
+            default -1
+
         config BASE_GPIO_SCN_RST
-            int "SPI Screen reset"
-            range 0 48
+            int "Screen reset"
+            range -1 48
+            default -1
 
         config BASE_GPIO_SCN_DC
-            int "SPI Screen Data/Cmd"
+            int "Screen data/cmd" if BASE_SCN_SPI || BASE_SCN_I80
             range 0 48
             default 7 if IDF_TARGET_ESP32S3
             default 23
@@ -713,8 +710,8 @@ menu "ESP Base Configuration"
         default 35
 
     config BASE_GPIO_INT
-        int "GEXP INT"
-        depends on BASE_GPIOEXP_INT
+        int "INT pin"
+        depends on BASE_GEXP_INT || BASE_USE_TSCN
         range 0 48
         default 14 if IDF_TARGET_ESP32S3
         default 34
@@ -774,49 +771,31 @@ menu "ESP Base Configuration"
             default 10
     endif
 
-    if BASE_CAM_CUSTOM
-        config BASE_GPIO_CAM_PWDN
-            int "CAM power down"
-            default -1
-        config BASE_GPIO_CAM_RESET
-            int "CAM reset"
-            default -1
-        config BASE_GPIO_CAM_XCLK
-            int "CAM system clock"
-            default -1
-        config BASE_GPIO_CAM_VSYNC
-            int "CAM Ver SYNC"
-            default -1
-        config BASE_GPIO_CAM_HREF
-            int "CAM Hor REF"
-            default -1
-        config BASE_GPIO_CAM_PCLK
-            int "CAM pixel clock"
-            default -1
-        config BASE_GPIO_CAM_D7
-            int "CAM data bit[7]"
-            default -1
-        config BASE_GPIO_CAM_D6
-            int "CAM data bit[6]"
-            default -1
-        config BASE_GPIO_CAM_D5
-            int "CAM data bit[5]"
-            default -1
-        config BASE_GPIO_CAM_D4
-            int "CAM data bit[4]"
-            default -1
-        config BASE_GPIO_CAM_D3
-            int "CAM data bit[3]"
-            default -1
-        config BASE_GPIO_CAM_D2
-            int "CAM data bit[2]"
-            default -1
-        config BASE_GPIO_CAM_D1
-            int "CAM data bit[1]"
-            default -1
-        config BASE_GPIO_CAM_D0
-            int "CAM data bit[0]"
-            default -1
-    endif
+    config BASE_CAM_PINS
+        string
+        default "32,-1,0,25,23,22,35,34,39,36,21,19,18,5" if BASE_BOARD_ATCAM
+        default "-1,-1,21,25,23,22,35,34,39,36,19,18,5,4" if BASE_BOARD_WRCAM
+        default "-1,-1,4,5,27,25,36,37,38,39,35,14,13,34" if BASE_BOARD_ESPEYE
+        default "-1,15,27,25,26,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5WIDE
+        default "-1,25,27,22,26,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5PSRAM
+        default "38,-1,15,6,7,13,16,17,18,12,10,8,9,11" if BASE_BOARD_S3WRCAM
+        help
+            Camera PINs in order PWDN,RST,XCLK,VSYNC,HREF,PCLK,D7...D0
+
+    config BASE_CAM_CUSTOM_PINS
+        string "Camera pins" if BASE_USE_CAM && BASE_CAM_PINS=""
+        help
+            Camera PINs in order PWDN,RST,XCLK,VSYNC,HREF,PCLK,D7...D0
+
+    config BASE_SCN_PINS
+        string
+        default "38,5,6,7,8,9,39,40,41,42,45,46,47,48" if BASE_BOARD_S3NL191
+        help
+            Screen PINs in order BL,RST,CS,DC,WR,RD,D0...SOC_LCD_I80_BUS_WIDTH
+
+    config BASE_SCN_CUSTOM_PINS
+        string "Screen pins" if BASE_SCN_I80 && BASE_SCN_PINS=""
+        help
+            Screen PINs in order BL,RST,CS,DC,WR,RD,D0...SOC_LCD_I80_BUS_WIDTH
 
 endmenu

@@ -15,7 +15,7 @@
 #include "esp_rom_md5.h"
 #include "esp_http_server.h"
 
-#ifdef CONFIG_BASE_USE_WEBSERVER
+#if defined(CONFIG_BASE_USE_WEBSERVER) && defined(CONFIG_BASE_USE_WIFI)
 
 #define ESP_ERR_HTTPD_AUTH_DIGEST   (ESP_ERR_HTTPD_BASE + 10)
 #define ESP_ERR_HTTPD_SKIP_DATA     (ESP_ERR_HTTPD_BASE + 11)
@@ -43,7 +43,7 @@ static const char *ERROR_HTML =
     "<title>Page not found</title>"
 "</head>"
 "<body>"
-    "<h1>404: Page not found</h1><hr>"
+    "<h1>404: Page not found</h1>"
     "<p>Sorry. The page you requested could not be found.</p>"
     "<p>Go back to <a href='/'>homepage</a></p>"
 "</body>"
@@ -795,8 +795,8 @@ static esp_err_t on_update(httpd_req_t *req) {
             return send_str(req, "OTA Updation reset done");
     }
     if (has_param(req, "size", FROM_ANY)) {
-        int size;
-        if (!parse_int(get_param(req, "size", FROM_ANY), &size))
+        uint32_t size;
+        if (!parse_u32(get_param(req, "size", FROM_ANY), &size))
             return send_err(req, 400, NULL);
         if (!ota_updation_begin(size))
             return send_err(req, 500, ota_updation_error());
@@ -1086,6 +1086,8 @@ void server_loop_begin() {
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
     config.stack_size = 8192;
     config.lru_purge_enable = true;
+    config.enable_so_linger = true;
+    config.max_open_sockets = 12;
     config.max_uri_handlers = LEN(apis);
     config.uri_match_fn = rewrite_api;
     config.global_user_ctx = auth_init();

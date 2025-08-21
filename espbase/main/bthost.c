@@ -71,7 +71,7 @@ static void ble_hidh_cb(void *a, esp_event_base_t b, int32_t id, void *data) {
         const uint8_t *bda = esp_hidh_dev_bda_get(param->input.dev);
         int offset = printf(BDASTR " %s ID %d ",
                             BDA2STR(bda), esp_hid_usage_str(usage), rid);
-        if (offset > 0) hexdump(param->input.data, len, 80 - offset);
+        if (offset > 0) hexdumpl(param->input.data, len, 80 - offset);
     }
 }
 

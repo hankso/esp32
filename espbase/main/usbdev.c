@@ -18,7 +18,7 @@
 #endif
 
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
-#   ifdef TARGET_IDF_5
+#   ifdef IDF_TARGET_V5
 #       include "tusb_msc_storage.h"
 #   else
 #       include "sdmmc_cmd.h"
@@ -26,7 +26,7 @@
 #endif
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-#   ifdef TARGET_IDF_5
+#   ifdef IDF_TARGET_V5
 #       include "class/hid/hid_device.h"
 #   else
 #       include "freertos/FreeRTOS.h"
@@ -118,7 +118,7 @@ static bool usbdev_reconnect() {
 // see idf-v4.4-tinyusb-hid.patch
 
 #include "../include_private/usb_descriptors.h"
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
 #   define desc_dev descriptor_dev_default
 #   define desc_str descriptor_str_default
 #else
@@ -128,7 +128,7 @@ static bool usbdev_reconnect() {
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
 uint8_t const *tud_hid_descriptor_report_cb(uint8_t i) { // overwrite weak
-    return hid_descriptor_report; NOTUSED(i); // defined in hidtool.c
+    return HIDTool.desc; NOTUSED(i);
 }
 #endif
 
@@ -154,7 +154,7 @@ static uint8_t const * config_desc() {
         total += sizeof(m);
     }
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-    size_t blen = CFG_TUD_HID_EP_BUFSIZE, rlen = hid_descriptor_report_len;
+    size_t blen = CFG_TUD_HID_EP_BUFSIZE, rlen = HIDTool.dlen;
 #else
     size_t blen = 0, rlen = 0;
 #endif
@@ -174,7 +174,7 @@ static uint8_t const * config_desc() {
     return buf;
 }
 
-#ifdef TARGET_IDF_4
+#ifdef IDF_TARGET_V4
 uint8_t const *tud_descriptor_configuration_cb(uint8_t i) { // overwrite weak
     return config_desc(); NOTUSED(i);
 }
@@ -193,7 +193,7 @@ static esp_err_t usbd_common_init() {
 
     tinyusb_config_t tusb_conf = {
         .external_phy = false,
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
         .device_descriptor = &desc_dev,
         .string_descriptor = desc_str,
         .string_descriptor_count = LEN(desc_str),
@@ -214,7 +214,7 @@ static esp_err_t usbd_common_init() {
 static esp_err_t usbd_common_exit() {
     if (!inited) return ESP_OK;
     inited = false;
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
     return tinyusb_driver_uninstall();
 #else
     return ESP_ERR_NOT_SUPPORTED; // tusb_teardown not supported yet
@@ -288,7 +288,7 @@ esp_err_t cdc_device_init(usbmode_t prev) {
         .usb_dev = TINYUSB_USBDEV_0,
         .cdc_port = TINYUSB_CDC_ACM_0,
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_SERIAL
-#       ifdef TARGET_IDF_4
+#       ifdef IDF_TARGET_V4
         .rx_unread_buf_sz = CONFIG_TINYUSB_CDC_RX_BUFSIZE,
 #       endif
         .callback_rx = cdc_device_cb,
@@ -312,7 +312,7 @@ esp_err_t cdc_device_exit(usbmode_t next) {
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_CONSOLE
     if (!err) err = esp_tusb_deinit_console(TINYUSB_CDC_ACM_0);
 #   endif
-#   ifdef TARGET_IDF_5
+#   ifdef IDF_TARGET_V5
     if (!err) err = tusb_cdc_acm_deinit(TINYUSB_CDC_ACM_0);
 #   endif
     if (!err && !ISDEV(next)) err = usbd_common_exit();
@@ -351,7 +351,7 @@ esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
         }                                                                   \
     } while (0)
 
-#   ifdef TARGET_IDF_4
+#   ifdef IDF_TARGET_V4
 
 void tud_msc_inquiry_cb(
     uint8_t lun, uint8_t vid[8], uint8_t pid[16], uint8_t rev[4]
@@ -446,7 +446,7 @@ int32_t tud_msc_scsi_cb(
     return -1;
 }
 
-#   endif // TARGET_IDF_4
+#   endif // IDF_TARGET_V4
 
 esp_err_t msc_device_init(usbmode_t prev) {
     esp_err_t err = ESP_OK;
@@ -460,7 +460,7 @@ esp_err_t msc_device_init(usbmode_t prev) {
         err = ESP_ERR_INVALID_STATE; // no initialized FAT filesystems
     }
     if (!err) err = usbd_common_init();
-#   ifdef TARGET_IDF_5
+#   ifdef IDF_TARGET_V5
     LOOPN(i, err ? 0 : NUM_DISK) {
         if (info[i].type == FILESYS_SDCARD) {
             const tinyusb_msc_sdmmc_config_t conf = {
@@ -484,7 +484,7 @@ esp_err_t msc_device_init(usbmode_t prev) {
 esp_err_t msc_device_exit(usbmode_t next) {
     esp_err_t err = ESP_OK;
     if (!msc_enabled) return err;
-#   ifdef TARGET_IDF_5
+#   ifdef IDF_TARGET_V5
     err = tinyusb_msc_storage_deinit();
 #   endif
     if (!err && !ISDEV(next)) err = usbd_common_exit();
@@ -518,8 +518,9 @@ static struct {
 
 static bool send_report(const hid_report_t *rpt, bool intask, uint16_t ms) {
     if (!hid_enabled || !mounted || !HID_VALID_REPORT(rpt)) return false;
+    TickType_t timeout = TIMEOUT(ms);
 #ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
-    if (!intask) return hid.queue && xQueueSend(hid.queue, rpt, TIMEOUT(ms));
+    if (!intask) return hid.queue && xQueueSend(hid.queue, rpt, timeout);
 #endif
     if (tud_suspended()) {
         ESP_LOGI(TAG, "%s suspended (reset queue)", HID);
@@ -527,11 +528,11 @@ static bool send_report(const hid_report_t *rpt, bool intask, uint16_t ms) {
         return false;
     }
     bool sent = tud_hid_report(rpt->id, (void *)rpt, rpt->size);
-#ifdef TARGET_IDF_4
+#ifdef IDF_TARGET_V4
 #   ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
-    if (sent && !( sent = ulTaskNotifyTake(pdTRUE, TIMEOUT(ms)) == pdTRUE ))
+    if (sent && !( sent = ulTaskNotifyTake(pdTRUE, timeout) == pdTRUE ))
 #   else
-    if (sent && !( sent = xSemaphoreTake(hid.semphr, TIMEOUT(ms)) == pdTRUE ))
+    if (sent && !( sent = xSemaphoreTake(hid.semphr, timeout) == pdTRUE ))
 #   endif
         ESP_LOGW(HID, "report not sent");
 #endif
@@ -560,7 +561,7 @@ void tud_hid_set_report_cb(
     return; NOTUSED(i); NOTUSED(r); NOTUSED(t); NOTUSED(b); NOTUSED(l);
 }
 
-#if defined(CONFIG_BASE_USB_HID_DEVICE_TASK) && defined(TARGET_IDF_4)
+#if defined(CONFIG_BASE_USB_HID_DEVICE_TASK) && defined(IDF_TARGET_V4)
 static void hid_device_task(void *arg) {
     hid_report_t report;
     while (1) {
@@ -573,7 +574,7 @@ static void hid_device_task(void *arg) {
 esp_err_t hid_device_init(usbmode_t prev) {
     if (hid_enabled) return ESP_OK;
     esp_err_t err = usbd_common_init();
-#ifdef TARGET_IDF_4
+#ifdef IDF_TARGET_V4
     if (!err && (
 #   ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
         !( hid.queue = xQueueCreate(10, sizeof(hid_report_t)) ) ||
@@ -596,7 +597,7 @@ esp_err_t hid_device_init(usbmode_t prev) {
 
 esp_err_t hid_device_exit(usbmode_t next) {
     if (!hid_enabled) return ESP_OK;
-#ifdef TARGET_IDF_4
+#ifdef IDF_TARGET_V4
     TRYNULL(hid.task, vTaskDelete);
     TRYNULL(hid.queue, vQueueDelete);
     TRYNULL(hid.semphr, vSemaphoreDelete);

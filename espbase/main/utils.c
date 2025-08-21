@@ -5,7 +5,8 @@
  */
 
 #include "globals.h"
-#include "filesys.h"
+#include "filesys.h"            // for filesys_get_info
+#include "drivers.h"            // for gpio_usage
 #include "config.h"
 
 #include "nvs.h"
@@ -34,8 +35,8 @@ int stridx(const char *str, const char *tpl) {
     size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
     if (!slen || !tlen) return -1;
     size_t cnt = strcnt(tpl, ",;/\\|", -1);
-    int idx, ret = parse_int(str, &idx);            // case 1: number as index
-    if (ret && idx >= 0 && idx < MIN(cnt ?: tlen, tlen)) return idx;
+    uint16_t idx, ret = parse_u16(str, &idx);       // case 1: number as index
+    if (ret && idx < MIN(cnt ?: tlen, tlen)) return idx;
     const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
     if (tmp && cnt) return strcnt(tpl, ",;/\\|", tmp - tpl);
     if (tmp && slen == 1) return tmp - tpl;         // case 3: "ABC"
@@ -95,43 +96,86 @@ bool startswith(const char *str, const char *head) {
     return strlen(str) < headlen ? false : !strncmp(str, head, headlen);
 }
 
-bool parse_int(const char *str, int *var) {
-    if (str == NULL) return false;
+bool parse_f64(const char *str, double *ptr) {
+    if (!strlen(str ?: "")) return false;
     char *endptr;
-    int val = strtol(str, &endptr, 0);
+    double val = strtod(str, &endptr);
     if (endptr == str) return false;
-    if (var != NULL) *var = val;
+    if (ptr) *ptr = val;
     return true;
 }
 
-bool parse_uint16(const char *str, uint16_t *var) {
-    int value;
-    if (!parse_int(str, &value)) return false;
-    if (value < 0 || value > UINT16_MAX) return false;
-    if (var != NULL) *var = value;
-    return true;
-}
-
-bool parse_float(const char *str, float *var) {
-    if (str == NULL) return false;
+bool parse_f32(const char *str, float *ptr) {
+    if (!strlen(str ?: "")) return false;
     char *endptr;
     float val = strtof(str, &endptr);
     if (endptr == str) return false;
-    if (var != NULL) *var = val;
+    if (ptr) *ptr = val;
+    return true;
+}
+
+bool parse_s64(const char *str, int64_t *ptr) {
+    if (!strlen(str ?: "")) return false;
+    char *endptr;
+    int64_t val = strtoll(str, &endptr, 0);
+    if (endptr == str) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
+
+bool parse_s32(const char *str, int32_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < INT32_MIN || val > INT32_MAX) return 0;
+    if (ptr) *ptr = val;
+    return true;
+}
+
+bool parse_u32(const char *str, uint32_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT32_MAX) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
+
+bool parse_u16(const char *str, uint16_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT16_MAX) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
+
+bool parse_u8(const char *str, uint8_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT8_MAX) return false;
+    if (ptr) *ptr = val;
     return true;
 }
 
 size_t parse_all(const char *str, int *var, size_t size) {
-    size_t len = str ? strlen(str) : 0, idx = 0;
-    const char *headptr = str;
+    size_t len = strlen(str ?: ""), idx = 0;
+    const char *ptr = str, *end = str + len;
     char *endptr;
-    int val = 0;
-    while ((size_t)(headptr - str) < len && idx < size) {
-        val = strtol(headptr, &endptr, 0);
-        if (headptr != endptr) var[idx++] = val;
-        headptr = endptr + 1;
+    while (ptr < end && idx < size) {
+        int val = strtol(ptr, &endptr, 0);
+        if (endptr != ptr) var[idx++] = val;
+        ptr = endptr + 1;
     }
     return idx;
+}
+
+size_t parse_pin(const char *str, int *arr, size_t len, const char **names) {
+    size_t num = parse_all(str, arr, len);
+    LOOPN(i, names ? num : 0) {
+        if (arr[i] == GPIO_NUM_NC) continue;
+        const char *usage = gpio_usage(arr[i], names[i]);
+        if (!usage || startswith(usage, "Strapping")) continue; // not used
+        if (strcmp(usage, names[i] ?: "")) {
+            printf("Invalid pin %d: already used as %s", arr[i], usage);
+            return 0;
+        }
+    }
+    if (names && !num) printf("Invalid pins: `%s`\n", str);
+    return num;
 }
 
 static uint8_t numdigits(int n) {
@@ -147,6 +191,15 @@ static char hexdigits(uint8_t v) {
 }
 
 void hexdump(const void *src, size_t bytes, size_t maxlen) {
+    size_t maxbytes = maxlen / 3;
+    LOOPN(i, bytes) {
+        if (i && i % maxbytes == 0) putchar('\n');
+        printf("%02X ", ((uint8_t *)src)[i]);
+    }
+    if (bytes) putchar('\n');
+}
+
+void hexdumpl(const void *src, size_t bytes, size_t maxlen) {
     size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
     LOOPN(i, count) { printf("%02X ", ((uint8_t *)src)[i]); }
     if (bytes && maxbytes && bytes > maxbytes)
@@ -291,7 +344,7 @@ char * gbk2str(const char *src) {
     return dst;
 }
 
-static const uint8_t unicode_table[][10] = {
+static uint8_t unicode_table[][10] = {
     { 0x25, 5, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                      // circle
     { 0x25, 8, 0x8F, 0x8E, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x88 },    // v bars
     { 0x25, 8, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88 },    // h bars

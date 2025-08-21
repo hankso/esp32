@@ -8,6 +8,8 @@
 #include "hidtool.h"            // for hid_report_xxx
 #include "ledmode.h"            // for led_initialize
 #include "avcmode.h"            // for avc_initialize
+#include "sensors.h"            // for tscn_command
+#include "screen.h"             // for scn_initialize && scn_command
 #include "config.h"
 
 #include "esp_attr.h"
@@ -67,7 +69,7 @@ static void uart_initialize() {
 #ifdef CONFIG_BASE_USE_ADC
 #include "soc/adc_periph.h"
 
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
 #   include "esp_adc/adc_oneshot.h"
 #   include "esp_adc/adc_cali.h"
 #   include "esp_adc/adc_cali_scheme.h"
@@ -77,25 +79,31 @@ static void uart_initialize() {
 #endif
 
 static struct {
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
     adc_cali_handle_t cali;
     adc_oneshot_unit_handle_t oneshot;
 #else
     esp_adc_cal_characteristics_t chars;
 #endif
-    adc_channel_t chans[2];
-    gpio_num_t pins[2];
+    adc_channel_t chans[3];
+    gpio_num_t pins[3];
+    uint8_t nsample;
     const adc_unit_t unit;
     const adc_atten_t atten;
     const adc_bits_width_t width;
 } adc = {
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
     .cali = { 0 },
     .oneshot = { 0 },
 #else
     .chars = { 0 },
 #endif
     .pins = {
+#ifdef PIN_ADC0
+        PIN_ADC0,
+#else
+        GPIO_NUM_NC,
+#endif
 #ifdef PIN_ADC1
         PIN_ADC1,
 #else
@@ -107,7 +115,7 @@ static struct {
         GPIO_NUM_NC,
 #endif
     },
-    .chans = { ADC_CHANNEL_MAX, ADC_CHANNEL_MAX },
+    .chans = { ADC_CHANNEL_MAX, ADC_CHANNEL_MAX, ADC_CHANNEL_MAX },
     .unit = ADC_UNIT_1, // only use ADC1
     .atten = ADC_ATTEN_DB_12,
 #ifdef CONFIG_BASE_ADC_HALL_SENSOR
@@ -125,15 +133,19 @@ static adc_channel_t gpio2adc(gpio_num_t pin) {
 }
 
 static void adc_initialize() {
+    char buf[16];
+    if (parse_u8(Config.sys.ADC_MULT, &adc.nsample)) adc.nsample = 5;
     LOOPN(i, LEN(adc.chans)) {
         if (adc.pins[i] == GPIO_NUM_NC) continue;
         if (( adc.chans[i] = gpio2adc(adc.pins[i]) ) == ADC_CHANNEL_MAX) {
             ESP_LOGE(TAG, "ADC: invalid pin %d", adc.pins[i]);
             return;
         }
+        snprintf(buf, sizeof(buf), "ADC%d", adc.chans[i]);
+        gpio_usage(adc.pins[i], strdup(buf));
     }
     esp_err_t err = ESP_OK;
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
     adc_oneshot_unit_init_cfg_t init_conf = { .unit_id = adc.unit };
     if (!( err = adc_oneshot_new_unit(&init_conf, &adc.oneshot) )) {
         adc_oneshot_chan_cfg_t chan_conf = {
@@ -177,7 +189,7 @@ static void adc_initialize() {
     } else {
         ESP_LOGD(TAG, "ADC: characterized using Default VRef");
     }
-#endif // TARGET_IDF_5
+#endif // IDF_TARGET_V5
     if (err) {
         ESP_LOGE(TAG, "ADC initialize failed: %s", esp_err_to_name(err));
         LOOPN(i, LEN(adc.chans)) { adc.chans[i] = ADC_CHANNEL_MAX; }
@@ -185,10 +197,10 @@ static void adc_initialize() {
 }
 
 int adc_hall() {
-#if defined(CONFIG_BASE_ADC_HALL_SENSOR) && defined(TARGET_IDF_4)
+#if defined(CONFIG_BASE_ADC_HALL_SENSOR) && defined(IDF_TARGET_V4)
     int raw = 0;
     adc_power_acquire();
-    LOOPN(i, CONFIG_BASE_ADC_MULTISAMPLING) {
+    LOOPN(i, adc.nsample) {
         usleep(10);
         raw += hall_sensor_read();
     }
@@ -196,7 +208,7 @@ int adc_hall() {
     ITERV(chan, adc.chans) {
         if (chan != ADC_CHANNEL_MAX) adc1_config_channel_atten(chan, adc.atten);
     }
-    return raw / CONFIG_BASE_ADC_MULTISAMPLING;
+    return raw / adc.nsample;
 #else
     return 0;
 #endif
@@ -206,9 +218,9 @@ int adc_read(uint8_t idx) {
     if (idx >= LEN(adc.chans) || adc.chans[idx] == ADC_CHANNEL_MAX)
         return -1;
     int raw, cum = 0, cnt = 0;
-    LOOPN(i, CONFIG_BASE_ADC_MULTISAMPLING) {
+    LOOPN(i, adc.nsample) {
         usleep(10);
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
         adc_oneshot_read(adc.oneshot, adc.chans[idx], &raw);
 #else
         raw = adc1_get_raw(adc.chans[idx]);
@@ -217,7 +229,7 @@ int adc_read(uint8_t idx) {
         cum += raw;
         cnt++;
     }
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
     if (cnt) adc_cali_raw_to_voltage(adc.oneshot, cum / cnt, &raw);
     return cnt ? raw : -1;
 #else
@@ -449,8 +461,8 @@ static void spi_initialize() {
         .sclk_io_num = PIN_SCLK,
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
-#   if defined(CONFIG_BASE_SCREEN_SPI) && defined(WITH_LVGL)
-        .max_transfer_sz = CONFIG_BASE_SCREEN_HRES * CONFIG_BASE_SCREEN_VRES,
+#   if defined(CONFIG_BASE_SCN_SPI) && defined(WITH_LVGL)
+        .max_transfer_sz = CONFIG_BASE_SCN_HRES * CONFIG_BASE_SCN_VRES,
 #   endif
         .flags = SPICOMMON_BUSFLAG_MASTER,
     };
@@ -587,10 +599,12 @@ esp_err_t smbus_regtable(int bus, uint8_t addr, smbus_regval_t *p, size_t len) {
         case 4: err = smbus_clearbits(bus, addr, reg, vo); break;
         case 5: err = smbus_setbits(bus, addr, reg, vo); break;
         case 6: err = smbus_toggle(bus, addr, reg, vo); break;
-        case 7: FALLTH; case 8:
-            tout = xTaskGetTickCount() + pdMS_TO_TICKS(p->val >> 16);
+        case 7: FALLTH; case 8: FALLTH; case 9:
+            tout = xTaskGetTickCount() + TIMEOUT(p->val >> 16);
             while (!( err = smbus_read_byte(bus, addr, reg, &tmp) )) {
-                if (opt == 7 ? !(tmp & vo) : (tmp & vo)) break;
+                if (opt == 7 && (tmp & vo) == 0) break;
+                if (opt == 8 && (tmp & vo) != 0) break;
+                if (opt == 9 && (tmp & vo) == vo) break;
                 if (xTaskGetTickCount() >= tout) {
                     err = ESP_ERR_TIMEOUT;
                     break;
@@ -668,13 +682,14 @@ void i2c_detect(int bus) {
         }
         fflush(stdout);
     }
+    putchar('\n');
 }
 
 /******************************************************************************
  * GPIO Expander
  */
 
-#ifdef CONFIG_BASE_GPIOEXP_I2C
+#ifdef CONFIG_BASE_GEXP_I2C
 static const uint8_t i2c_pin_addr[3] = { 0b0100000, 0b0100001, 0b0100010 };
 static uint8_t i2c_pin_data[3] = { 0, 0, 0 }, i2c_pin_probed[3];
 
@@ -699,7 +714,7 @@ static esp_err_t i2c_gexp_get_level(gexp_num_t pin, bool *level, bool sync) {
 }
 #endif
 
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
 static spi_device_handle_t spi_pin_hdl = NULL;
 static spi_transaction_t spi_pin_trans;
 static uint8_t *spi_pin_data;
@@ -725,28 +740,33 @@ static esp_err_t spi_gexp_get_level(gexp_num_t pin, bool *level, bool sync) {
 }
 #endif
 
-#ifdef CONFIG_BASE_USE_GPIOEXP
-static UNUSED void IRAM_ATTR gexp_isr(void *arg) {
-#   ifdef CONFIG_BASE_GPIOEXP_INT
+#ifdef CONFIG_BASE_GPIO_INT
+static void IRAM_ATTR gpio_isr(void *arg) {
+    if (arg && (gpio_num_t)arg != PIN_INT) return;
+#   ifdef CONFIG_BASE_USE_TSCN
+    tscn_command(gpio_get_level(PIN_INT) ? "0" : "1", false);
+#   endif
+#   ifdef CONFIG_BASE_GEXP_INT
     ets_printf("PIN_INT %s\n", gpio_get_level(PIN_INT) ? "RISE" : "FALL");
 #   endif
-#   ifdef CONFIG_BASE_GPIOEXP_I2C
+#   ifdef CONFIG_BASE_GEXP_I2C
     LOOPN(i, LEN(i2c_pin_data)) {
         if (i2c_gexp_get_level(PIN_I2C_BASE + i * 8, NULL, true)) continue;
         ets_printf("I2C GPIOExp: %s\n", format_binary(i2c_pin_data[i], 8));
     }
 #   endif
-#   ifdef CONFIG_BASE_GPIOEXP_SPI
+#   ifdef CONFIG_BASE_GEXP_SPI
     if (spi_gexp_get_level(PIN_SPI_BASE, NULL, true)) return;
     LOOPN(i, PIN_SPI_COUNT / 8) {
         ets_printf("SPI GPIOExp: %s\n", format_binary(spi_pin_data[i], 8));
     }
 #   endif
 }
+#endif
 
 static void gexp_initialize() {
     esp_err_t err;
-#   ifdef CONFIG_BASE_GPIOEXP_I2C
+#ifdef CONFIG_BASE_GEXP_I2C
     if (PIN_I2C_COUNT > (LEN(i2c_pin_data) * 8) || PIN_I2C_COUNT <= 0) {
         ESP_LOGE(TAG, "Invalid I2C GPIOExp pin count: %d", PIN_I2C_COUNT);
         return;
@@ -761,8 +781,8 @@ static void gexp_initialize() {
         err = ESP_ERR_NOT_FOUND;
         ESP_LOGE(TAG, "I2C GPIOExp init error: %s", esp_err_to_name(err));
     }
-#   endif
-#   ifdef CONFIG_BASE_GPIOEXP_SPI
+#endif
+#ifdef CONFIG_BASE_GEXP_SPI
     // If the transmitted data is 32bits or less, it is preferred to use
     // tx_data in spi_transaction_t. Each expander chip uses 8bits.
     if (PIN_SPI_COUNT % 8 || PIN_SPI_COUNT <= 0) {
@@ -798,8 +818,8 @@ static void gexp_initialize() {
     };
     err = spi_bus_add_device(NUM_SPI, &dev_conf, &spi_pin_hdl);
     if (err) ESP_LOGE(TAG, "SPI GPIOExp init error: %s", esp_err_to_name(err));
-#   endif
-#   ifdef CONFIG_BASE_GPIOEXP_INT
+#endif
+#ifdef CONFIG_BASE_GPIO_INT
     gpio_config_t int_conf = {
         .pin_bit_mask = BIT64(PIN_INT),
         .mode         = GPIO_MODE_INPUT,
@@ -819,11 +839,12 @@ static void gexp_initialize() {
         int_conf.intr_type = GPIO_INTR_NEGEDGE;
     }
     ESP_ERROR_CHECK( gpio_config(&int_conf) );
-    ESP_ERROR_CHECK( gpio_install_isr_service(0) );
-    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gexp_isr, NULL) );
-#   endif
-}
+    ESP_ERROR_CHECK( gpio_install_isr_service(ESP_INTR_FLAG_IRAM) );
+    ESP_ERROR_CHECK( gpio_isr_handler_add(PIN_INT, gpio_isr, (void *)PIN_INT) );
+    ESP_LOGI(TAG, "GPIO Interrupt registered on %d", PIN_INT);
 #endif
+    NOTUSED(err);
+}
 
 /******************************************************************************
  * GPIO Interrupt (inc. button & knob)
@@ -885,32 +906,21 @@ static const char * usage_table[GPIO_PIN_COUNT] = {
 #ifdef CONFIG_BASE_SDFS_SPI
     [PIN_CS0]   = "SPI CS0 (SDCard)",
 #endif
-#ifdef CONFIG_BASE_SCREEN_SPI
+#ifdef CONFIG_BASE_SCN_SPI
     [PIN_CS1]   = "SPI CS1 (Screen)",
-    [PIN_SDC]   = "SPI Screen D/C",
-#   if PIN_SRST != GPIO_NUM_NC
-    [PIN_SRST]  = "SPI Screen RESET",
-#   endif
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
     [PIN_CS2]   = "SPI CS2 (GPIOExp)",
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_INT
-    [PIN_INT]   = "GEXP INT",
+#ifdef CONFIG_BASE_GPIO_INT
+    [PIN_INT]   = "Interrupt",
 #endif
 #if defined(CONFIG_BASE_ADC_HALL_SENSOR)
-    [PIN_ADC1]  = "HALL Sensor P",
-    [PIN_ADC2]  = "HALL Sensor N",
+    [PIN_ADC0]  = "HALL Sensor P",
+    [PIN_ADC1]  = "HALL Sensor N",
 #elif defined(CONFIG_BASE_ADC_JOYSTICK)
-    [PIN_ADC1]  = "Joystick X",
-    [PIN_ADC2]  = "Joystick Y",
-#else
-#   ifdef PIN_ADC1
-    [PIN_ADC1]  = "ADC1",
-#   endif
-#   ifdef PIN_ADC2
-    [PIN_ADC2]  = "ADC2",
-#   endif
+    [PIN_ADC0]  = "Joystick X",
+    [PIN_ADC1]  = "Joystick Y",
 #endif
 #ifdef CONFIG_BASE_USE_DAC
     [PIN_DAC]   = "DAC",
@@ -951,18 +961,19 @@ static UNUSED void cb_button(void *arg, void *data) {
     switch (iot_button_get_event(arg)) {
     case BUTTON_PRESS_DOWN:
         ESP_LOGI(BTAG, "%d press", pin);
-#   ifdef CONFIG_BASE_BTN_INPUT
+#   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_D);
 #   endif
         break;
     case BUTTON_PRESS_UP:
         ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
-#   ifdef CONFIG_BASE_BTN_INPUT
+#   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_U);
 #   endif
         break;
     case BUTTON_SINGLE_CLICK:
         ESP_LOGI(BTAG, "%d single click", pin);
+        scn_command(SCN_BTN, &pin);
         break;
     case BUTTON_DOUBLE_CLICK:
         ESP_LOGI(BTAG, "%d double click", pin);
@@ -1065,7 +1076,7 @@ static void gpio_initialize() {
     button_config_t adc_conf = {
         .type = BUTTON_TYPE_ADC,
         .long_press_time = CONFIG_BUTTON_SHORT_PRESS_TIME_MS + 20,
-#       ifdef TARGET_IDF_5
+#       ifdef IDF_TARGET_V5
         .adc_button_config = { .adc_handle = adc.oneshot },
 #       endif
     };
@@ -1099,11 +1110,17 @@ static void gpio_initialize() {
 }
 
 esp_err_t gexp_set_level(int pin, bool level) {
-    if (GPIO_IS_VALID_GPIO(pin)) return gpio_set_level(pin, level);
-#ifdef CONFIG_BASE_GPIOEXP_I2C
+    if (GPIO_IS_VALID_GPIO(pin)) {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+        // TODO: gpio_get_io_config();
+#endif
+        esp_err_t err = gpio_set_direction(pin, GPIO_MODE_INPUT_OUTPUT);
+        return err ?: gpio_set_level(pin, level);
+    }
+#ifdef CONFIG_BASE_GEXP_I2C
     if (PIN_IS_I2CEXP(pin))      return i2c_gexp_set_level(pin, level);
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
     if (PIN_IS_SPIEXP(pin))      return spi_gexp_set_level(pin, level);
 #endif
     return ESP_ERR_INVALID_ARG;
@@ -1114,10 +1131,10 @@ esp_err_t gexp_get_level(int pin, bool *level, bool sync) {
         *level = gpio_get_level(pin);
         return ESP_OK;
     }
-#ifdef CONFIG_BASE_GPIOEXP_I2C
+#ifdef CONFIG_BASE_GEXP_I2C
     if (PIN_IS_I2CEXP(pin)) return i2c_gexp_get_level(pin, level, sync);
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
     if (PIN_IS_SPIEXP(pin)) return spi_gexp_get_level(pin, level, sync);
 #endif
     return ESP_ERR_INVALID_ARG;
@@ -1131,7 +1148,7 @@ void gpio_table(bool i2c, bool spi) {
         value = gpio_get_level(pin) ? "HIGH" : "LOW";
         printf("%-3d %5s %s\n", pin, value, gpio_usage(pin, NULL) ?: "");
     }
-#ifdef CONFIG_BASE_GPIOEXP_I2C
+#ifdef CONFIG_BASE_GEXP_I2C
     if (i2c) {
         printf("\nI2C GPIOExp %d-%d\nPIN Value\n",
                PIN_I2C_BASE, PIN_I2C_MAX - 1);
@@ -1149,7 +1166,7 @@ void gpio_table(bool i2c, bool spi) {
         }
     }
 #endif
-#ifdef CONFIG_BASE_GPIOEXP_SPI
+#ifdef CONFIG_BASE_GEXP_SPI
     if (spi) {
         printf("\nSPI GPIOExp %d-%d\nPIN Value\n",
                PIN_SPI_BASE, PIN_SPI_MAX - 1);
@@ -1196,7 +1213,7 @@ static void twdt_initialize() {
 void driver_initialize() {
     const char * tags[] = {
         "gpio", "led_indicator",
-        "button", "adc button", "knob",
+        "adc button", "knob",
         "cam_hal", "camera",
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
@@ -1216,12 +1233,11 @@ void driver_initialize() {
 #ifdef CONFIG_BASE_USE_I2C
     i2c_initialize();
 #endif
-#ifdef CONFIG_BASE_USE_GPIOEXP
-    gexp_initialize();
-#endif
     gpio_initialize();
 #ifdef CONFIG_BASE_USE_LED
     led_initialize();
 #endif
     avc_initialize();
+    scn_initialize();
+    gexp_initialize();
 }

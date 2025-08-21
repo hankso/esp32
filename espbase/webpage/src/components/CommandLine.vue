@@ -66,9 +66,7 @@ const commandStore = ref([])
 
 const { isDark } = inject('theme', {})
 
-const context = computed(
-    () => props.prompt ?? props.title.split(' ')[0].toLowerCase() + ' > '
-)
+const context = computed(() => (props.prompt ? props.prompt + ' > ' : '$ '))
 
 const initLog = computed(() => {
     if (type(props.welcome) === 'boolean' && !props.welcome) return []

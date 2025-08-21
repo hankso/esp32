@@ -158,7 +158,7 @@ void console_initialize() {
  *
  * Method 3. <unistd.h> pipe & dup: this is not what we want
  *
- * Method 4. Pipe STDOUT to a disk file on flash or memory block using VFS
+ * Method 4. Pipe STDOUT to a file in memory or flash storage using VFS
  *  pos: We can do memory mapping.
  *  neg: Writing & reading from a file is slow and consume too much resources.
  *  e.g.:
@@ -172,8 +172,10 @@ void console_initialize() {
  *          .fstat = NULL,
  *          .flags = ESP_VFS_FLAG_DEFAULT,
  *      }
- *      esp_vfs_register("/dev/ram", &vfs_buffer, NULL);
- *      stdout = fopen("/dev/ram/blk0", "w");               // much faster
+ *      esp_vfs_register("/dev/ram", &vfs_buffer, NULL);    // much faster
+ *      stdin = fopen("/dev/ram/0", "r");
+ *      stdout = fopen("/dev/ram/1", "w");
+ *      stderr = fopen("/dev/ram/2", "w");
  *
  * Currently method 2 is in use. Try method 4 if necessary in the future.
  */
@@ -197,10 +199,13 @@ char * console_handle_command(const char *cmd, bool pipe, bool history) {
     if (pipe) {
         fclose(stdout);
         stdout = bak;
+    } else {
+        putchar('\n');
     }
     if (buf != NULL) {
         while (size && strchr(" \r\n", buf[--size])) { buf[size] = '\0'; }
         if (!size) TRYFREE(buf);                    // no log output
+        if (size && !pipe) putchar('\n');           // one more blank line
     }
     if (history) linenoiseHistoryAdd(cmd);
     RELEASE(mutex);
@@ -211,17 +216,15 @@ void console_handle_one() {
     char *raw = linenoise(context[0] ? context : prompt),
          *trim = strtrim(raw, " \t\r\n"), *cmd = NULL;
     size_t tlen = strlen(trim ?: "");
-    putchar('\n'); fflush(stdout);
-    if (tlen && trim[0] != 0x5B) {                  // not ctrl keycode
-        if (!context[0] || startswith(trim, "ctx")) {
-            console_handle_command(trim, false, true);
-        } else if (EMALLOC(cmd, strlen(context) + tlen)) {
-            ESP_LOGE(TAG, "%s %s", __func__, esp_err_to_name(ESP_ERR_NO_MEM));
-        } else {
-            sprintf(cmd, "%s %s", context + 2, trim);
-            console_handle_command(cmd, false, true);
-        }
-        putchar('\n'); fflush(stdout);              // one more blank line
+    if (!tlen || trim[0] == 0x5B) {                 // ctrl keycodes
+        putchar('\n');
+    } else if (!context[0] || startswith(trim, "ctx")) {
+        console_handle_command(trim, false, true);
+    } else if (!EMALLOC(cmd, strlen(context) + tlen)) {
+        sprintf(cmd, "%s %s", context + 2, trim);
+        console_handle_command(cmd, false, true);
+    } else {
+        ESP_LOGE(TAG, "%s %s", __func__, esp_err_to_name(ESP_ERR_NO_MEM));
     }
     TRYNULL(raw, linenoiseFree);
     TRYFREE(cmd);
@@ -302,6 +305,7 @@ char * console_handle_rpc(const char *json) {
     }
     ESP_LOGD(TAG, "Got RPC command: `%s`", cmd);
     tmp = console_handle_command(cmd, true, false);
+    ESP_LOGD(TAG, "Got RPC result: %s", tmp);
     if (uid) ret = rpc_response(uid->valuestring, tmp ?: "");   // not notify
 exit:
     TRYNULL(obj, cJSON_Delete);

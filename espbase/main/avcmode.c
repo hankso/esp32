@@ -23,7 +23,7 @@ static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
 
 #ifdef CONFIG_BASE_USE_I2S
 
-#ifdef TARGET_IDF_5
+#ifdef IDF_TARGET_V5
 static i2s_chan_handle_t i2s_handle;
 #   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
 #   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
@@ -50,7 +50,7 @@ static void i2s_initialize() {
     ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
     I2S_RELEASE();
 }
-#else // TARGET_IDF_4
+#else // IDF_TARGET_V4
 #   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
 #   define I2S_RELEASE()    i2s_stop(NUM_I2S)
 #   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
@@ -88,7 +88,7 @@ static void i2s_initialize() {
     ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
     I2S_RELEASE();
 }
-#endif // TARGET_IDF_5
+#endif // IDF_TARGET_V5
 
 static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
     static char eqls[80 - 4 - 3 - 13];
@@ -188,35 +188,19 @@ static sensor_t *cam;
 
 static void cam_initialize() {
     esp_err_t err = ESP_OK;
-    const char *pin_names[14] = {
+    const char *names[14] = {
         "CAM PWDN", "CAM RESET", "CAM XCLK",
         "CAM VSYNC", "CAM HREF", "CAM PCLK",
         "CAM D7", "CAM D6", "CAM D5", "CAM D4",
         "CAM D3", "CAM D2", "CAM D1", "CAM D0",
     };
-#   ifdef CONFIG_BASE_CAM_CUSTOM
-#       define P(name) CONFIG_BASE_GPIO_CAM_##NAME
-    int pins[LEN(pin_names)] = {
-        P(PWDN), P(RESET), P(XCLK), P(VSYNC), P(HREF), P(PCLK),
-        P(D7), P(D6), P(D5), P(D4), P(D3), P(D2), P(D1), P(D0)
-    };
-#       undef P
+#   ifdef CONFIG_BASE_CAM_CUSTOM_PINS
+    const char *str = CONFIG_BASE_CAM_CUSTOM_PINS;
 #   else
-    int pins[LEN(pin_names)];
-    if (parse_all(CONFIG_BASE_CAM_PINS, pins, LEN(pins)) != LEN(pins)) {
-        ESP_LOGE(TAG, "Could not parse CAM pins: %s", CONFIG_BASE_CAM_PINS);
-        err = ESP_ERR_INVALID_ARG;
-    }
+    const char *str = CONFIG_BASE_CAM_PINS;
 #   endif
-    LOOPN(i, LEN(pins)) {
-        if (pins[i] == -1) {
-            if (i >= 2) err = ESP_ERR_INVALID_ARG;
-        } else if (gpio_usage(pins[i], pin_names[i]) != pin_names[i]) {
-            ESP_LOGE(TAG, "Invalid %s pin: %d", pin_names[i], pins[i]);
-            err = ESP_ERR_INVALID_ARG;
-        }
-    }
-    if (err) return;
+    int pins[LEN(names)];
+    if (parse_pin(str, pins, LEN(pins), names) != LEN(pins)) return;
     camera_config_t conf = {
         .pin_sccb_sda = -1,   .pin_sccb_scl = -1,   .sccb_i2c_port = NUM_I2C,
         .pin_pwdn = pins[0],  .pin_reset = pins[1], .pin_xclk = pins[2],
@@ -317,13 +301,13 @@ static esp_err_t cam_loads(const char *json) {
         ESP_LOGE(TAG, "Failed to load config from `%s`", json);
         return ESP_ERR_INVALID_ARG;
     }
-    int err = ESP_OK, value, stdby = !xTaskGetHandle("video");
+    int32_t err = ESP_OK, value, stdby = !xTaskGetHandle("video");
     if (stdby) CAM_ACQUIRE();
     for (cJSON *ptr = obj->child; ptr && !err; ptr = ptr->next) {
         if (!ptr->string) continue;
         if (cJSON_IsNumber(ptr)) {
             value = ptr->valuedouble;
-        } else if (!parse_int(cJSON_GetStringValue(ptr), &value)) continue;
+        } else if (!parse_s32(cJSON_GetStringValue(ptr), &value)) continue;
         if (!strcmp(ptr->string, "xclk")) {
             if (value > 240) value /= 1e6;
             if (!value) continue;

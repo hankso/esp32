@@ -10,13 +10,13 @@
  */
 
 #if __has_include("esp_lvgl_port.h")
-#   include "screen.h"
-#   include "config.h"
-#   include "filesys.h"
-#   include "hidtool.h"
+#   include "screen.h"          // for extern lvgl_ui_cmd
+#   include "config.h"          // for Config and config_set
+#   include "filesys.h"         // for fjoin
+#   include "console.h"         // for console_handle_command
+#   include "hidtool.h"         // for hid_report_t
+#   include "timesync.h"        // for format_datetime
 #   include "esp_lvgl_port.h"
-#   include "freertos/FreeRTOS.h"
-#   include "freertos/semphr.h"
 #   define LOGI(...)            ESP_LOGI("LVGL", __VA_ARGS__)
 #   define LOGW(...)            ESP_LOGW("LVGL", __VA_ARGS__)
 #   define LOGE(...)            ESP_LOGE("LVGL", __VA_ARGS__)
@@ -66,10 +66,8 @@ enum {
 #if LVGL_VERSION_MAJOR >= 9
 #   define LVGL9
 #   define lv_timer_get_period(t)   ( *(uint32_t *)(t) ) // hotfix
-#   ifndef lv_disp_get_hor_res
-#   define lv_disp_get_hor_res      lv_display_get_horizontal_resolution
-#   define lv_disp_get_ver_res      lv_display_get_vertical_resolution
-#   endif
+#   define get_hres                 lv_display_get_horizontal_resolution
+#   define get_vres                 lv_display_get_vertical_resolution
 #   define send_event               lv_obj_send_event
 #   define refresh_timer            lv_display_get_refr_timer
 #   define screen_active            lv_display_get_screen_active
@@ -94,6 +92,8 @@ enum {
 #   define lv_display_set_default   lv_disp_set_default
 #   define lv_display_get_rotation  lv_disp_get_rotation
 #   define lv_display_set_rotation  lv_disp_set_rotation
+#   define get_hres                 lv_disp_get_hor_res
+#   define get_vres                 lv_disp_get_ver_res
 #   define send_event               lv_event_send
 #   define refresh_timer            _lv_disp_get_refr_timer
 #   define screen_active            lv_disp_get_scr_act
@@ -112,14 +112,26 @@ struct screen {
     const char *name;
 };
 
-static int screen_menu_init(screen_t *);
-static int screen_label_init(screen_t *);
-static int screen_anim_init(screen_t *);
+static UNUSED int screen_menu_init(screen_t *);
+static UNUSED int screen_label_init(screen_t *);
+static UNUSED int screen_anim_init(screen_t *);
+static UNUSED int screen_tscn_init(screen_t *);
+static UNUSED int screen_tscn_exit(screen_t *);
 
 static const screen_cb_t inits[] = {
+#ifdef CONFIG_BASE_BOARD_S3NL191
+    screen_tscn_init,
+#else
     screen_menu_init,
     screen_label_init,
     screen_anim_init,
+#endif
+}, exits[] = {
+#ifdef CONFIG_BASE_BOARD_S3NL191
+    screen_tscn_exit,
+#else
+    NULL, NULL, NULL,
+#endif
 };
 
 static const lv_indev_type_t types[] = {
@@ -130,7 +142,7 @@ static const lv_indev_type_t types[] = {
 
 static struct {
     uint32_t event;                 // custom LVGL event code
-    int curr, width, height;        // current screen & display size
+    int curr, hres, vres;           // current screen & display size
     screen_t scr[LEN(inits)];       // created screens
     lv_style_t style_font;          // style for custom font
     lv_theme_t theme_font;          // theme for custom font
@@ -203,12 +215,8 @@ static void dump_obj(lv_obj_t *obj, int lvl) {
     if (cls == &lv_obj_class) {
         ITERP(scr, ctx.scr) {
             if (obj != scr->root) continue;
-            printf(" [IDX=%d]", scr->index);
-            if (scr->name) {
-                printf(" [NAME=%s]", scr->name);
-            } else {
-                printf(" [PTR=%p]", scr->root);
-            }
+            printf(" [IDX=%d] [PTR=%p]", scr->index, scr->root);
+            if (scr->name) printf(" [NAME=%s]", scr->name);
             if (ctx.curr == scr->index) printf(" [Current]");
         }
     }
@@ -223,7 +231,7 @@ static void dump_font(const lv_font_t *font) {
         printf("%*s%c Font ", 2 * lvl, "", PREFIX(lvl));
         if (font->user_data) {
             printf((const char *)font->user_data);
-#ifdef CONFIG_LV_FONT_UNSCII_8
+#if LV_FONT_UNSCII_8
         } else if (font == &lv_font_unscii_8) {
             printf("unscii-8");
 #endif
@@ -238,8 +246,8 @@ static void dump_font(const lv_font_t *font) {
 }
 
 static lv_obj_t * create_img(const char *fn, lv_obj_t *node) {
-#if defined(CONFIG_LV_USE_FS_POSIX) && defined(CONFIG_BASE_USE_FFS)
-    char path[2 + PATH_MAX_LEN] = { CONFIG_LV_FS_POSIX_LETTER, ':' };
+#if LV_USE_FS_POSIX && defined(CONFIG_BASE_USE_FFS)
+    char path[2 + PATH_MAX_LEN] = { LV_FS_POSIX_LETTER, ':' };
     snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
     lv_obj_t *img = lv_img_create(node ?: lv_disp_get_scr_act(ctx.disp));
     lv_image_set_src(img, path);
@@ -258,8 +266,8 @@ static lv_obj_t * create_img(const char *fn, lv_obj_t *node) {
 }
 
 static lv_font_t * create_font(const char *fn) {
-#if defined(CONFIG_LV_USE_FS_POSIX) && defined(CONFIG_BASE_USE_FFS)
-    char path[2 + PATH_MAX_LEN] = { CONFIG_LV_FS_POSIX_LETTER, ':' };
+#if LV_USE_FS_POSIX && defined(CONFIG_BASE_USE_FFS)
+    char path[2 + PATH_MAX_LEN] = { LV_FS_POSIX_LETTER, ':' };
     snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
     if (ctx.font && ctx.font->user_data &&
         !memcmp(path, ctx.font->user_data, strlen(path))) return ctx.font;
@@ -268,8 +276,8 @@ static lv_font_t * create_font(const char *fn) {
         TRYNULL(font, lv_binfont_destroy);
     } else if (ctx.font) {
         font->fallback = ctx.font;
-#   ifdef CONFIG_LV_FONT_UNSCII_8
-    } else if (ctx.disp && MIN(ctx.width, ctx.height) < 240) {
+#   if LV_FONT_UNSCII_8
+    } else if (ctx.disp && MIN(ctx.hres, ctx.vres) < 240) {
         font->fallback = &lv_font_unscii_8;
 #   endif
     } else {
@@ -416,7 +424,7 @@ static int screen_label_init(screen_t *scr) {
     if (!( scr->root = lv_obj_create(NULL) )) return ERR_NO_MEM;
     scr->name = "Test label";
     lv_obj_t *bar = lv_bar_create(scr->root);
-    lv_obj_set_size(bar, ctx.width, 16);
+    lv_obj_set_size(bar, ctx.hres, 16);
     lv_obj_align(bar, LV_ALIGN_TOP_MID, 0, 0);
     lv_obj_add_event_cb(bar, cb_screen_label, LV_EVENT_DRAW_MAIN_END, NULL);
     char buf[LEN(LV_SYMBOLS) * 4], *ptr = buf, *end = buf + sizeof(buf);
@@ -433,7 +441,7 @@ static int screen_label_init(screen_t *scr) {
         if (!( lbl = lv_label_create(scr->root) )) return ERR_NO_MEM;
         lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
         lv_label_set_text(lbl, txts[i]);
-        lv_obj_set_width(lbl, ctx.width);
+        lv_obj_set_width(lbl, ctx.hres);
         lv_obj_align(lbl, LV_ALIGN_TOP_MID, 0, 16 + i * lht);
     }
     return bar ? ERR_NO_ERR : ERR_NO_MEM;
@@ -475,8 +483,8 @@ static int screen_anim_init(screen_t *scr) {
     scr->name = "Test Anim";
 
     lv_obj_t *arc;
-    int dia = MIN(ctx.width, ctx.height);
-#ifndef CONFIG_LV_COLOR_DEPTH_1
+    int dia = MIN(ctx.hres, ctx.vres);
+#if LV_COLOR_DEPTH != 1
     const lv_color_t color[] = {
         LV_COLOR_MAKE(232, 87, 116),
         LV_COLOR_MAKE(126, 87, 162),
@@ -492,7 +500,7 @@ static int screen_anim_init(screen_t *scr) {
         lv_obj_remove_flag(arc, LV_OBJ_FLAG_CLICKABLE);
         lv_obj_set_style_arc_width(arc, 3, 0);
         lv_obj_set_style_border_width(arc, 0, 0);
-#ifdef CONFIG_LV_COLOR_DEPTH_1
+#if LV_COLOR_DEPTH == 1
         lv_obj_set_style_arc_color(arc, lv_color_black(), 0);
 #else
         lv_obj_set_style_arc_color(arc, color[i % LEN(color)], 0);
@@ -509,6 +517,81 @@ static int screen_anim_init(screen_t *scr) {
 }
 
 /******************************************************************************
+ * Screen Touchscreen
+ */
+
+#ifdef CONFIG_BASE_BOARD_S3NL191
+static struct {
+    lv_obj_t *lbl;
+    char txt[128];
+    size_t offset;
+} logs[] = {
+    { NULL, "当前时间: ", 0 },
+    { NULL, "触摸模式: ", 0 },
+    { NULL, "蓝牙状态: ", 0 },
+    { NULL, "USB状态: ", 0 },
+    { NULL, "侧面按钮: 短按重启 长按关机", 0 },
+    { NULL, "顶面按钮: 切换触摸 长按烧录", 0 },
+};
+
+static lv_timer_t *tscn_timer;
+
+void cb_tscn_update(lv_timer_t *timer) {
+    static char btaddr[24] = "";
+    static double lastts;
+    double ts = get_timestamp(0);
+    if (!lastts || (ts - lastts) > 3) {
+        char *ret = console_handle_command("bt", true, false);
+        char *addr = ret ? strstr(ret, "  * ") : NULL;
+        if (!strcasestr(ret, "not connected") && addr) {
+            snprintf(btaddr, sizeof(btaddr), " { %.17s }", addr + 4);
+        } else {
+            btaddr[0] = '\0';
+        }
+        if (ret) free(ret);
+        lastts = ts;
+    }
+    snprintf(logs[0].txt + logs[0].offset, sizeof(logs[0].txt) - logs[0].offset,
+             "%.8s", format_timestamp_us(NULL));
+    snprintf(logs[1].txt + logs[1].offset, sizeof(logs[1].txt) - logs[1].offset,
+             Config.app.TSCN_MODE);
+    snprintf(logs[2].txt + logs[2].offset, sizeof(logs[2].txt) - logs[2].offset,
+             "%s%s", Config.sys.BT_MODE, btaddr);
+    snprintf(logs[3].txt + logs[3].offset, sizeof(logs[3].txt) - logs[3].offset,
+             Config.sys.USB_MODE);
+    LOOPN(i, LEN(logs)) { lv_label_set_text_static(logs[i].lbl, logs[i].txt); }
+}
+
+static int screen_tscn_init(screen_t *scr) {
+    if (!( scr->root = screen_active(ctx.disp) )) return ERR_NO_MEM;
+    scr->name = "Viz Tscn";
+    int lht = 8;
+    for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
+        lht = MAX(lht, font->line_height + 6);
+    }
+    lv_obj_t *lbl;
+    LOOPN(i, LEN(logs)) {
+        if (!( lbl = lv_label_create(scr->root) )) return ERR_NO_MEM;
+        logs[i].offset = strlen(logs[i].txt);
+        lv_label_set_text_static(logs[i].lbl = lbl, logs[i].txt);
+        lv_obj_set_width(lbl, ctx.hres - 16);
+        lv_obj_align(lbl, LV_ALIGN_TOP_LEFT, 8, 8 + i * lht);
+    }
+    if (!( tscn_timer = lv_timer_create(cb_tscn_update, 500, NULL) ))
+        return ERR_NO_MEM;
+    return ERR_NO_ERR;
+}
+
+static int screen_tscn_exit(screen_t *scr) {
+    if (tscn_timer) {
+        lv_timer_del(tscn_timer);
+        tscn_timer = NULL;
+    }
+    return ERR_NO_ERR;
+}
+#endif
+
+/******************************************************************************
  * UI Entry point and event handler
  */
 
@@ -519,7 +602,7 @@ static int lvgl_ui_input(hid_report_t *rpt) {
         ITERV(key, rpt->keybd.keycode) {
             if (key <= HID_KEY_ERROR_UNDEFINED) continue;
             if (!ACQUIRE(ctx.mutex, 10)) continue;
-            const char *str = keycode2str(key, rpt->keybd.modifier);
+            const char *str = hid_keycode_str(key, rpt->keybd.modifier);
             switch (key) {
             case HID_KEY_ARROW_UP:    ctx.keypad.key = LV_KEY_UP;       break;
             case HID_KEY_ARROW_DOWN:  ctx.keypad.key = LV_KEY_DOWN;     break;
@@ -544,10 +627,20 @@ static int lvgl_ui_input(hid_report_t *rpt) {
         hid_handle_mouse(HID_TARGET_SCN, &rpt->mouse, NULL, NULL);
         ctx.pointer.x = MAX(0, ctx.pointer.x + rpt->mouse.x);
         ctx.pointer.y = MAX(0, ctx.pointer.y + rpt->mouse.y);
-        ctx.pointer.x = MIN(ctx.pointer.x, ctx.width * ctx.pointer.scale);
-        ctx.pointer.y = MIN(ctx.pointer.y, ctx.height * ctx.pointer.scale);
+        ctx.pointer.x = MIN(ctx.pointer.x, ctx.hres * ctx.pointer.scale);
+        ctx.pointer.y = MIN(ctx.pointer.y, ctx.vres * ctx.pointer.scale);
         ctx.pointer.pressed = rpt->mouse.buttons & MOUSE_BUTTON_LEFT;
         if (rpt->mouse.buttons & MOUSE_BUTTON_RIGHT) {
+            ctx.keypad.key = LV_KEY_ESC;
+            ctx.keypad.pressed = true;
+        }
+        RELEASE(ctx.mutex);
+    } else if (rpt->id == REPORT_ID_ABMSE && ACQUIRE(ctx.mutex, 10)) {
+        hid_handle_abmse(HID_TARGET_SCN, &rpt->abmse, NULL, NULL);
+        ctx.pointer.x = rpt->abmse.x * ctx.hres * ctx.pointer.scale / 0x7FFF;
+        ctx.pointer.y = rpt->abmse.y * ctx.vres * ctx.pointer.scale / 0x7FFF;
+        ctx.pointer.pressed = rpt->abmse.buttons & MOUSE_BUTTON_LEFT;
+        if (rpt->abmse.buttons & MOUSE_BUTTON_RIGHT) {
             ctx.keypad.key = LV_KEY_ESC;
             ctx.keypad.pressed = true;
         }
@@ -598,10 +691,35 @@ static void cb_theme_apply(lv_theme_t *theme, lv_obj_t *obj) {
 
 static void cb_screen_event(lv_event_t *e) {
     if (lv_event_get_code(e) != ctx.event) return;
-    int *ptr = lv_event_get_param(e);
-    if (!ptr) return;
     lv_obj_t *obj = lv_event_get_current_target(e);
-    LOGI("%p got button %d\n", obj, *ptr);
+    int *ptr = lv_event_get_param(e);
+    if (!ptr || !obj) return;
+    const char *name = NULL;
+    LOOPN(i, LEN(ctx.scr)) {
+        if (ctx.scr[i].root == obj) name = ctx.scr[i].name;
+    }
+    if (name) {
+        LOGI("%s got button %d\n", name, *ptr);
+    } else {
+        LOGI("%p got button %d\n", obj, *ptr);
+    }
+    if (!strcasecmp(name ?: "", "viz tscn")) {
+        int btn = *ptr, idx = -1;
+        static char *modes[] = {
+            "REL", "REL.ROT1", "REL.ROT2", "REL.ROT3",
+            "ABS", "ABS.ROT1", "ABS.ROT2", "ABS.ROT3",
+            "TPD",
+        };
+        LOOPN(i, LEN(modes)) {
+            if (!strcasecmp(modes[i], Config.app.TSCN_MODE)) idx = i;
+        }
+        if (idx < 0) { idx = 0; }
+        else if (btn == 14) { idx -= 1; }
+        else if (btn == 0) { idx += 1; }
+        idx = MOD(idx, LEN(modes));
+        config_set("app.tscn.mode", modes[idx]);
+        return;
+    }
     if (0 <= *ptr && *ptr < LEN(ctx.scr)) {
         screen_change(ctx.scr + *ptr, 300);
     } else if (ctx.curr == 0) {
@@ -619,9 +737,9 @@ static int lvgl_ui_init(lv_display_t *disp) {
     // 1. Initialize display, input group and screen info
     ctx.curr = 0;
     ctx.disp = disp;
+    ctx.hres = get_hres(ctx.disp);
+    ctx.vres = get_vres(ctx.disp);
     ctx.group = lv_group_create();
-    ctx.width = lv_disp_get_hor_res(disp);
-    ctx.height = lv_disp_get_ver_res(disp);
     lv_group_set_default(ctx.group);
     lv_display_set_default(ctx.disp);
 
@@ -649,18 +767,26 @@ static int lvgl_ui_init(lv_display_t *disp) {
     }
 
     // 3. Load custom font and configure theme and style
-    if (!( ctx.font = create_font("lv_font_chinese_12.bin") ))
+    if (!( ctx.font = create_font("lv_font_chinese_15.bin") ))
         ctx.font = (lv_font_t *)lv_font_default();
     lv_theme_t *theme = lv_display_get_theme(disp);
-#if defined(CONFIG_LV_USE_THEME_DEFAULT)
+#if LV_USE_THEME_DEFAULT
     if (!lv_theme_default_is_inited()) {
+#   if LV_COLOR_DEPTH == 1
         lv_color_t p = lv_color_black(), s = lv_color_white();
+#   else
+        lv_color_t p = lv_palette_main(LV_PALETTE_BLUE),
+                   s = lv_palette_main(LV_PALETTE_LIGHT_BLUE);
+#   endif
         theme = lv_theme_default_init(ctx.disp, p, s, false, ctx.font);
+        LOGI("init default theme with custom font");
     } else {
         theme = lv_theme_default_get();
+        LOGI("using default theme");
     }
-#elif defined(CONFIG_LV_USE_THEME_MONO)
+#elif LV_USE_THEME_MONO
     theme = lv_theme_mono_init(disp, false, ctx.font);
+    LOGI("using monochrome theme");
 #endif
     if (theme != &ctx.theme_font) {
         lv_style_init(&ctx.style_font);
@@ -674,13 +800,15 @@ static int lvgl_ui_init(lv_display_t *disp) {
     // 4. Initialize each screen
     LOOPN(i, LEN(ctx.scr)) {
         ctx.scr[i].init = inits[i];
+        ctx.scr[i].exit = exits[i];
         ctx.scr[i].index = i;
         if (ctx.scr[i].root) continue;
-        if (!( err = inits[i](ctx.scr + i) )) {
+        if (( err = inits[i](ctx.scr + i) )) {
+            LOGE("Screen %d init failed: %d", i, err);
+            if (err == ERR_NO_MEM) TRYNULL(ctx.scr[i].root, lv_obj_delete);
+        } else {
             lv_obj_add_event_cb(
                 ctx.scr[i].root, cb_screen_event, ctx.event, NULL);
-        } else if (err == ERR_NO_MEM) {
-            TRYNULL(ctx.scr[i].root, lv_obj_delete);
         }
     }
     return ERR_NO_ERR;
@@ -697,8 +825,9 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
     case SCN_INP: return lvgl_ui_input((hid_report_t *)data);
     case SCN_STAT: {
         uint32_t period = lv_timer_get_period(lv_anim_get_timer());
-        printf("LVGL: %d anim @ %d FPS\n",
-               lv_anim_count_running(), period ? 1000 / period : 0);
+        uint32_t fps = period ? 1000 / period : 0;
+        printf("LVGL: %ux%u %d anim @ %d FPS\n",
+               ctx.hres, ctx.vres, lv_anim_count_running(), fps);
         dump_font(ctx.font);
         ITERP(scr, ctx.scr) {
             if (!scr->root) {
@@ -725,7 +854,8 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
         rot = data ? *(int *)data : (rot + 1);
         if (rot > LV_DISPLAY_ROTATION_270) rot = LV_DISPLAY_ROTATION_0;
         lv_display_set_rotation(ctx.disp, rot);
-        printf("Set rotation to %d\n", rot);
+        ctx.hres = get_hres(ctx.disp);
+        ctx.vres = get_vres(ctx.disp);
     }   break;
     case SCN_FPS: {
         static uint32_t backup[3];

@@ -21,14 +21,14 @@
 #endif
 
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
-#   if defined(TARGET_IDF_5) && !__has_include("tusb_msc_storage.h")
+#   if defined(IDF_TARGET_V5) && !__has_include("tusb_msc_storage.h")
 #       warning "Run `idf.py add-dependency esp_tinyusb`"
 #       undef CONFIG_BASE_USB_MSC_DEVICE
 #   endif
 #endif
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-#   if defined(TARGET_IDF_5) && !__has_include("class/hid/hid_device.h")
+#   if defined(IDF_TARGET_V5) && !__has_include("class/hid/hid_device.h")
 #       warning "Run `idf.py add-dependency esp_tinyusb`"
 #       undef CONFIG_BASE_USB_HID_DEVICE
 #   endif

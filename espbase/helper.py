@@ -326,8 +326,8 @@ def genfont(args):
         args.font, ''.join(sorted(symbols)), font_icon(args)
     )
     try:
-        execute(cmd, quiet=args.quiet)
-        if not args.bin:
+        print(execute(cmd, quiet=args.quiet))
+        if not args.bin and op.isfile(args.output):
             font_postproc(args.output)
     except Exception as e:
         return print('Error', e)

@@ -12,12 +12,11 @@
 #include "network.h"
 #include "update.h"
 #include "sensors.h"
-#include "screen.h"
-#include "hidtool.h"
+#include "ledmode.h"
 #include "usbmode.h"
 #include "btmode.h"
+#include "screen.h"
 #include "server.h"
-#include "ledmode.h"
 
 #include "esp_system.h"
 #include "freertos/FreeRTOS.h"
@@ -26,6 +25,12 @@
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 RTC_DATA_ATTR uint8_t count[3];
+
+void cb_config(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    const char *key = data;
+    if (base != CFG_EVENT || id != CFG_UPDATE || !strlen(key ?: "")) return;
+    if (strcasestr(key, "app.tscn.mode")) tscn_command(NULL, true);
+}
 
 void app_main(void) {
     bool stop = false;
@@ -50,7 +55,7 @@ void app_main(void) {
 
     // 1. low level drivers     // dependencies
     config_initialize();
-    driver_initialize();        // button, knob, led_indicator
+    driver_initialize();        // button, knob, led_indicator, u8g2, lvgl, lcd
 
     // 2. necessary modules
     filesys_initialize();       // elf_loader
@@ -58,16 +63,15 @@ void app_main(void) {
     network_initialize();       // iperf
     update_initialize();        // filesys, network
 
-    // 3. external devices
-    screen_initialize();        // drivers, u8g2, lvgl, lcd
+    // 3. optional modules
     sensors_initialize();       // drivers
-
-    // 4. optional modules
     hidtool_initialize();       // filesys
     usbmode_initialize();       // hidtool, esp_tinyusb, usb_host_xxx
     btmode_initialize();        // hidtool
     server_initialize();        // network, update, filesys, console
 
     led_set_blink(0);
+    scn_command(SCN_INIT, NULL);
+    REGEVTS(CFG, cb_config, NULL, NULL);
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
 }

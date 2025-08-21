@@ -21,6 +21,7 @@ typedef struct config_system {
     const char * DIR_HTML;  // Directory to static webpage files
     const char * BTN_HIGH;  // Button active high
     const char * INT_EDGE;  // Select interrupt type
+    const char * ADC_MULT;  // ADC multi-sampling to filter noise
     const char * USB_MODE;  // Select USB work mode
     const char * BT_MODE;   // Select BT work mode
     const char * BT_SCAN;   // Bluetooth discoverable
@@ -32,7 +33,10 @@ typedef struct config_network {
     const char * STA_HOST;  // Static IP address (ignore DHCP)
     const char * AP_SSID;   // SSID of the AP to serve (hotspot name)
     const char * AP_PASS;   // Password of the AP to serve
-    const char * AP_HOST;   // IP address of Gateway
+    const char * AP_HOST;   // Gateway IP address
+    const char * AP_CHAN;   // Channel of AP (1~14)
+    const char * AP_NCON;   // Max number of stations of AP (1~253)
+    const char * AP_NAPT;   // Enable WiFi NAT router (IDF_TARGET_V5)
     const char * AP_HIDE;   // Hide AP SSID (not shown on scan)
     const char * AP_AUTO;   // Switch to AP mode if STA connection failed
     const char * SC_AUTO;   // Enable SmartConfig if STA connection failed
@@ -51,7 +55,9 @@ typedef struct config_application {
     const char * MDNS_HOST; // Register mDNS hostname
     const char * SNTP_RUN;  // Enable SNTP service
     const char * SNTP_HOST; // NTP server to sync time from
+    const char * TSCN_MODE; // Select touchscreen mode
     const char * HID_MODE;  // Select gamepad layout
+    const char * HID_HOST;  // UDP target IP address
     const char * OTA_AUTO;  // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
     const char * TIMEZONE;  // Set local timezone (see tzset(3) man)
@@ -75,6 +81,8 @@ typedef struct {
 } config_t;
 
 extern config_t Config;
+enum { CFG_UPDATE };
+ESP_EVENT_DECLARE_BASE(CFG_EVENT);
 
 void config_initialize();
 bool config_loads(const char *json);    // load Config from json

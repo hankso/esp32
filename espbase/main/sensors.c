@@ -7,6 +7,7 @@
 
 #include "sensors.h"
 #include "drivers.h"            // for smbus_xxx && i2c_xxx
+#include "hidtool.h"            // for hid_xxx
 #include "config.h"
 
 static const char *TAG = "Sensor";
@@ -84,131 +85,327 @@ uint16_t tpad_read() { return 0; }
  */
 
 #ifdef CONFIG_BASE_USE_TSCN
+#   define TP_DEVICE_MODE   0x00
+#   define TP_GESTURE_ID    0x01
+#   define TP_NUM_TOUCHES   0x02
+#   define TP_P1_XH         0x03
+#   define TP_P1_XL         0x04
+#   define TP_P1_YH         0x05
+#   define TP_P1_YL         0x06
+#   define TP_P1_WEIGHT     0x07
+#   define TP_P1_MISC       0x08
+#   define TP_TH_GROUP      0x80
+#   define TP_TH_DIFF       0x85
+#   define TP_CTRL          0x86
+#   define TP_TIME_MONITOR  0x87
+#   define TP_TR_ACTIVE     0x88
+#   define TP_TR_MONITOR    0x89
+#   define TP_RADIAN_VALUE  0x91
+#   define TP_OFFSET_LR     0x92
+#   define TP_OFFSET_UD     0x93
+#   define TP_DIST_LR       0x94
+#   define TP_DIST_UD       0x95
+#   define TP_DIST_ZOOM     0x96
+#   define TP_LIB_VER_H     0xA1
+#   define TP_LIB_VER_L     0xA2
+#   define TP_CHIP_ID       0xA3
+#   define TP_INTR_MODE     0xA4
+#   define TP_POWER_MODE    0xA5
+#   define TP_FIRMW_ID      0xA6
+#   define TP_PANEL_ID      0xA8
+#   define TP_RELEASE_ID    0xAF
+#   define TP_STATE         0xBC
 
-#define TP_DEVICE_MODE  0x00
-#define TP_GESTURE_ID   0x01
-#define TP_NUM_TOUCHES  0x02
-#define TP_P1_XH        0x03
-#define TP_P1_XL        0x04
-#define TP_P1_YH        0x05
-#define TP_P1_YL        0x06
-#define TP_P1_WEIGHT    0x07
-#define TP_P1_MISC      0x08
-#define TP_TH_GROUP     0x80
-#define TP_TH_DIFF      0x85
-#define TP_CTRL         0x86
-#define TP_TIME_MONITOR 0x87
-#define TP_TR_ACTIVE    0x88
-#define TP_TR_MONITOR   0x89
-#define TP_RADIAN_VALUE 0x91
-#define TP_OFFSET_LR    0x92
-#define TP_OFFSET_UD    0x93
-#define TP_DIST_LR      0x94
-#define TP_DIST_UD      0x95
-#define TP_DIST_ZOOM    0x96
-#define TP_LIB_VER_H    0xA1
-#define TP_LIB_VER_L    0xA2
-#define TP_CHIP_ID      0xA3
-#define TP_INTR_MODE    0xA4
-#define TP_POWER_MODE   0xA5
-#define TP_FIRMW_MODE   0xA6
-#define TP_PANEL_ID     0xA8
-#define TP_RELEASE_ID   0xAF
-#define TP_STATE        0xBC
+static struct {
+    TaskHandle_t task;
+    uint8_t bus, addr;
+    bool stop;
+    bool axes[3];           // inv x, inv y, swap xy
+    void (*hdlr)(tscn_data_t *dat);
+} tscn;
 
-static uint8_t tscn = 0;
+static const char *tscn_gstr[] = {
+    [GES_NONE]    = "",
+    [GES_MOVE_UP] = "Move Up",
+    [GES_MOVE_RT] = "Move Right",
+    [GES_MOVE_DN] = "Move Down",
+    [GES_MOVE_LT] = "Move Left",
+    [GES_ZOOM_IN] = "Zoom In",
+    [GES_ZOOM_OT] = "Zoom Out",
+};
 
-static void tscn_status() {
-    if (!tscn) return;
-    const struct {
-        const char *name;
-        uint8_t reg;
-    } lst[] = {
-        { "TH_DIFF",            TP_TH_DIFF },
-        { "CTRL",               TP_CTRL },
-        { "RADIAN_VALUE",       TP_RADIAN_VALUE },
-        { "TIME_MONITOR",       TP_TIME_MONITOR },
-        { "PERIOD_ACTIVE",      TP_TR_ACTIVE },
-        { "PERIOD_MONITOR",     TP_TR_MONITOR },
-        { "OFFSET_LEFT_RIGHT",  TP_OFFSET_LR },
-        { "OFFSET_UP_DOWN",     TP_OFFSET_UD },
-        { "DIST_LEFT_RIGHT",    TP_DIST_LR },
-        { "DIST_UP_DOWN",       TP_DIST_UD },
-        { "DIST_ZOOM",          TP_DIST_ZOOM },
-        { "INTR_MODE",          TP_INTR_MODE },
-        { "POWER_MODE",         TP_POWER_MODE },
-        { "FIRMWARE_MODE",      TP_FIRMW_MODE },
-        { "PANEL_ID",           TP_PANEL_ID },
-        { "RELEASE_ID",         TP_RELEASE_ID },
-    };
-#   ifdef CONFIG_BASE_AUTO_ALIGN
-    size_t namelen = 0;
-    LOOPN(i, LEN(lst)) { namelen = MAX(namelen, strlen(lst[i].name)); }
-#   else
-    size_t namelen = 16;
-#   endif
-    LOOPN(i, LEN(lst)) {
-        uint8_t val;
-        esp_err_t err = smbus_read_byte(NUM_I2C, tscn, lst[i].reg, &val);
-        if (err) {
-            ESP_LOGE(TAG, "Read touch screen failed: %s", esp_err_to_name(err));
-            return;
+static void tscn_handle_relative(tscn_data_t *dat) {
+    static uint16_t x, y;
+    if (dat->num != 1) {
+        x = y = 0;
+    } else if (!x && !y) {
+        x = dat->pts[0].x;
+        y = dat->pts[0].y;
+    } else {
+        int dx = x, dy = y;
+        x = dat->pts[0].x;
+        y = dat->pts[0].y;
+        dx = (x - dx) / (tscn.axes[0] ? -3 : 3);
+        dy = (y - dy) / (tscn.axes[1] ? -3 : 3);
+        if (tscn.axes[2]) {
+            hid_report_mouse_move(HID_TARGET_ALL, dy, dx);
+        } else {
+            hid_report_mouse_move(HID_TARGET_ALL, dx, dy);
         }
-        printf("%*s: 0x%02X%c", namelen, regs[i].name, val, " \n"[i % 2]);
     }
-    if (LEN(lst) % 2) putchar('\n');
+}
+
+static void tscn_handle_absolute(tscn_data_t *dat) {
+    if (dat->num != 1) return;
+    float nx = dat->pts[0].x / 1440.0;
+    float ny = dat->pts[0].y / 1920.0;
+    if (tscn.axes[0]) nx = 1 - nx;
+    if (tscn.axes[1]) ny = 1 - ny;
+    uint16_t x = (tscn.axes[2] ? ny : nx) * 0x7FFF;
+    uint16_t y = (tscn.axes[2] ? nx : ny) * 0x7FFF;
+    hid_report_mouse_moveto(HID_TARGET_ALL, x, y);
+}
+
+static void tscn_handle_touchpad(tscn_data_t *dat) {
+    hid_report_t report = {
+        .id = REPORT_ID_TOUCH,
+        .touch = {
+            .count = dat->num,
+            .scan_time = 0,
+        }
+    };
+    LOOPN(i, dat->num) {
+        report.touch.fingers[i].tip = true;
+        report.touch.fingers[i].cid = dat->pts[i].id;
+        report.touch.fingers[i].x = dat->pts[i].x;
+        report.touch.fingers[i].y = dat->pts[i].y;
+    }
+    hid_report_send(HID_TARGET_ALL, &report);
+}
+
+static void tscn_handle_gesture(tscn_data_t *next, tscn_data_t *prev) {
+    static uint16_t x, y;
+    static uint64_t down, last, click = TIMEOUT(120), dblclick = TIMEOUT(50);
+    if (next->num > prev->num) {
+        if (!prev->num) {                               // first finger
+            x = next->pts[0].x;
+            y = next->pts[0].y;
+            down = xTaskGetTickCount();
+        }
+    } else if (next->num < prev->num) {
+        uint64_t ts = xTaskGetTickCount(), dt = ts - down, btn = 0;
+        if (prev->num == 2) {
+            if (next->num == 1) {                       // 2 -> 1
+                last = ts;
+            } else if (dt < click) {                    // 2 -> 0
+                btn = MOUSE_BUTTON_RIGHT;
+            }
+        } else if (prev->num == 1 && dt < click) {      // 1 -> 0
+            if ((ts - last) < dblclick) {
+                btn = MOUSE_BUTTON_RIGHT;
+            } else if (ABS(prev->pts[0].x - x) < 10 &&
+                       ABS(prev->pts[0].y - y) < 10) {  // no movement
+                btn = MOUSE_BUTTON_LEFT;
+            }
+        }
+        if (btn) {
+            hid_report_mouse_button(HID_TARGET_ALL, btn);
+            hid_report_mouse_button(HID_TARGET_ALL, 0);
+        }
+        if (!next->num) x = y = down = last = 0;
+    } else if (next->num == 2) {                        // two fingers
+        int dx0 = next->pts[0].x - prev->pts[0].x;
+        int dy0 = next->pts[0].y - prev->pts[0].y;
+        int dx1 = next->pts[1].x - prev->pts[1].x;
+        int dy1 = next->pts[1].y - prev->pts[1].y;
+        bool sx = (dx0 > 0) == (dx1 > 0), sy = (dy0 > 0) == (dy1 > 0);
+        if (sx != sy) return;                           // same direction
+        int dx = (dx0 + dx1) / (tscn.axes[0] ? -3 : 3);
+        int dy = (dy0 + dy1) / (tscn.axes[1] ? 3 : -3);
+        if (!dx && !dy) return;
+        if (tscn.axes[2]) {
+            hid_report_mouse_scroll(HID_TARGET_ALL, dx, dy);
+        } else {
+            hid_report_mouse_scroll(HID_TARGET_ALL, dy, dx);
+        }
+    }
+}
+
+static void tscn_task(void *arg) {
+    uint8_t idx = 0;
+    uint64_t state = 0;
+    tscn_data_t buf[2];
+    TickType_t timeout = TIMEOUT(1000);                 // 1s
+    while (1) {
+        if (tscn.stop && !ulTaskNotifyTake(pdTRUE, timeout)) continue;
+        if (tscn_read(buf + idx)) {
+            tscn.stop = true;
+        } else if (memcmp(buf, buf + 1, sizeof(tscn_data_t))) {
+            /* tscn_print(buf + idx, stdout, true); */
+            tscn.hdlr(buf + idx);
+            if (tscn.hdlr != tscn_handle_touchpad)
+                tscn_handle_gesture(buf + idx, buf + !idx);
+            idx = !idx;
+        }
+        state = asleep(10, state);                      // capture at 100Hz
+    }
+    vTaskDelete(tscn.task = NULL);
 }
 
 static void tscn_initialize() {
     const char *chip;
-    uint8_t vendor = 0x11, addr = 0x38;
+    const uint8_t v3 = 0x79, v6 = 0x11;
     smbus_regval_t regs[] = {
-        RT_RBYTE(TP_PANEL_ID), RT_RBYTE(TP_CHIP_ID),
-        { TP_DEVICE_MODE, 0x00 }, { TP_TH_GROUP, 0x16 }, { TP_TR_ACTIVE, 0x0E }
+        RT_RBYTE(TP_PANEL_ID), RT_RBYTE(TP_CHIP_ID), { TP_DEVICE_MODE, 0x00 },
     };
-    esp_err_t err = smbus_probe(NUM_I2C, addr);
-    if (!err) err = smbus_regtable(NUM_I2C, addr, regs, 2);
-    if (!err) err = regs[0].val == vendor ? ESP_OK : ESP_ERR_NOT_FOUND;
-    if (!err) err = smbus_regtable(NUM_I2C, addr, regs + 2, 3);
-    if (err) return;
+    tscn.bus = NUM_I2C;
+    tscn.addr = 0x38;
+    if (smbus_probe(tscn.bus, tscn.addr) ||
+        smbus_regtable(tscn.bus, tscn.addr, regs, 2) ||
+        (regs[0].val != v3 && regs[0].val != v6) ||
+        smbus_regtable(tscn.bus, tscn.addr, regs + 2, 3)
+    ) { tscn.addr = 0; return; }
     switch (regs[1].val) {
-        case 0x06: chip = "FT6206"; break;
-        case 0x36: chip = "FT6236"; break;
-        case 0x64: chip = "FT6336"; break;
-        default:   chip = "FT6X36"; break;
+    case 0x54: chip = "FT3558"; break;
+    case 0x06: chip = "FT6206"; break;
+    case 0x36: chip = "FT6236"; break;
+    case 0x64: chip = "FT6336"; break;
+    default:   chip = "FT6X36"; break;
     }
-    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X", chip, NUM_I2C, addr);
-    tscn = addr;
+    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X", chip, tscn.bus, tscn.addr);
+    tscn_command(NULL, true);                           // sync
 #   ifdef CONFIG_BASE_DEBUG
-    tscn_status();
+    tscn_command(NULL, false);                          // log
 #   endif
 }
 
-esp_err_t tscn_probe(tscn_data_t *dat) {
-    if (!tscn) return ESP_ERR_INVALID_STATE;
-    esp_err_t err = smbus_read_byte(NUM_I2C, tscn, TP_NUM_TOUCHES, &dat->num);
-    if (!err) err = smbus_read_byte(NUM_I2C, tscn, TP_GESTURE_ID, &dat->ges);
-    if (!err && dat->num > LEN(dat->pts)) err = ESP_ERR_NO_MEM;
-    if (err || !dat->num) return err;
-    const uint8_t gvals[] = { 0x00, 0x10, 0x14, 0x18, 0x1C, 0x48, 0x49 };
-    uint8_t buf[6];
-    LOOPN(i, dat->num) {
-        if (( err = smbus_rregs(NUM_I2C, tscn, TP_P1_XH + 6 * i, buf, 6) ))
-            break;
-        dat->pts[i].evt  = buf[0] >> 6; // 0: press, 1: release, 2: contact
+esp_err_t tscn_read(tscn_data_t *dat) {
+    if (!tscn.addr) return ESP_ERR_INVALID_STATE;
+    static const uint8_t gvals[] = { 0x00, 0x10, 0x14, 0x18, 0x1C, 0x48, 0x49 };
+    uint8_t buf[6], info[2];
+    esp_err_t err = smbus_rregs(tscn.bus, tscn.addr, TP_GESTURE_ID, info, 2);
+    if (!err) {
+        memset(dat, 0, sizeof(tscn_data_t));
+        if (info[0] == 0xFF || info[1] == 0xFF) info[0] = info[1] = 0;
+        LOOPN(i, LEN(gvals)) if (info[0] == gvals[i]) { dat->ges = i; break; }
+        if (( dat->num = info[1] ) > LEN(dat->pts)) err = ESP_ERR_NO_MEM;
+    }
+    LOOPN(i, err ? 0 : dat->num) {
+        err = smbus_rregs(tscn.bus, tscn.addr, TP_P1_XH + 6 * i, buf, 6);
+        dat->pts[i].evt  = buf[0] >> 6;
         dat->pts[i].id   = buf[2] >> 4;
         dat->pts[i].x    = (buf[0] & 0xF) << 8 | buf[1];
         dat->pts[i].y    = (buf[2] & 0xF) << 8 | buf[3];
-        dat->pts[i].wt   = buf[4];      // touch pressure value
-        dat->pts[i].area = buf[5] >> 4; // touch area value
+        dat->pts[i].wt   = buf[4];
+        dat->pts[i].area = buf[5] >> 4;
     }
-    LOOPN(i, LEN(gvals)) { if (dat->ges == gvals[i]) dat->ges = i; }
     return err;
 }
+
+esp_err_t tscn_command(const char *ctrl, bool sync) {
+    if (!tscn.addr) return ESP_ERR_NOT_SUPPORTED;
+    if (sync) {
+        if (strcasestr(Config.app.TSCN_MODE, "ABS")) {
+            tscn.hdlr = tscn_handle_absolute;
+        } else if (strcasestr(Config.app.TSCN_MODE, "TPD")) {
+            tscn.hdlr = tscn_handle_touchpad;
+        } else {
+            tscn.hdlr = tscn_handle_relative;
+        }
+        tscn.axes[0] = strcasestr(Config.app.TSCN_MODE, "INVX");
+        tscn.axes[1] = strcasestr(Config.app.TSCN_MODE, "INVY");
+        tscn.axes[2] = false;
+        const char *rot = strcasestr(Config.app.TSCN_MODE, "ROT");
+        switch (rot ? rot[3] : '\0') {
+        case '1': tscn.axes[1] ^= true; tscn.axes[2] = true; break;
+        case '2': tscn.axes[0] ^= true; tscn.axes[1] ^= true; break;
+        case '3': tscn.axes[0] ^= true; tscn.axes[2] = true; break;
+        }
+        ESP_LOGI(TAG, "TSCN: current mode %s", Config.app.TSCN_MODE);
+        if (tscn.task) return ESP_OK;
+#   ifdef CONFIG_BASE_GPIO_INT
+        tscn.stop = true;
+#   endif
+        if (xTaskCreate(tscn_task, "tscn", 4096, NULL, 5, &tscn.task) == pdTRUE)
+            return ESP_OK;
+        ESP_LOGW(TAG, "TSCN: task creation failed");
+        return ESP_ERR_NO_MEM;
+    }
+    if (ctrl) {
+        tscn.stop = !strbool(ctrl);
+        if (!tscn.stop && tscn.task) {
+            if (xPortInIsrContext()) {
+                vTaskNotifyGiveFromISR(tscn.task, NULL);
+            } else {
+                xTaskNotifyGive(tscn.task);
+            }
+        }
+        return tscn.task ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
+    }
+    const struct {
+        const char *name;
+        uint8_t reg;
+    } lst[] = {
+        { "Touch threshold",    TP_TH_GROUP },
+        { "Filter function",    TP_TH_DIFF },
+        { "Auto sleep mode",    TP_CTRL },
+        { "Auto sleep time",    TP_TIME_MONITOR },
+        { "Active data rate",   TP_TR_ACTIVE },
+        { "Monitor data rate",  TP_TR_MONITOR },
+        { "Move offset L2R",    TP_OFFSET_LR },
+        { "Move dist L2R",      TP_DIST_LR },
+        { "Move offset U2D",    TP_OFFSET_UD },
+        { "Move dist U2D",      TP_DIST_UD },
+        { "Rotate angle",       TP_RADIAN_VALUE },
+        { "Zoom dist",          TP_DIST_ZOOM },
+        { "Trigger mode",       TP_INTR_MODE },
+        { "Power mode",         TP_POWER_MODE },
+        { "Library ID",         TP_LIB_VER_H },
+        { "Firmware ID",        TP_FIRMW_ID },
+        { "Panel ID",           TP_PANEL_ID },
+        { "Release ID",         TP_RELEASE_ID },
+    };
+#   ifdef CONFIG_BASE_AUTO_ALIGN
+    size_t nlen = 0;
+    LOOPN(i, LEN(lst)) { nlen = MAX(nlen, strlen(lst[i].name)); }
+#   else
+    size_t nlen = 16;
+#   endif
+    uint8_t val;
+    const char *name;
+    LOOPN(i, LEN(lst)) {
+        if (!( name = lst[i].name )) { putchar("\n "[i % 2]); continue; }
+        esp_err_t err = smbus_read_byte(tscn.bus, tscn.addr, lst[i].reg, &val);
+        if (err) return err;
+        printf("%-*s: 0x%02X%s", nlen, name, val, i % 2 ? "\n" : " | ");
+    }
+    if (LEN(lst) % 2) putchar('\n');
+    return ESP_OK;
+}
+
+void tscn_print(tscn_data_t *dat, FILE *to, bool newline) {
+    fprintf(to, "%sTouch screen: ", newline ? "" : "\r");
+    LOOPN(i, dat->num) {
+        fprintf(to, "%sID %2u EVT %c X %4u Y %4u WT %3u AREA %u",
+                i ? " | " : "", dat->pts[i].id, "PRC-"[dat->pts[i].evt],
+                dat->pts[i].x, dat->pts[i].y, dat->pts[i].wt, dat->pts[i].area);
+    }
+    if (dat->ges) {
+        fprintf(to, " gesture = %s", tscn_gstr[dat->ges]);
+    } else if (!dat->num) {
+        fprintf(to, " not touched");
+    }
+    if (newline) fputc('\n', to);
+}
 #else // CONFIG_BASE_USE_TSCN
-esp_err_t tscn_probe(tscn_data_t *d) {
-    NOTUSED(d);
-    return ESP_ERR_NOT_SUPPORTED;
+esp_err_t tscn_read(tscn_data_t *d) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(d);
+}
+esp_err_t tscn_status(int e) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(e);
+}
+void tscn_print(tscn_data_t *d, FILE *s, bool n) {
+    return; NOTUSED(d); NOTUSED(s); NOTUSED(n);
 }
 #endif // CONFIG_BASE_USE_TSCN
 
@@ -216,60 +413,60 @@ esp_err_t tscn_probe(tscn_data_t *d) {
  * Multiple Screens
  */
 
-#define MS_REG_CMD  0x80 // A0 = 0
-#define MS_REG_DAT  0xC0 // A0 = 1
-
-#define MS_SETAY0       0x00
-#define MS_SETAY1       0x10
-#define MS_PWROFF       0x2C
-#define MS_PWRON        0x2F
-#define MS_BIAS         0x30
-#define     MS_BIAS_6   0x04
-#define     MS_BIAS_7   0x03
-#define     MS_BIAS_8   0x02
-#define     MS_BIAS_9   0x00
-#define     MS_BIAS_10  0x01
-#define     MS_BIAS_11  0x05
-#define MS_WAKEUP       0x38
-#define MS_SLEEP        0x39
-#define MS_OSCON        0x3A
-#define MS_OSCOFF       0x3B
-#define MS_DISPOFF      0x3C
-#define MS_DISPON       0x3D
-#define MS_SETSL0       0x40
-#define MS_SETSL1       0x50
-#define MS_DRV          0x60
-#define     MS_DRV_SHL  0x08
-#define     MS_DRV_ADC  0x04
-#define     MS_DRV_EON  0x02
-#define     MS_DRV_REV  0x01
-#define MS_RESET        0x76
-#define MS_SETDUTY0     0x90
-#define MS_SETDUTY1     0xA0
-#define MS_SETAX        0xC0
-#define MS_RDRAM        0x77
-#define MS_RDST         0x78
-#define MS_VREF         0xB1
-#define MS_FRCT         0xB2
-#define MS_NOP          0xE3
-#define MS_MTP          0x80 // enter MTP command mode
-#define     MS_MTP_CTEN 0x1A
-#define     MS_MTP_PEN  0xEC
-#define     MS_MTP_ST   0x20
-#define     MS_MTP_CTOF 0x26
-#define     MS_MTP_MADR 0xA2
-#define MS_IST          0x88 // repeat 4 times to enter IST command mode
-#define     MS_IST_MAP  0x60 // change COM mapping (IST command mode)
-#define MS_EXIT         0xE3 // return to normal mode
-#define MS_DELAY        0xF0
+#ifdef CONFIG_BASE_USE_MSCN
+#   define MS_REG_CMD       0x80 // A0 = 0
+#   define MS_REG_DAT       0xC0 // A0 = 1
+#   define MS_SETAY0        0x00
+#   define MS_SETAY1        0x10
+#   define MS_PWROFF        0x2C
+#   define MS_PWRON         0x2F
+#   define MS_BIAS          0x30
+#   define     MS_BIAS_6    0x04
+#   define     MS_BIAS_7    0x03
+#   define     MS_BIAS_8    0x02
+#   define     MS_BIAS_9    0x00
+#   define     MS_BIAS_10   0x01
+#   define     MS_BIAS_11   0x05
+#   define MS_WAKEUP        0x38
+#   define MS_SLEEP         0x39
+#   define MS_OSCON         0x3A
+#   define MS_OSCOFF        0x3B
+#   define MS_DISPOFF       0x3C
+#   define MS_DISPON        0x3D
+#   define MS_SETSL0        0x40
+#   define MS_SETSL1        0x50
+#   define MS_DRV           0x60
+#   define     MS_DRV_SHL   0x08
+#   define     MS_DRV_ADC   0x04
+#   define     MS_DRV_EON   0x02
+#   define     MS_DRV_REV   0x01
+#   define MS_RESET         0x76
+#   define MS_SETDUTY0      0x90
+#   define MS_SETDUTY1      0xA0
+#   define MS_SETAX         0xC0
+#   define MS_RDRAM         0x77
+#   define MS_RDST          0x78
+#   define MS_VREF          0xB1
+#   define MS_FRCT          0xB2
+#   define MS_NOP           0xE3
+#   define MS_MTP           0x80 // enter MTP command mode
+#   define     MS_MTP_CTEN  0x1A
+#   define     MS_MTP_PEN   0xEC
+#   define     MS_MTP_ST    0x20
+#   define     MS_MTP_CTOF  0x26
+#   define     MS_MTP_MADR  0xA2
+#   define MS_IST           0x88 // repeat 4 times to enter IST command mode
+#   define     MS_IST_MAP   0x60 // change COM mapping (IST command mode)
+#   define MS_EXIT          0xE3 // return to normal mode
+#   define MS_DELAY         0xF0
 
 typedef struct {
     uint8_t bus, addr;
     bool busy, adc, donb, resb;
-} ms_ctx_t;
+} ist_ctx_t;
 
 static esp_err_t ist3931_send(
-    ms_ctx_t *ctx, uint8_t type, const uint8_t *buf, size_t len
+    ist_ctx_t *ctx, uint8_t type, const uint8_t *buf, size_t len
 ) {
     if (!ctx->addr) return ESP_ERR_INVALID_STATE;
     esp_err_t err = ESP_OK;
@@ -296,7 +493,7 @@ static esp_err_t ist3931_send(
     return err;
 }
 
-static esp_err_t ist3931_set_window(ms_ctx_t *ctx, uint8_t x, uint8_t y) {
+static esp_err_t ist3931_set_window(ist_ctx_t *ctx, uint8_t x, uint8_t y) {
     uint8_t cmds[] = {
         MS_SETAY1 | bitnread(y, 4, 2),
         MS_SETAY0 | (y & 0xF),
@@ -305,7 +502,7 @@ static esp_err_t ist3931_set_window(ms_ctx_t *ctx, uint8_t x, uint8_t y) {
     return ist3931_send(ctx, MS_REG_CMD, cmds, sizeof(cmds));
 }
 
-static esp_err_t ist3931_read_status(ms_ctx_t *ctx) {
+static esp_err_t ist3931_read_status(ist_ctx_t *ctx) {
     if (!ctx->addr) return ESP_ERR_INVALID_STATE;
     uint8_t val;
     esp_err_t err = smbus_write_byte(ctx->bus, ctx->addr, MS_REG_CMD, MS_RDST);
@@ -324,7 +521,7 @@ static esp_err_t ist3931_read_status(ms_ctx_t *ctx) {
     return err;
 }
 
-static esp_err_t ist3931_read_frame(ms_ctx_t *ctx) {
+static esp_err_t ist3931_read_frame(ist_ctx_t *ctx) {
     if (!ctx->addr) return ESP_ERR_INVALID_STATE;
     uint8_t v[16 + 1], l = sizeof(v); memset(v, 0, l);
     esp_err_t err = ist3931_set_window(ctx, 0, 0);
@@ -334,7 +531,7 @@ static esp_err_t ist3931_read_frame(ms_ctx_t *ctx) {
     return err;
 }
 
-static ms_ctx_t ictx;
+static ist_ctx_t ist;
 
 const uint8_t init_cmds[] = {
     MS_RESET,               // soft reset
@@ -371,24 +568,24 @@ const uint8_t test_dats[] = {
 };
 
 void mscn_status() {
-    ist3931_read_status(&ictx);
-    ist3931_read_frame(&ictx);
+    ist3931_read_status(&ist);
+    ist3931_read_frame(&ist);
 }
 
 static void mscn_initialize() {
-    ictx.bus = NUM_I2C;
-    ictx.addr = 0x3F;
-    esp_err_t err = smbus_probe(ictx.bus, ictx.addr);
-    if (!err) err = ist3931_read_status(&ictx);
-    if (!err) err = ist3931_send(&ictx, MS_REG_CMD, init_cmds, LEN(init_cmds));
-    if (!err) err = ist3931_set_window(&ictx, 0, 4);
-    if (!err) err = ist3931_send(&ictx, MS_REG_DAT, test_dats, LEN(test_dats));
-    if (err) {
-        ictx.addr = 0;
-        return;
-    }
-    ESP_LOGI(TAG, "MSCN: found IST3931 at I2C %d-%02X", ictx.bus, ictx.addr);
+    ist.bus = NUM_I2C;
+    ist.addr = 0x3F;
+    if (smbus_probe(ist.bus, ist.addr) ||
+        ist3931_read_status(&ist) ||
+        ist3931_send(&ist, MS_REG_CMD, init_cmds, LEN(init_cmds)) ||
+        ist3931_set_window(&ist, 0, 4) ||
+        ist3931_send(&ist, MS_REG_DAT, test_dats, LEN(test_dats))
+    ) { ist.addr = 0; return; }
+    ESP_LOGI(TAG, "MSCN: found IST3931 at I2C %d-%02X", ist.bus, ist.addr);
 }
+#else // CONFIG_BASE_USE_MSCN
+void mscn_status() {}
+#endif // CONFIG_BASE_USE_MSCN
 
 /******************************************************************************
  * Distance Measurement
@@ -461,28 +658,28 @@ static esp_err_t vlx_sync_spad(vlx_ctx_t *ctx) {
 
 // VL53L0X_GetMeasurementTimingBudget
 static esp_err_t vlx_sync_timing(vlx_ctx_t *ctx, bool get) {
-    smbus_regval_t regs[] = {
+    static smbus_regval_t regs[] = {
         RT_RBYTE(0x01), RT_RBYTE(0x46),
         RT_RBYTE(0x50), RT_RWORD(0x51),
         RT_RBYTE(0x70), RT_RWORD(0x71),
     };
     esp_err_t err = smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs));
     if (!err) {
-        ctx->msrc =  bitread(regs[0].val, 2);
-        ctx->dss =   bitread(regs[0].val, 3);
-        ctx->tcc =   bitread(regs[0].val, 4);
-        ctx->pre =   bitread(regs[0].val, 6);
+        ctx->msrc  = bitread(regs[0].val, 2);
+        ctx->dss   = bitread(regs[0].val, 3);
+        ctx->tcc   = bitread(regs[0].val, 4);
+        ctx->pre   = bitread(regs[0].val, 6);
         ctx->final = bitread(regs[0].val, 7);
 
-        ctx->pre_pclks =    (regs[2].val + 1) << 1;
-        ctx->final_pclks =  (regs[4].val + 1) << 1;
-        ctx->pre_mclks =    vlx_val2tout(regs[3].val);
-        ctx->msrc_mclks =   regs[1].val + 1;
-        ctx->final_mclks =  vlx_val2tout(regs[5].val);
+        ctx->pre_pclks   = (regs[2].val + 1) << 1;
+        ctx->final_pclks = (regs[4].val + 1) << 1;
+        ctx->pre_mclks   = vlx_val2tout(regs[3].val);
+        ctx->msrc_mclks  = regs[1].val + 1;
+        ctx->final_mclks = vlx_val2tout(regs[5].val);
         if (ctx->pre) ctx->final_mclks -= ctx->pre_mclks;
 
-        ctx->pre_us =   vlx_mclks2us(ctx->pre_mclks,      ctx->pre_pclks);
-        ctx->msrc_us =  vlx_mclks2us(ctx->msrc_mclks + 1, ctx->pre_pclks);
+        ctx->pre_us   = vlx_mclks2us(ctx->pre_mclks,      ctx->pre_pclks);
+        ctx->msrc_us  = vlx_mclks2us(ctx->msrc_mclks + 1, ctx->pre_pclks);
         ctx->final_us = vlx_mclks2us(ctx->final_mclks,    ctx->final_pclks);
     }
     uint32_t us = (get ? 1910 : 1320) + 960;        // Start + End Overhead
@@ -508,7 +705,7 @@ static esp_err_t vlx_sync_timing(vlx_ctx_t *ctx, bool get) {
 
 // VL53L0X_StartMeasurement
 static esp_err_t vlx_startc(vlx_ctx_t *ctx, uint32_t period_ms) {
-    smbus_regval_t regs[] = {
+    static smbus_regval_t regs[] = {
         { 0x80, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 }, { 0x91, 0x3C }, // stop
         { 0x00, 0x01 }, { 0xFF, 0x00 }, { 0x80, 0x00 }, RT_RWORD(0xF8),
     };
@@ -526,7 +723,7 @@ static esp_err_t vlx_startc(vlx_ctx_t *ctx, uint32_t period_ms) {
 
 // VL53L0X_StopMeasurement
 static UNUSED esp_err_t vlx_stopc(vlx_ctx_t *ctx) {
-    smbus_regval_t regs[] = {
+    static smbus_regval_t regs[] = {
         { 0x00, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 },
         { 0x91, 0x00 }, { 0x00, 0x01 }, { 0xFF, 0x00 },
     };
@@ -535,19 +732,19 @@ static UNUSED esp_err_t vlx_stopc(vlx_ctx_t *ctx) {
 
 // VL53L0X_PerformSingleRangingMeasurement
 static uint16_t vlx_range(vlx_ctx_t *ctx, bool oneshot) {
-    smbus_regval_t regs[] = {
+    static smbus_regval_t regs[] = {
         RT_WAIT0(0x00, 0x01, 100),
         RT_WAIT1(0x13, 0x07, 100), RT_RWORD(0x1E), { 0x0B, 0x01 }
-    }, *p = RT_FIND_REG(regs, 0x1E);
+    };
     return (
         oneshot ? (
             vlx_startc(ctx, UINT32_MAX) ||
             smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs))
         ) : smbus_regtable(ctx->bus, ctx->addr, regs + 1, LEN(regs) - 1)
-    ) ? UINT16_MAX : p->val;
+    ) ? UINT16_MAX : regs[2].val;
 }
 
-static esp_err_t vlx_init(vlx_ctx_t *ctx) {
+static esp_err_t vlx_setup(vlx_ctx_t *ctx) {
     smbus_regval_t pre[] = {
         // VL53L0X_DataInit
         { 0x88, 0x00 }, { 0x80, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 },
@@ -599,30 +796,30 @@ static esp_err_t vlx_init(vlx_ctx_t *ctx) {
     return err;
 }
 
-static vlx_ctx_t vctx;
+static vlx_ctx_t vlx;
 
 static void vlx_initialize() {
-    vctx.bus = I2C_NUM_0;
-    vctx.addr = 0x29;
-    esp_err_t err = smbus_probe(vctx.bus, vctx.addr);
-    if (!err) err = vlx_init(&vctx);
-    if (!err) err = vctx.stop == 0x3C ? ESP_OK : ESP_ERR_INVALID_STATE;
-    if (err) { vctx.addr = 0; return; }
-    ESP_LOGI(TAG, "VLX: found VL53L0X at I2C %d-%02X", vctx.bus, vctx.addr);
+    vlx.bus = I2C_NUM_0;
+    vlx.addr = 0x29;
+    if (smbus_probe(vlx.bus, vlx.addr) || vlx_setup(&vlx) || vlx.stop != 0x3C) {
+        vlx.bus = vlx.addr = 0;
+    } else {
+        ESP_LOGI(TAG, "VLX: found VL53L0X at I2C %d-%02X", vlx.bus, vlx.addr);
+    }
 }
 
-uint16_t vlx_probe() { return vlx_range(&vctx, true); }
+uint16_t vlx_read() { return vlx_range(&vlx, true); }
 #else
-uint16_t vlx_probe() { return UINT16_MAX; }
+uint16_t vlx_read() { return UINT16_MAX; }
 #endif
 
 /******************************************************************************
  * Ambient Light and Temperature Sensor
  */
 
-esp_err_t gy39_measure(gy39_data_t *d) {
+esp_err_t gy39_read(uint8_t bus, gy39_data_t *d) {
     uint8_t addr = 0x5B, b[0x0E];
-    esp_err_t err = smbus_rregs(NUM_I2C, addr, 0x00, b, sizeof(b));
+    esp_err_t err = smbus_rregs(bus, addr, 0x00, b, sizeof(b));
     if (err) return err;
     d->brightness = 1e-2 * ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
     d->temperature = 1e-2 * ((b[4] << 8) | b[5]);
@@ -641,13 +838,18 @@ esp_err_t gy39_measure(gy39_data_t *d) {
 //      ADDR -> SCL: 0b11 (0x47)
 
 #ifdef CONFIG_BASE_ALS_TRACK
-static uint8_t als_addr[ALS_NUM] = {
+static struct {
+    uint8_t bus;
+    uint8_t addr[ALS_NUM];
+} als;
+
+static uint8_t als_addrs[] = {
     0b01000100, 0b01000101,         // east, west
     0b01000110, 0b01000111          // south, north
 };
 
 static void als_initialize() {
-    uint8_t bus = NUM_I2C, addr;
+    uint8_t bus = als.bus = NUM_I2C;
     smbus_regval_t regs[] = {
         RT_RWORD(0x7E), RT_RWORD(0x7F),
         // 15:12 RN[3:0] = 1100b    automatic full-scale
@@ -662,24 +864,25 @@ static void als_initialize() {
         RT_WWORD(0x02, 0x0800),     // low-limit 20.48 lux
         RT_WWORD(0x03, 0xBFFF),     // high-limit 83865 lux
     };
-    LOOPN(i, ALS_NUM) {
-        addr = als_addr[i];
-        als_addr[i] = 0;
+    LOOPN(i, MIN(ALS_NUM, LEN(als_addrs))) {
+        uint8_t addr = als_addrs[i];
         if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, LEN(regs)))
             continue;
         ESP_LOGI(TAG, "ALS: found %c%c %04X at I2C %d-%02X",
                  regs[0].val >> 8, regs[0].val & 0xFF, regs[1].val, bus, addr);
-        als_addr[i] = addr;
+        als.addr[i] = addr;
     }
 }
 
 float als_brightness(uint8_t idx) {
-    uint16_t val;
-    if (idx > ALS_NUM || !als_addr[idx]) return 0;
-    if (smbus_read_word(NUM_I2C, als_addr[idx], 0x00, &val)) return 0;
-    // Equation 3 at Page 20 of OPT3001 datasheet:
-    //   lux = 0.01 * 2^E[3:0] * R[11:0]
-    return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
+    uint16_t val = 0;
+    if (idx < ALS_NUM && als.addr[idx] &&
+        !smbus_read_word(als.bus, als.addr[idx], 0x00, &val)) {
+        // Equation 3 at Page 20 of OPT3001 datasheet:
+        //   lux = 0.01 * 2^E[3:0] * R[11:0]
+        return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
+    }
+    return 0;
 }
 
 static esp_err_t als_atdeg(int hdeg, int vdeg, float vals[ALS_NUM + 1]) {
@@ -763,14 +966,14 @@ esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg) {
     return ESP_ERR_NOT_FOUND;
 }
 #else
-float als_brightness(int i) { return 0; NOTUSED(i); }
+float als_brightness(uint8_t i) { return 0; NOTUSED(i); }
 esp_err_t als_tracking(als_track_t i, int *h, int *v) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(i); NOTUSED(h); NOTUSED(v);
 }
 #endif // CONFIG_BASE_ALS_TRACK
 
 /******************************************************************************
- * BQ25895
+ * Battery Management
  */
 
 #define PWR_ILIMIT 0x00 // input current limit
@@ -785,19 +988,23 @@ esp_err_t als_tracking(als_track_t i, int *h, int *v) {
 #define PWR_ADCCHG 0x12 // measured charging current
 #define PWR_SYSTEM 0x14 // device version & reset
 
-static uint8_t pwr = 0;
+static struct {
+    uint8_t bus, addr;
+} pwr;
 
 static void pwr_initialize() {
-    uint8_t val, ver = 0b111, addr = 0x6A;
-    esp_err_t err = smbus_probe(NUM_I2C, addr);
-    if (!err) err = smbus_read_byte(NUM_I2C, addr, PWR_SYSTEM, &val);
-    if (!err) err = bitsread(val, 3, ver) == ver ? ESP_OK : ESP_ERR_NOT_FOUND;
-    if (!err) err = smbus_write_byte(NUM_I2C, addr, PWR_SYSTEM, val | 0x80);
-    if (!err) err = smbus_write_byte(NUM_I2C, addr, PWR_WATDOG, 0b10001101);
-    if (!err) err = smbus_write_byte(NUM_I2C, addr, PWR_BATFET, 0b01001000);
-    if (err) return;
-    ESP_LOGI(TAG, "PWR: found BQ25895 at I2C %d-%02X", NUM_I2C, addr);
-    pwr = addr;
+    uint8_t bus = NUM_I2C, addr = 0x6A;
+    smbus_regval_t regs[] = {
+        RT_WAIT2(PWR_SYSTEM, 0x07, 0),
+        RT_SBITS(PWR_SYSTEM, 0x80),
+        { PWR_WATDOG, 0b10001101 },
+        { PWR_BATFET, 0b01001000 },
+    };
+    if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, LEN(regs)))
+        return;
+    ESP_LOGI(TAG, "PWR: found BQ25895 at I2C %d-%02X", bus, addr);
+    pwr.bus = bus;
+    pwr.addr = addr;
 #ifdef CONFIG_BASE_DEBUG
     pwr_status();
 #endif
@@ -823,27 +1030,27 @@ static UNUSED uint8_t cumsub(int val, int step) {
 }
 
 void pwr_status() {
-    if (!pwr) return;
-    uint8_t reg[0x15];
-    esp_err_t err = smbus_read_byte(NUM_I2C, pwr, PWR_CONADC, reg + 0);
-    if (!err) err = smbus_read_byte(NUM_I2C, pwr, PWR_ADCBUS, reg + 1);
+    if (!pwr.addr) return;
+    uint8_t bus = pwr.bus, addr = pwr.addr, reg[0x15];
+    esp_err_t err = smbus_read_byte(bus, addr, PWR_CONADC, reg + 0);
+    if (!err) err = smbus_read_byte(bus, addr, PWR_ADCBUS, reg + 1);
     if (!err) {
         bool continuous = bitread(reg[0], 6);
         bool vbuspluged = bitread(reg[1], 7);
         if (!continuous) {
-            err = smbus_write_byte(NUM_I2C, pwr, PWR_CONADC, reg[0] & 0x80);
+            err = smbus_write_byte(bus, addr, PWR_CONADC, reg[0] & 0x80);
             if (!err) msleep(1000); // wait 1s for ADC
         }
         if (!err && continuous && !vbuspluged) {
             // stop continuous ADC to save power when no VBUS plugged in
-            err = smbus_write_byte(NUM_I2C, pwr, PWR_CONADC, reg[0] & ~0x40);
+            err = smbus_write_byte(bus, addr, PWR_CONADC, reg[0] & ~0x40);
         }
         if (!err && !continuous && vbuspluged) {
-            // start continuous ADC to save time when VBUS plugged in
-            err = smbus_write_byte(NUM_I2C, pwr, PWR_CONADC, reg[0] | 0x40);
+            // start continuous ADC to save time when VBUS is plugged in
+            err = smbus_write_byte(bus, addr, PWR_CONADC, reg[0] | 0x40);
         }
     }
-    if (!err) err = smbus_rregs(NUM_I2C, pwr, 0x00, reg, sizeof(reg));
+    if (!err) err = smbus_rregs(bus, addr, 0x00, reg, sizeof(reg));
     if (err) return;
     const char * INPTYPE[] = {
         "No input", "USB Host SDP", "USB CDP(1.5A)", "USB DCP(3.25A)",
@@ -855,7 +1062,7 @@ void pwr_status() {
     const char * CHGERR[] = {
         "Normal", "Input", "TS OVR", "TM EXP"
     };
-    printf( // ~3KB
+    printf(
         "REG00 | Iin LIM : %4dmA | ILIM PIN:   %4d | HIZ MODE: %6d\n"
         "REG01 | Vin LIM : %4dmV | BST COLD: %5d%% | BST HOT : %6s\n"
         "REG02 | BST FREQ: %4sHz | ADC CONV:   %4d | ADC RATE: %6s\n"
@@ -942,6 +1149,9 @@ void sensors_initialize() {
 #ifdef CONFIG_BASE_USE_TSCN
     tscn_initialize();
 #endif
+#ifdef CONFIG_BASE_USE_MSCN
+    mscn_initialize();
+#endif
 #ifdef CONFIG_BASE_VLX_SENSOR
     vlx_initialize();
 #endif
@@ -949,5 +1159,4 @@ void sensors_initialize() {
     als_initialize();
 #endif
     pwr_initialize();
-    mscn_initialize();
 }

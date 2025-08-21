@@ -1,0 +1,12 @@
+# Name,     Type,   SubType,    Offset,     Size,   Flags
+
+# 64KB header
+otadata,    data,   ota,        0x009000,   0x002000,
+nvs,        data,   nvs,        0x00B000,   0x004000,
+phy_init,   data,   phy,        0x00F000,   0x001000,
+
+# 2M golden + dual 2M silver + 10176KB storage
+golden,     app,    factory,    0x010000,   0x200000,
+silver0,    app,    ota_0,      ,           0x200000,
+silver1,    app,    ota_1,      ,           0x200000,
+storage,    data,   ,           ,           0x9F0000,
