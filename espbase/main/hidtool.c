@@ -32,6 +32,7 @@ hidtool_t HIDTool = {
         [REPORT_ID_KEYBD] = SIZEOF(hid_report_t, keybd),
         [REPORT_ID_MOUSE] = SIZEOF(hid_report_t, mouse),
         [REPORT_ID_ABMSE] = SIZEOF(hid_report_t, abmse),
+        [REPORT_ID_POINT] = SIZEOF(hid_report_t, point),
         [REPORT_ID_TOUCH] = SIZEOF(hid_report_t, touch),
         [REPORT_ID_GMPAD] = SIZEOF(hid_report_t, gmpad),
         [REPORT_ID_SCTRL] = SIZEOF(hid_report_t, sctrl),
@@ -45,7 +46,7 @@ hidtool_t HIDTool = {
 void hidtool_initialize() {
     if (!strlen(Config.app.HID_MODE)) return;
 
-    int vals[2];
+    int vals[2], blen = sizeof(HIDTool.dstr);
     if (parse_all(Config.info.VER, vals, 2) == 2)
         HIDTool.ver = ((vals[0] & 0xFF) << 8) | (vals[1] & 0xFF);
 #ifdef CONFIG_TINYUSB_DESC_MANUFACTURER_STRING
@@ -60,12 +61,17 @@ void hidtool_initialize() {
         HIDTool.vid = 0x16C0;   // libusb debug vendor id
         HIDTool.vid = 0x05DF;
         HIDTool.pad = GMPAD_GENERAL;
-        HIDTool.dstr = "Keybd(1), Mouse(2-4), Joyst(5), SCtrl(6), SDial(7)";
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, general);
+        snprintf(HIDTool.dstr, blen,
+            "Keybd(%u), Mouse(%u-%u), Joyst(%u), SCtrl(%u), SDial(%u)",
+            REPORT_ID_KEYBD, REPORT_ID_MOUSE, REPORT_ID_POINT,
+            REPORT_ID_GMPAD, REPORT_ID_SCTRL, REPORT_ID_SDIAL
+        );
         uint8_t desc[] = {
             HID_REPORT_DESC_KEYBD(HID_REPORT_ID(REPORT_ID_KEYBD)),  // 69 Bytes
             HID_REPORT_DESC_MOUSE(HID_REPORT_ID(REPORT_ID_MOUSE)),  // 63 Bytes
             HID_REPORT_DESC_ABMSE(HID_REPORT_ID(REPORT_ID_ABMSE)),  // 74 Bytes
+            HID_REPORT_DESC_POINT(HID_REPORT_ID(REPORT_ID_POINT)),  // 50 Bytes
             HID_REPORT_DESC_GMPAD(HID_REPORT_ID(REPORT_ID_GMPAD)),  // 70 Bytes
             HID_REPORT_DESC_SCTRL(HID_REPORT_ID(REPORT_ID_SCTRL)),  // 23 Bytes
             HID_REPORT_DESC_SDIAL(HID_REPORT_ID(REPORT_ID_SDIAL)),  // 56 Bytes
@@ -77,31 +83,34 @@ void hidtool_initialize() {
         HIDTool.pid = 0x0B13;
         HIDTool.ver = 0x0509;
         HIDTool.pad = GMPAD_XINPUT;
-        HIDTool.dstr = "Microsoft XInput compatible gamepad";
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, xinput);
         hidfile = "xinput.hid";                                     // 283 Bytes
+        strncpy(HIDTool.dstr, "Microsoft XInput compatible gamepad", blen);
     } else if (!strcasecmp(Config.app.HID_MODE, "SWITCH")) {
         HIDTool.vid = 0x057E;
         HIDTool.pid = 0x2009;
         HIDTool.ver = 0x0101;
         HIDTool.pad = GMPAD_SWITCH;
-        HIDTool.dstr = "Mintendo wireless gamepad";
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, nswitch);
         hidfile = "switch.hid";                                     // 170 Bytes
+        strncpy(HIDTool.dstr, "Mintendo wireless gamepad", blen);
     } else if (!strcasecmp(Config.app.HID_MODE, "DSENSE")) {
         HIDTool.vid = 0x054C;
         HIDTool.pid = 0x0CE6;
         HIDTool.ver = 0x0101;
         HIDTool.pad = GMPAD_DSENSE;
-        HIDTool.dstr = "PlayStation DualSense gamepad";
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, dsense);
         hidfile = "dsense.hid";                                     // 279 Bytes
+        strncpy(HIDTool.dstr, "PlayStation DualSense gamepad", blen);
     } else {
         ESP_LOGE(TAG, "Unknown HID MODE: %s", Config.app.HID_MODE);
         return;
     }
     if (hidfile) {
-        size_t dlen = sizeof(HIDTool.desc);     // skip files larger than buffer
+        // Modified on https://github.com/Mystfit/ESP32-BLE-CompositeHID
+        //         and https://github.com/qingwa2009/MyBLEGamepad
+        // Skip files larger than HIDTool.desc buffer
+        size_t dlen = sizeof(HIDTool.desc);
         const char *hidpath = fjoin(2, Config.sys.DIR_DATA, hidfile);
         uint8_t *desc = fload(hidpath, &dlen);
         if (desc) memcpy(HIDTool.desc, desc, HIDTool.dlen = dlen);
@@ -146,28 +155,42 @@ bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
 #ifdef CONFIG_BASE_USE_SCN
     if (to | HID_TARGET_SCN) sent |= scn_command(SCN_INP, rpt) == ESP_OK;
 #endif
-    if (to | HID_TARGET_SCN || !sent) {
-        // do nothing
-    } else if (rpt->id == REPORT_ID_KEYBD) {
-        uint8_t mod = rpt->keybd.modifier;
+    if (to == HID_TARGET_SCN || !sent) return sent;
+    switch (rpt->id) {
+    case REPORT_ID_KEYBD:
         ESP_LOGI(TAG, "KEYBD MOD 0x%02X KEY %s",
-                mod, hid_keycodes_str(rpt->keybd.keycode, mod));
-    } else if (rpt->id == REPORT_ID_MOUSE) {
+                rpt->keybd.modifier,
+                hid_keycodes_str(rpt->keybd.keycode, rpt->keybd.modifier));
+        break;
+    case REPORT_ID_MOUSE:
         ESP_LOGI(TAG, "MOUSE X %4d Y %4d V %3d H %3d BTN %s",
                 rpt->mouse.x, rpt->mouse.y, rpt->mouse.wheel, rpt->mouse.pan,
                 hid_btncode_str(rpt->mouse.buttons));
-    } else if (rpt->id == REPORT_ID_ABMSE) {
+        break;
+    case REPORT_ID_ABMSE:
         ESP_LOGI(TAG, "ABMSE X %5u Y %5u V %3d H %3d BTN %s",
                 rpt->abmse.x, rpt->abmse.y, rpt->abmse.wheel, rpt->abmse.pan,
                 hid_btncode_str(rpt->abmse.buttons));
-    } else if (rpt->id == REPORT_ID_GMPAD) {
+        break;
+    case REPORT_ID_POINT:
+        ESP_LOGI(TAG, "POINT TIP %u RANGE %u X %5u Y %5u",
+                rpt->point.tip, rpt->point.rng, rpt->point.x, rpt->point.y);
+        break;
+    case REPORT_ID_TOUCH:
+        ESP_LOGI(TAG, "TOUCH CNT %u TIP %u ID %u X %5u Y %5u",
+                rpt->touch.count,
+                rpt->touch.fingers[0].tip, rpt->touch.fingers[0].cid,
+                rpt->touch.fingers[0].x, rpt->touch.fingers[0].y);
+        break;
+    case REPORT_ID_GMPAD:
         ESP_LOGI(TAG, "GMPAD L %4d %-4d R %4d %-4d H %02X T %02X%02X BTN %s",
                 gctx.lx >> 8, gctx.ly >> 8, gctx.rx >> 8, gctx.ry >> 8,
                 gctx.dpad, gctx.lt, gctx.rt, format_binary(gctx.btns, 12));
-    } else if (rpt->id == REPORT_ID_SCTRL) {
-        ESP_LOGI(TAG, "SCTRL 0x%02X", rpt->sctrl);
-    } else if (rpt->id == REPORT_ID_SDIAL) {
-        ESP_LOGI(TAG, "SDIAL 0x%04X", *(uint16_t *)rpt->sdial);
+        break;
+    case REPORT_ID_SCTRL:
+        ESP_LOGI(TAG, "SCTRL 0x%02X", rpt->sctrl); break;
+    case REPORT_ID_SDIAL:
+        ESP_LOGI(TAG, "SDIAL 0x%04X", *(uint16_t *)rpt->sdial); break;
     }
     return sent;
 }
@@ -437,7 +460,7 @@ void hid_handle_mouse(
         key_cb(btn, rpt->buttons & btn);
     }
     btns[idx] = rpt->buttons;
-    ESP_LOGI(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
+    ESP_LOGD(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
              xs[idx], ys[idx], rpt->wheel, rpt->pan,
              btns[idx] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
              btns[idx] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
@@ -471,7 +494,7 @@ void hid_handle_abmse(
     xs[idx] = rpt->x;
     ys[idx] = rpt->y;
     btns[idx] = rpt->buttons;
-    ESP_LOGI(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
+    ESP_LOGD(TAG, "X: %5d Y: %5d V: %3d H %3d |%c|%c|%c|",
              xs[idx], ys[idx], rpt->wheel, rpt->pan,
              btns[idx] & MOUSE_BUTTON_LEFT   ? 'L' : ' ',
              btns[idx] & MOUSE_BUTTON_MIDDLE ? 'M' : ' ',
@@ -702,11 +725,11 @@ void hid_handle_keybd(
         }
         if (prev[i] > HID_KEY_ERROR_UNDEFINED && !next_found) {
             if (key_cb) key_cb(prev[i], false);
-            ESP_LOGI(TAG, "%s released", hid_keycode_str(prev[i], pmods[idx]));
+            ESP_LOGD(TAG, "%s released", hid_keycode_str(prev[i], pmods[idx]));
         }
         if (next[i] > HID_KEY_ERROR_UNDEFINED && !prev_found) {
             if (key_cb) key_cb(next[i], true);
-            ESP_LOGI(TAG, "%s pressed modifier %s",
+            ESP_LOGD(TAG, "%s pressed modifier %s",
                      hid_keycode_str(next[i], rpt->modifier),
                      hid_modifier_str(rpt->modifier));
         }

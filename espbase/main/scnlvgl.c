@@ -15,7 +15,8 @@
 #   include "filesys.h"         // for fjoin
 #   include "console.h"         // for console_handle_command
 #   include "hidtool.h"         // for hid_report_t
-#   include "timesync.h"        // for format_datetime
+#   include "sensors.h"         // for tscn_command
+#   include "timesync.h"        // for format_timestamp
 #   include "esp_lvgl_port.h"
 #   define LOGI(...)            ESP_LOGI("LVGL", __VA_ARGS__)
 #   define LOGW(...)            ESP_LOGW("LVGL", __VA_ARGS__)
@@ -34,14 +35,18 @@
 #   define MUTEX()              CreateMutex(NULL, FALSE, NULL)
 #   define ACQUIRE(s, t)        ( (s) ? !WaitForSingleObject((s), (t)) : 0 )
 #   define RELEASE(s)           do { if (s) ReleaseMutex(s); } while (0)
-enum {
-    ERR_NO_ERR,
-    ERR_NO_MEM,
-    ERR_INVALID_ARG,
-    ERR_INVALID_STATE,
-    ERR_NOT_FOUND,
-    ERR_NOT_SUPPORTED
-};
+    enum {
+        ERR_NO_ERR,
+        ERR_NO_MEM,
+        ERR_INVALID_ARG,
+        ERR_INVALID_STATE,
+        ERR_NOT_FOUND,
+        ERR_NOT_SUPPORTED
+    };
+#endif
+
+#ifdef CONFIG_BASE_USE_BTN
+#   include "iot_button.h"      // for BUTTON_XXX
 #endif
 
 #ifdef WITH_LVGL
@@ -135,9 +140,9 @@ static const screen_cb_t inits[] = {
 };
 
 static const lv_indev_type_t types[] = {
-    LV_INDEV_TYPE_POINTER,
-    LV_INDEV_TYPE_KEYPAD,
-    LV_INDEV_TYPE_ENCODER,
+    LV_INDEV_TYPE_POINTER,          // mouse / touchpad
+    LV_INDEV_TYPE_KEYPAD,           // keyboard
+    LV_INDEV_TYPE_ENCODER,          // sdial
 };
 
 static struct {
@@ -526,14 +531,15 @@ static struct {
     char txt[128];
     size_t offset;
 } logs[] = {
-    { NULL, "当前时间: ", 0 },
+    { NULL, "运行时间: ", 0 },
     { NULL, "触摸模式: ", 0 },
     { NULL, "蓝牙状态: ", 0 },
     { NULL, "USB状态: ", 0 },
     { NULL, "侧面按钮: 短按重启 长按关机", 0 },
-    { NULL, "顶面按钮: 切换触摸 长按烧录", 0 },
+    { NULL, "顶面按钮: 切换触摸 长按选区", 0 },
 };
 
+static bool probed = false;
 static lv_timer_t *tscn_timer;
 
 void cb_tscn_update(lv_timer_t *timer) {
@@ -552,9 +558,9 @@ void cb_tscn_update(lv_timer_t *timer) {
         lastts = ts;
     }
     snprintf(logs[0].txt + logs[0].offset, sizeof(logs[0].txt) - logs[0].offset,
-             "%.8s", format_timestamp_us(NULL));
+             "%.8s", format_timestamp(NULL));
     snprintf(logs[1].txt + logs[1].offset, sizeof(logs[1].txt) - logs[1].offset,
-             Config.app.TSCN_MODE);
+             probed ? Config.app.TSCN_MODE : "未连接 / 无法识别");
     snprintf(logs[2].txt + logs[2].offset, sizeof(logs[2].txt) - logs[2].offset,
              "%s%s", Config.sys.BT_MODE, btaddr);
     snprintf(logs[3].txt + logs[3].offset, sizeof(logs[3].txt) - logs[3].offset,
@@ -565,6 +571,7 @@ void cb_tscn_update(lv_timer_t *timer) {
 static int screen_tscn_init(screen_t *scr) {
     if (!( scr->root = screen_active(ctx.disp) )) return ERR_NO_MEM;
     scr->name = "Viz Tscn";
+    probed = tscn_command(NULL) != ERR_NOT_SUPPORTED;
     int lht = 8;
     for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
         lht = MAX(lht, font->line_height + 6);
@@ -645,6 +652,12 @@ static int lvgl_ui_input(hid_report_t *rpt) {
             ctx.keypad.pressed = true;
         }
         RELEASE(ctx.mutex);
+    } else if (rpt->id == REPORT_ID_POINT && ACQUIRE(ctx.mutex, 10)) {
+        if (rpt->point.tip) {
+            ctx.pointer.x = rpt->point.x * ctx.hres * ctx.pointer.scale / 10000;
+            ctx.pointer.y = rpt->point.y * ctx.vres * ctx.pointer.scale / 10000;
+        }
+        RELEASE(ctx.mutex);
     } else if (rpt->id == REPORT_ID_SDIAL && ACQUIRE(ctx.mutex, 10)) {
         switch (rpt->sdial[0]) {
         case SDIAL_L: ctx.encoder.left = true; break;
@@ -691,39 +704,46 @@ static void cb_theme_apply(lv_theme_t *theme, lv_obj_t *obj) {
 
 static void cb_screen_event(lv_event_t *e) {
     if (lv_event_get_code(e) != ctx.event) return;
-    lv_obj_t *obj = lv_event_get_current_target(e);
+    lv_obj_t *root = lv_event_get_current_target(e);
     int *ptr = lv_event_get_param(e);
-    if (!ptr || !obj) return;
+    if (!ptr || !root) return;
+    int btn = *ptr & 0xFF, evt = *ptr >> 8, idx = -1;
     const char *name = NULL;
     LOOPN(i, LEN(ctx.scr)) {
-        if (ctx.scr[i].root == obj) name = ctx.scr[i].name;
+        if (ctx.scr[i].root == root) name = ctx.scr[idx = i].name;
     }
-    if (name) {
-        LOGI("%s got button %d\n", name, *ptr);
+    if (strlen(name ?: "")) {
+        LOGI("%s got button %d %d", name, btn, evt);
     } else {
-        LOGI("%p got button %d\n", obj, *ptr);
+        LOGI("%p got button %d %d", root, btn, evt);
     }
     if (!strcasecmp(name ?: "", "viz tscn")) {
-        int btn = *ptr, idx = -1;
-        static char *modes[] = {
+        int mode = -1;
+        static char last[32] = "", *modes[] = {
             "REL", "REL.ROT1", "REL.ROT2", "REL.ROT3",
             "ABS", "ABS.ROT1", "ABS.ROT2", "ABS.ROT3",
-            "TPD",
+            "TPD", "TPD.ROT1", "TPD.ROT2", "TPD.ROT3",
         };
         LOOPN(i, LEN(modes)) {
-            if (!strcasecmp(modes[i], Config.app.TSCN_MODE)) idx = i;
+            if (!strcasecmp(modes[i], Config.app.TSCN_MODE)) mode = i;
         }
-        if (idx < 0) { idx = 0; }
-        else if (btn == 14) { idx -= 1; }
-        else if (btn == 0) { idx += 1; }
-        idx = MOD(idx, LEN(modes));
-        config_set("app.tscn.mode", modes[idx]);
-        return;
-    }
-    if (0 <= *ptr && *ptr < LEN(ctx.scr)) {
-        screen_change(ctx.scr + *ptr, 300);
-    } else if (ctx.curr == 0) {
-        send_event(lv_obj_get_child(ctx.scr[0].root, 1), LV_EVENT_CLICKED, NULL);
+        if (mode < 0) { mode = 0; }
+        else if (btn == 0) { mode += 1; }
+        else if (btn == 14) { mode -= 1; }
+        if (evt == BUTTON_SINGLE_CLICK) {
+            config_set("app.tscn.mode", modes[MOD(mode, LEN(modes))]);
+        } else if (evt == BUTTON_LONG_PRESS_START) {
+            snprintf(last, sizeof(last), Config.app.TSCN_MODE);
+            if (!config_set("app.tscn.mode", "REC")) last[0] = '\0';
+        } else if (evt == BUTTON_LONG_PRESS_UP) {
+            if (config_set("app.tscn.mode", last)) last[0] = '\0';
+        }
+    } else if (0 <= btn && btn < LEN(ctx.scr)) {
+        if (btn != idx) {
+            screen_change(ctx.scr + btn, 300);
+        } else if (!strcasecmp(name ?: "", "menu")) {
+            send_event(lv_obj_get_child(root, 1), LV_EVENT_CLICKED, NULL);
+        }
     }
 }
 

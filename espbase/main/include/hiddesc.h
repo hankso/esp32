@@ -12,6 +12,7 @@
 
 /*
  * Copied from tinyusb-v0.9.0/src/class/hid/hid.h
+ * And HID Usage Table for Universal Serial Device 1.21
  */
 
 #ifndef HID_REPORT_DATA_0
@@ -96,7 +97,7 @@ enum {
 #   define HID_USAGE_MAX(x)         HID_REPORT_ITEM(x, 2, RI_TYPE_LOCAL, 1)
 #   define HID_USAGE_MAX_N(x, n)    HID_REPORT_ITEM(x, 2, RI_TYPE_LOCAL, n)
 
-/// HID Usage Table - Table 1: Usage Page Summary
+// Table 3.1: Usage Page Summary
 enum {
     HID_USAGE_PAGE_DESKTOP         = 0x01,
     HID_USAGE_PAGE_SIMULATE        = 0x02,
@@ -125,7 +126,7 @@ enum {
     HID_USAGE_PAGE_VENDOR          = 0xFF00 // 0xFF00 - 0xFFFF
 };
 
-/// HID Usage Table - Table 6: Generic Desktop Page
+// Table 4.1: Generic Desktop Page
 enum {
     HID_USAGE_DESKTOP_POINTER                               = 0x01,
     HID_USAGE_DESKTOP_MOUSE                                 = 0x02,
@@ -135,6 +136,11 @@ enum {
     HID_USAGE_DESKTOP_KEYPAD                                = 0x07,
     HID_USAGE_DESKTOP_MULTI_AXIS_CONTROLLER                 = 0x08,
     HID_USAGE_DESKTOP_TABLET_PC_SYSTEM                      = 0x09,
+    HID_USAGE_DESKTOP_WATER_COOLING                         = 0x0A,
+    HID_USAGE_DESKTOP_COMPUTER_CHASSIS                      = 0x0B,
+    HID_USAGE_DESKTOP_WIRELESS_RADIO                        = 0x0C,
+    HID_USAGE_DESKTOP_PORTABLE_DEVICE                       = 0x0D,
+    HID_USAGE_DESKTOP_SYSTEM_MULTI_AXIS                     = 0x0E,
     HID_USAGE_DESKTOP_X                                     = 0x30,
     HID_USAGE_DESKTOP_Y                                     = 0x31,
     HID_USAGE_DESKTOP_Z                                     = 0x32,
@@ -198,29 +204,19 @@ enum {
     HID_USAGE_DESKTOP_SYSTEM_DISPLAY_LCD_AUTOSCALE          = 0xB7
 };
 
-/// HID Usage Table: Consumer Page (0x0C)
-/// Only contains controls that supported by Windows (whole list is too long)
+// Table 15.1: Consumer Page
+// Only contains controls that supported by Windows (whole list is too long)
 enum {
-    // Generic Control
     HID_USAGE_CONSUMER_CONTROL                           = 0x0001,
-
-    // Power Control
     HID_USAGE_CONSUMER_POWER                             = 0x0030,
     HID_USAGE_CONSUMER_RESET                             = 0x0031,
     HID_USAGE_CONSUMER_SLEEP                             = 0x0032,
-
-    // Screen Brightness
     HID_USAGE_CONSUMER_BRIGHTNESS_INCREMENT              = 0x006F,
     HID_USAGE_CONSUMER_BRIGHTNESS_DECREMENT              = 0x0070,
-
-    // These HID usages operate only on mobile systems (battery powered) and
-    // require Windows 8 (build 8302 or greater).
     HID_USAGE_CONSUMER_WIRELESS_RADIO_CONTROLS           = 0x000C,
     HID_USAGE_CONSUMER_WIRELESS_RADIO_BUTTONS            = 0x00C6,
     HID_USAGE_CONSUMER_WIRELESS_RADIO_LED                = 0x00C7,
     HID_USAGE_CONSUMER_WIRELESS_RADIO_SLIDER_SWITCH      = 0x00C8,
-
-    // Media Control
     HID_USAGE_CONSUMER_PLAY_PAUSE                        = 0x00CD,
     HID_USAGE_CONSUMER_SCAN_NEXT                         = 0x00B5,
     HID_USAGE_CONSUMER_SCAN_PREVIOUS                     = 0x00B6,
@@ -236,14 +232,10 @@ enum {
     HID_USAGE_CONSUMER_BASS_DECREMENT                    = 0x0153,
     HID_USAGE_CONSUMER_TREBLE_INCREMENT                  = 0x0154,
     HID_USAGE_CONSUMER_TREBLE_DECREMENT                  = 0x0155,
-
-    // Application Launcher
     HID_USAGE_CONSUMER_AL_CONSUMER_CONTROL_CONFIGURATION = 0x0183,
     HID_USAGE_CONSUMER_AL_EMAIL_READER                   = 0x018A,
     HID_USAGE_CONSUMER_AL_CALCULATOR                     = 0x0192,
     HID_USAGE_CONSUMER_AL_LOCAL_BROWSER                  = 0x0194,
-
-    // Browser/Explorer Specific
     HID_USAGE_CONSUMER_AC_SEARCH                         = 0x0221,
     HID_USAGE_CONSUMER_AC_HOME                           = 0x0223,
     HID_USAGE_CONSUMER_AC_BACK                           = 0x0224,
@@ -251,9 +243,42 @@ enum {
     HID_USAGE_CONSUMER_AC_STOP                           = 0x0226,
     HID_USAGE_CONSUMER_AC_REFRESH                        = 0x0227,
     HID_USAGE_CONSUMER_AC_BOOKMARKS                      = 0x022A,
-
-    // Mouse Horizontal scroll
     HID_USAGE_CONSUMER_AC_PAN                            = 0x0238,
+};
+
+// Table 16.1: Digitizer Page
+enum {
+    HID_USAGE_DIGITIZER_DIGITIZER               = 0x01,
+    HID_USAGE_DIGITIZER_PEN                     = 0x02,
+    HID_USAGE_DIGITIZER_LIGHT_PEN               = 0x03,
+    HID_USAGE_DIGITIZER_TOUCH_SCREEN            = 0x04,
+    HID_USAGE_DIGITIZER_TOUCH_PAD               = 0x05,
+    HID_USAGE_DIGITIZER_WHITEBOARD              = 0x06,
+    HID_USAGE_DIGITIZER_COORDINATE_MEASURING    = 0x07,
+    HID_USAGE_DIGITIZER_3D_DIGITITER            = 0x08,
+    HID_USAGE_DIGITIZER_STEREO_PLOTTER          = 0x09,
+    HID_USAGE_DIGITIZER_DEVICE_CONFIGURATION    = 0x0E,
+    HID_USAGE_DIGITIZER_STYLUS                  = 0x20,
+    HID_USAGE_DIGITIZER_PUCK                    = 0x21,
+    HID_USAGE_DIGITIZER_FINGER                  = 0x22,
+    HID_USAGE_DIGITIZER_DEVICE_SETTING          = 0x23,
+    HID_USAGE_DIGITIZER_CHARACTER_GESTURE       = 0x24,
+    HID_USAGE_DIGITIZER_TIP_PRESSURE            = 0x30,
+    HID_USAGE_DIGITIZER_IN_RANGE                = 0x32,
+    HID_USAGE_DIGITIZER_TOUCH                   = 0x33,
+    HID_USAGE_DIGITIZER_UNTOUCH                 = 0x34,
+    HID_USAGE_DIGITIZER_TAP                     = 0x35,
+    HID_USAGE_DIGITIZER_TIP_SWITCH              = 0x42,
+    HID_USAGE_DIGITIZER_WIDTH                   = 0x48,
+    HID_USAGE_DIGITIZER_HEIGHT                  = 0x49,
+    HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER      = 0x51,
+    HID_USAGE_DIGITIZER_DEVICE_MODE             = 0x52,
+    HID_USAGE_DIGITIZER_DEVICE_IDENTIFIER       = 0x53,
+    HID_USAGE_DIGITIZER_CONTACT_COUNT           = 0x54,
+    HID_USAGE_DIGITIZER_CONTACT_COUNT_MAX       = 0x55,
+    HID_USAGE_DIGITIZER_SCAN_TIME               = 0x56,
+    HID_USAGE_DIGITIZER_SURFACE_SWITCH          = 0x57,
+    HID_USAGE_DIGITIZER_BUTTON_SWITCH           = 0x58,
 };
 #endif // HID_REPORT_DATA_0
 
@@ -261,6 +286,7 @@ enum {
  * Modified on tinyusb-v0.9.0/class/hid/hid_device.h
  */
 
+// 69 Bytes with REPORT_ID
 #define HID_REPORT_DESC_KEYBD(...)                                          \
     HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP     )                          ,\
     HID_USAGE      ( HID_USAGE_DESKTOP_KEYBOARD )                          ,\
@@ -302,6 +328,7 @@ enum {
             HID_OUTPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )    ,\
     HID_COLLECTION_END
 
+// 63 Bytes with REPORT_ID
 #define HID_REPORT_DESC_MOUSE(...)                                          \
     HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP      )                         ,\
     HID_USAGE      ( HID_USAGE_DESKTOP_MOUSE     )                         ,\
@@ -339,6 +366,7 @@ enum {
         HID_COLLECTION_END                                                 ,\
     HID_COLLECTION_END
 
+// 74 Bytes with REPORT_ID
 #define HID_REPORT_DESC_ABMSE(...)                                          \
     HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP      )                         ,\
     HID_USAGE      ( HID_USAGE_DESKTOP_MOUSE     )                         ,\
@@ -382,6 +410,184 @@ enum {
         HID_COLLECTION_END                                                 ,\
     HID_COLLECTION_END
 
+// 50 Bytes with REPORT_ID
+#define HID_REPORT_DESC_POINT(...)                                          \
+    HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER         )                    ,\
+    HID_USAGE      ( HID_USAGE_DIGITIZER_TOUCH_SCREEN )                    ,\
+    HID_COLLECTION ( HID_COLLECTION_APPLICATION       )                    ,\
+        __VA_ARGS__ /* Report ID if any */                                  \
+        HID_USAGE      ( HID_USAGE_DIGITIZER_STYLUS )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_PHYSICAL    )                      ,\
+            /* 1-byte Tip Switch, In Range */                               \
+            HID_USAGE ( HID_USAGE_DIGITIZER_TIP_SWITCH )                   ,\
+            HID_USAGE ( HID_USAGE_DIGITIZER_IN_RANGE   )                   ,\
+                HID_LOGICAL_MIN ( 0                                      ) ,\
+                HID_LOGICAL_MAX ( 1                                      ) ,\
+                HID_REPORT_COUNT( 8                                      ) ,\
+                HID_REPORT_SIZE ( 1                                      ) ,\
+                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE ) ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP )                      ,\
+            HID_USAGE      ( HID_USAGE_DESKTOP_POINTER )                   ,\
+            HID_COLLECTION ( HID_COLLECTION_PHYSICAL   )                   ,\
+                HID_USAGE       ( HID_USAGE_DESKTOP_X                    ) ,\
+                HID_USAGE       ( HID_USAGE_DESKTOP_Y                    ) ,\
+                HID_LOGICAL_MIN ( 0                                      ) ,\
+                HID_LOGICAL_MAX_N( 10000, 2                              ) ,\
+                HID_REPORT_COUNT( 2                                      ) ,\
+                HID_REPORT_SIZE ( 16                                     ) ,\
+                HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE ) ,\
+            HID_COLLECTION_END                                             ,\
+        HID_COLLECTION_END                                                 ,\
+    HID_COLLECTION_END
+
+// TODO: fix 10-fingers touch hid desc
+#define HID_REPORT_DESC_TOUCH(...)                                          \
+    HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER         )                    ,\
+    HID_USAGE      ( HID_USAGE_DIGITIZER_TOUCH_SCREEN )                    ,\
+    HID_COLLECTION ( HID_COLLECTION_APPLICATION       )                    ,\
+        __VA_ARGS__ /* Report ID if any */                                  \
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_LOGICAL     )                      ,\
+            /* 1-byte Tip Switch, Contact Indentifier */                    \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_TIP_SWITCH         )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX ( 1                                      )     ,\
+            HID_REPORT_COUNT( 4                                      )     ,\
+            HID_REPORT_SIZE ( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER )     ,\
+            HID_LOGICAL_MAX ( 15                                     )     ,\
+            HID_REPORT_SIZE ( 4                                      )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP                 )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_X                    )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_Y                    )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX_N( 10000, 2                              )     ,\
+            HID_REPORT_COUNT( 2                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+        HID_COLLECTION_END                                                 ,\
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_LOGICAL     )                      ,\
+            /* 1-byte Tip Switch, Contact Indentifier */                    \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_TIP_SWITCH         )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX ( 1                                      )     ,\
+            HID_REPORT_COUNT( 4                                      )     ,\
+            HID_REPORT_SIZE ( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER )     ,\
+            HID_LOGICAL_MAX ( 15                                     )     ,\
+            HID_REPORT_SIZE ( 4                                      )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP                 )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_X                    )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_Y                    )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX_N( 10000, 2                              )     ,\
+            HID_REPORT_COUNT( 2                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+        HID_COLLECTION_END                                                 ,\
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_LOGICAL     )                      ,\
+            /* 1-byte Tip Switch, Contact Indentifier */                    \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_TIP_SWITCH         )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX ( 1                                      )     ,\
+            HID_REPORT_COUNT( 4                                      )     ,\
+            HID_REPORT_SIZE ( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER )     ,\
+            HID_LOGICAL_MAX ( 15                                     )     ,\
+            HID_REPORT_SIZE ( 4                                      )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP                 )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_X                    )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_Y                    )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX_N( 10000, 2                              )     ,\
+            HID_REPORT_COUNT( 2                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+        HID_COLLECTION_END                                                 ,\
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_LOGICAL     )                      ,\
+            /* 1-byte Tip Switch, Contact Indentifier */                    \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_TIP_SWITCH         )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX ( 1                                      )     ,\
+            HID_REPORT_COUNT( 4                                      )     ,\
+            HID_REPORT_SIZE ( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER )     ,\
+            HID_LOGICAL_MAX ( 15                                     )     ,\
+            HID_REPORT_SIZE ( 4                                      )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP                 )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_X                    )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_Y                    )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX_N( 10000, 2                              )     ,\
+            HID_REPORT_COUNT( 2                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+        HID_COLLECTION_END                                                 ,\
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_FINGER )                      ,\
+        HID_COLLECTION ( HID_COLLECTION_LOGICAL     )                      ,\
+            /* 1-byte Tip Switch, Contact Indentifier */                    \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_TIP_SWITCH         )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX ( 1                                      )     ,\
+            HID_REPORT_COUNT( 4                                      )     ,\
+            HID_REPORT_SIZE ( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_IDENTIFIER )     ,\
+            HID_LOGICAL_MAX ( 15                                     )     ,\
+            HID_REPORT_SIZE ( 4                                      )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 4-byte X, Y [0%, 100%] */                                    \
+            HID_USAGE_PAGE  ( HID_USAGE_PAGE_DESKTOP                 )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_X                    )     ,\
+            HID_USAGE       ( HID_USAGE_DESKTOP_Y                    )     ,\
+            HID_LOGICAL_MIN ( 0                                      )     ,\
+            HID_LOGICAL_MAX_N( 10000, 2                              )     ,\
+            HID_REPORT_COUNT( 2                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+        HID_COLLECTION_END                                                 ,\
+        HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER   )                      ,\
+            /* 2-byte Scan time [0, 65545] */                               \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_SCAN_TIME          )     ,\
+            HID_LOGICAL_MAX_N( 0xFFFF, 2                             )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_REPORT_SIZE ( 16                                     )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+            /* 1-byte Contact count */                                      \
+            HID_USAGE       ( HID_USAGE_DIGITIZER_CONTACT_COUNT      )     ,\
+            HID_LOGICAL_MAX ( 127                                    )     ,\
+            HID_REPORT_COUNT( 1                                      )     ,\
+            HID_REPORT_SIZE ( 8                                      )     ,\
+            HID_INPUT       ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )     ,\
+    HID_COLLECTION_END
+
+// 60 Bytes with REPORT_ID
 #define HID_REPORT_DESC_GMPAD(...)                                          \
     HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP     )                          ,\
     HID_USAGE      ( HID_USAGE_DESKTOP_GAMEPAD  )                          ,\
@@ -422,6 +628,7 @@ enum {
             HID_INPUT        ( HID_DATA | HID_VARIABLE | HID_ABSOLUTE )    ,\
     HID_COLLECTION_END
 
+// 23 Bytes with REPORT_ID
 #define HID_REPORT_DESC_SCTRL(...)                                          \
     HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP           )                    ,\
     HID_USAGE      ( HID_USAGE_DESKTOP_SYSTEM_CONTROL )                    ,\
@@ -436,13 +643,14 @@ enum {
         HID_INPUT        ( HID_DATA | HID_ARRAY | HID_ABSOLUTE )           ,\
     HID_COLLECTION_END
 
+// 56 Bytes with REPORT_ID
 #define HID_REPORT_DESC_SDIAL(...)                                          \
-    HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP     )                          ,\
-    HID_USAGE      ( 0x0E                       )                          ,\
-    HID_COLLECTION ( HID_COLLECTION_APPLICATION )                          ,\
+    HID_USAGE_PAGE ( HID_USAGE_PAGE_DESKTOP              )                 ,\
+    HID_USAGE      ( HID_USAGE_DESKTOP_SYSTEM_MULTI_AXIS )                 ,\
+    HID_COLLECTION ( HID_COLLECTION_APPLICATION          )                 ,\
         __VA_ARGS__ /* Report ID if any */                                  \
         HID_USAGE_PAGE ( HID_USAGE_PAGE_DIGITIZER )                        ,\
-        HID_USAGE      ( 0x21                     )                        ,\
+        HID_USAGE      ( HID_USAGE_DIGITIZER_PUCK )                        ,\
         HID_COLLECTION ( HID_COLLECTION_PHYSICAL  )                        ,\
             /* 1-bit SDIAL_U / SDIAL_D */                                   \
             HID_USAGE_PAGE     ( HID_USAGE_PAGE_BUTTON                  )  ,\
@@ -466,12 +674,3 @@ enum {
             HID_INPUT          ( HID_DATA | HID_VARIABLE | HID_RELATIVE )  ,\
         HID_COLLECTION_END                                                 ,\
     HID_COLLECTION_END
-
-/*
- * Modified on https://github.com/Mystfit/ESP32-BLE-CompositeHID
- *         and https://github.com/qingwa2009/MyBLEGamepad
- */
-
-#define HID_REPORT_DESC_XINPUT(INPUT_ID) HID_REPORT_ID(INPUT_ID)
-#define HID_REPORT_DESC_SWITCH(INPUT_ID) HID_REPORT_ID(INPUT_ID)
-#define HID_REPORT_DESC_DSENSE(INPUT_ID) HID_REPORT_ID(INPUT_ID)

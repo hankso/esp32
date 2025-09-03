@@ -102,18 +102,18 @@ void config_stats();                    // print configurations
 const char * config_get(const char *key);
 bool config_set(const char *key, const char *val);
 
-/* NVS helper functions.
- * These are similar as Arduino-ESP32 library `Preference`.
- * But more lightweight and pure ESP-IDF.
- */
+/* NVS helper functions (similar like Arduino-ESP32 library `Preference`) */
 esp_err_t config_nvs_init();
 esp_err_t config_nvs_open(const char *ns, bool ro); // open namespace in NVS
-esp_err_t config_nvs_commit();          // must be called after config_nvs_open
-esp_err_t config_nvs_close();           // close NVS with auto commit
+int config_nvs_read(const char *key, void *buf, size_t size);
+int config_nvs_write(const char *key, const void *val, size_t len);
 bool config_nvs_remove(const char *key);// remove one entry in NVS
 bool config_nvs_clear();                // remove all entries in NVS
-bool config_nvs_load();                 // NVS Flash => Config RAM
-bool config_nvs_dump();                 // Config RAM => NVS Flash
+esp_err_t config_nvs_commit();          // must be called after config_nvs_open
+esp_err_t config_nvs_close();           // close NVS with auto commit
+
+bool config_nvs_load();                 // NVS Flash => RAM Config
+bool config_nvs_dump();                 // RAM Config => NVS Flash
 void config_nvs_stats();                // get NVS partition information
 void config_nvs_list(bool all);         // print [all] entries in NVS
 

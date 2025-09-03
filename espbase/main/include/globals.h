@@ -24,8 +24,6 @@
 #include "esp_event.h"
 #include "esp_idf_version.h"
 
-#undef CONFIG_BASE_USE_WIFI
-
 // GCC tricks
 
 #define UNUSED              __attribute__((unused))

@@ -65,7 +65,7 @@ static void tpad_initialize() {
     ESP_ERROR_CHECK( touch_pad_init() );
     touch_pad_set_voltage(
         TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V);
-    touch_pad_config(tpad, 0); // threshold=0
+    touch_pad_config(tpad, 0);  // threshold=0
     touch_pad_filter_start(10); // period=10ms
     ESP_LOGI(TAG, "Touch pad is %d", tpad_read());
 }
@@ -119,12 +119,43 @@ uint16_t tpad_read() { return 0; }
 static struct {
     TaskHandle_t task;
     uint8_t bus, addr;
-    bool stop;
-    bool axes[3];           // inv x, inv y, swap xy
+    uint16_t hres[4], vres[4];
+#   define RAMAX            0
+#   define RSMIN            1
+#   define RSMAX            2
+#   define RSLEN            3
+    bool stop, axes[3];
+#   define AINVX            0
+#   define AINVY            1
+#   define ASWAP            2
     void (*hdlr)(tscn_data_t *dat);
 } tscn;
 
-static const char *tscn_gstr[] = {
+const struct {
+    const char *name;
+    uint8_t reg;
+} tscn_desc[] = {
+    { "Touch threshold",    TP_TH_GROUP },
+    { "Filter function",    TP_TH_DIFF },
+    { "Auto sleep mode",    TP_CTRL },
+    { "Auto sleep time",    TP_TIME_MONITOR },
+    { "Active data rate",   TP_TR_ACTIVE },
+    { "Monitor data rate",  TP_TR_MONITOR },
+    { "Move offset L2R",    TP_OFFSET_LR },
+    { "Move dist L2R",      TP_DIST_LR },
+    { "Move offset U2D",    TP_OFFSET_UD },
+    { "Move dist U2D",      TP_DIST_UD },
+    { "Rotate angle",       TP_RADIAN_VALUE },
+    { "Zoom dist",          TP_DIST_ZOOM },
+    { "Trigger mode",       TP_INTR_MODE },
+    { "Power mode",         TP_POWER_MODE },
+    { "Library ID",         TP_LIB_VER_H },
+    { "Firmware ID",        TP_FIRMW_ID },
+    { "Panel ID",           TP_PANEL_ID },
+    { "Release ID",         TP_RELEASE_ID },
+};
+
+const char *tscn_gstr[] = {
     [GES_NONE]    = "",
     [GES_MOVE_UP] = "Move Up",
     [GES_MOVE_RT] = "Move Right",
@@ -134,85 +165,142 @@ static const char *tscn_gstr[] = {
     [GES_ZOOM_OT] = "Zoom Out",
 };
 
+const char *tscn_rstr[] = {
+    [RAMAX] = "Total screen",
+    [RSMIN] = "Select min",
+    [RSMAX] = "Select max",
+    [RSLEN] = "Select size"
+};
+
+static void tscn_post_process(tscn_data_t *dat) {
+    if (!dat || dat->applied) return;
+    LOOPN(i, dat->num) {
+        uint16_t px = dat->pts[i].px, py = dat->pts[i].py;
+        if (tscn.hres[RSLEN] != tscn.hres[RAMAX] && tscn.hres[RSLEN]) {
+            int dx = dat->pts[i].x - tscn.hres[RSMIN];
+            px = CONS(dx * 10000 / tscn.hres[RSLEN], 0, 10000);
+        }
+        if (tscn.vres[RSLEN] != tscn.vres[RAMAX] && tscn.vres[RSLEN]) {
+            int dy = dat->pts[i].y - tscn.vres[RSMIN];
+            py = CONS(dy * 10000 / tscn.vres[RSLEN], 0, 10000);
+        }
+        if (tscn.axes[AINVX]) px = 10000 - px;
+        if (tscn.axes[AINVY]) py = 10000 - py;
+        if (tscn.axes[ASWAP]) {
+            dat->pts[i].x = (dat->pts[i].px = py) * tscn.vres[RAMAX] / 10000;
+            dat->pts[i].y = (dat->pts[i].py = px) * tscn.hres[RAMAX] / 10000;
+        } else if (dat->pts[i].px != px || dat->pts[i].py != py) {
+            dat->pts[i].x = (dat->pts[i].px = px) * tscn.hres[RAMAX] / 10000;
+            dat->pts[i].y = (dat->pts[i].py = py) * tscn.vres[RAMAX] / 10000;
+        }
+    }
+    dat->applied = true;
+}
+
+static void tscn_handle_selection(tscn_data_t *dat) {
+    tscn_print(dat, stdout, true);
+    LOOPN(i, dat->num) {
+        tscn.hres[RSMAX] = MAX(tscn.hres[RSMAX], dat->pts[i].x);
+        tscn.vres[RSMAX] = MAX(tscn.vres[RSMAX], dat->pts[i].y);
+        tscn.hres[RSMIN] = MIN(tscn.hres[RSMIN], dat->pts[i].x);
+        tscn.vres[RSMIN] = MIN(tscn.vres[RSMIN], dat->pts[i].y);
+        tscn.hres[RSLEN] = tscn.hres[RSMAX] - tscn.hres[RSMIN];
+        tscn.vres[RSLEN] = tscn.vres[RSMAX] - tscn.vres[RSMIN];
+    }
+    if (!dat->num) return;
+    uint16_t px = dat->pts[0].px, py = dat->pts[0].py;
+    if (tscn.axes[AINVX]) px = 10000 - px;
+    if (tscn.axes[AINVY]) py = 10000 - py;
+    if (tscn.axes[ASWAP]) {
+        hid_report_mouse_moveto(HID_TARGET_SCN, py, px);
+    } else {
+        hid_report_mouse_moveto(HID_TARGET_SCN, px, py);
+    }
+}
+
 static void tscn_handle_relative(tscn_data_t *dat) {
     static uint16_t x, y;
     if (dat->num != 1) {
         x = y = 0;
-    } else if (!x && !y) {
-        x = dat->pts[0].x;
-        y = dat->pts[0].y;
-    } else {
-        int dx = x, dy = y;
-        x = dat->pts[0].x;
-        y = dat->pts[0].y;
-        dx = (x - dx) / (tscn.axes[0] ? -3 : 3);
-        dy = (y - dy) / (tscn.axes[1] ? -3 : 3);
-        if (tscn.axes[2]) {
-            hid_report_mouse_move(HID_TARGET_ALL, dy, dx);
-        } else {
-            hid_report_mouse_move(HID_TARGET_ALL, dx, dy);
-        }
+        return;
     }
+    int8_t dx = (dat->pts[0].x - x) / 3;
+    int8_t dy = (dat->pts[0].y - y) / 3;
+    if ((x || y) && (dx || dy)) hid_report_mouse_move(HID_TARGET_ALL, dx, dy);
+    x = dat->pts[0].x;
+    y = dat->pts[0].y;
 }
 
 static void tscn_handle_absolute(tscn_data_t *dat) {
-    if (dat->num != 1) return;
-    float nx = dat->pts[0].x / 1440.0;
-    float ny = dat->pts[0].y / 1920.0;
-    if (tscn.axes[0]) nx = 1 - nx;
-    if (tscn.axes[1]) ny = 1 - ny;
-    uint16_t x = (tscn.axes[2] ? ny : nx) * 0x7FFF;
-    uint16_t y = (tscn.axes[2] ? nx : ny) * 0x7FFF;
-    hid_report_mouse_moveto(HID_TARGET_ALL, x, y);
+    if (!dat->num) return;
+    hid_report_mouse_moveto(
+        HID_TARGET_ALL,
+        dat->pts[0].px * 0x7FFF / 10000,
+        dat->pts[0].py * 0x7FFF / 10000);
 }
 
 static void tscn_handle_touchpad(tscn_data_t *dat) {
+#ifdef CONFIG_BASE_BOARD_S3NL191
     hid_report_t report = {
-        .id = REPORT_ID_TOUCH,
-        .touch = {
-            .count = dat->num,
-            .scan_time = 0,
+        .id = REPORT_ID_POINT,
+        .point = {
+            .tip = !!dat->num,
+            .rng = true,
+            .x = dat->pts[0].px,
+            .y = dat->pts[0].py,
         }
     };
-    LOOPN(i, dat->num) {
-        report.touch.fingers[i].tip = true;
+    hid_report_send(HID_TARGET_ALL, &report);
+#else
+    static hid_report_t report = {
+        .id = REPORT_ID_TOUCH,
+        .touch = { .rate = 0x0101 }
+    };
+    uint32_t x, y, num = MIN(LEN(report.touch.fingers), dat->num);
+    memset(&report.touch, 0, sizeof(hid_touch_report_t));
+    report.touch.count = num;
+    LOOPN(i, num) {
+        report.touch.fingers[i].tip = dat->pts[i].evt != 1;
         report.touch.fingers[i].cid = dat->pts[i].id;
-        report.touch.fingers[i].x = dat->pts[i].x;
-        report.touch.fingers[i].y = dat->pts[i].y;
+        report.touch.fingers[i].x   = dat->pts[i].px;
+        report.touch.fingers[i].y   = dat->pts[i].py;
     }
     hid_report_send(HID_TARGET_ALL, &report);
+#endif
 }
 
 static void tscn_handle_gesture(tscn_data_t *next, tscn_data_t *prev) {
     static uint16_t x, y;
-    static uint64_t down, last, click = TIMEOUT(120), dblclick = TIMEOUT(50);
+    static uint64_t t[16], single = TIMEOUT(350), multiple = TIMEOUT(50);
     if (next->num > prev->num) {
         if (!prev->num) {                               // first finger
             x = next->pts[0].x;
             y = next->pts[0].y;
-            down = xTaskGetTickCount();
+            t[0] = xTaskGetTickCount();
         }
     } else if (next->num < prev->num) {
-        uint64_t ts = xTaskGetTickCount(), dt = ts - down, btn = 0;
-        if (prev->num == 2) {
-            if (next->num == 1) {                       // 2 -> 1
-                last = ts;
-            } else if (dt < click) {                    // 2 -> 0
-                btn = MOUSE_BUTTON_RIGHT;
-            }
-        } else if (prev->num == 1 && dt < click) {      // 1 -> 0
-            if ((ts - last) < dblclick) {
-                btn = MOUSE_BUTTON_RIGHT;
-            } else if (ABS(prev->pts[0].x - x) < 10 &&
-                       ABS(prev->pts[0].y - y) < 10) {  // no movement
-                btn = MOUSE_BUTTON_LEFT;
-            }
+        uint64_t dt = (t[prev->num] = xTaskGetTickCount()) - t[0];
+        if (next->num || dt > single) return;
+        uint8_t btn = 0;
+        if (prev->num == 3) {
+            btn = MOUSE_BUTTON_MIDDLE;
+        } else if (prev->num == 2) {
+            btn = MOUSE_BUTTON_RIGHT;
+        } else if (prev->num != 1) {
+            // do nothing
+        } else if ((t[1] - t[3]) < multiple * 2) {
+            btn = MOUSE_BUTTON_MIDDLE;
+        } else if ((t[1] - t[2]) < multiple) {
+            btn = MOUSE_BUTTON_RIGHT;
+        } else if (ABS(prev->pts[0].x - x) < 10 &&
+                   ABS(prev->pts[0].y - y) < 10) {      // no movement
+            btn = MOUSE_BUTTON_LEFT;
         }
         if (btn) {
             hid_report_mouse_button(HID_TARGET_ALL, btn);
             hid_report_mouse_button(HID_TARGET_ALL, 0);
         }
-        if (!next->num) x = y = down = last = 0;
+        if (!next->num) x = y = t[0] = 0;
     } else if (next->num == 2) {                        // two fingers
         int dx0 = next->pts[0].x - prev->pts[0].x;
         int dy0 = next->pts[0].y - prev->pts[0].y;
@@ -220,14 +308,9 @@ static void tscn_handle_gesture(tscn_data_t *next, tscn_data_t *prev) {
         int dy1 = next->pts[1].y - prev->pts[1].y;
         bool sx = (dx0 > 0) == (dx1 > 0), sy = (dy0 > 0) == (dy1 > 0);
         if (sx != sy) return;                           // same direction
-        int dx = (dx0 + dx1) / (tscn.axes[0] ? -3 : 3);
-        int dy = (dy0 + dy1) / (tscn.axes[1] ? 3 : -3);
-        if (!dx && !dy) return;
-        if (tscn.axes[2]) {
-            hid_report_mouse_scroll(HID_TARGET_ALL, dx, dy);
-        } else {
-            hid_report_mouse_scroll(HID_TARGET_ALL, dy, dx);
-        }
+        int dx = (dx0 + dx1) / (tscn.axes[ASWAP] ? -4 : 4);
+        int dy = (dy0 + dy1) / (tscn.axes[ASWAP] ? 4 : -4);
+        if (dx || dy) hid_report_mouse_scroll(HID_TARGET_ALL, dy, dx);
     }
 }
 
@@ -238,12 +321,17 @@ static void tscn_task(void *arg) {
     TickType_t timeout = TIMEOUT(1000);                 // 1s
     while (1) {
         if (tscn.stop && !ulTaskNotifyTake(pdTRUE, timeout)) continue;
-        if (tscn_read(buf + idx)) {
+        if (tscn_read(buf + idx, false)) {
             tscn.stop = true;
-        } else if (memcmp(buf, buf + 1, sizeof(tscn_data_t))) {
-            /* tscn_print(buf + idx, stdout, true); */
+            continue;
+        }
+        if (tscn.hdlr != tscn_handle_selection)
+            tscn_post_process(buf + idx);
+        if (memcmp(buf, buf + 1, sizeof(tscn_data_t))) {
+            // tscn_print(buf + idx, stdout, true);
             tscn.hdlr(buf + idx);
-            if (tscn.hdlr != tscn_handle_touchpad)
+            if (tscn.hdlr != tscn_handle_touchpad &&
+                tscn.hdlr != tscn_handle_selection)
                 tscn_handle_gesture(buf + idx, buf + !idx);
             idx = !idx;
         }
@@ -252,85 +340,123 @@ static void tscn_task(void *arg) {
     vTaskDelete(tscn.task = NULL);
 }
 
+static esp_err_t tscn_sync() {
+    if (tscn.hdlr == tscn_handle_selection) {
+        config_nvs_open("tscn", false);
+        config_nvs_write("hres", tscn.hres, sizeof(tscn.hres));
+        config_nvs_write("vres", tscn.vres, sizeof(tscn.vres));
+        config_nvs_close();
+    }
+    if (strcasestr(Config.app.TSCN_MODE, "REC")) {
+        tscn.hres[RSMIN] = tscn.hres[RSLEN] = tscn.hres[RAMAX];
+        tscn.vres[RSMIN] = tscn.vres[RSLEN] = tscn.vres[RAMAX];
+        tscn.hres[RSMAX] = tscn.vres[RSMAX] = 0;
+        tscn.hdlr = tscn_handle_selection;
+    } else if (strcasestr(Config.app.TSCN_MODE, "ABS")) {
+        tscn.hdlr = tscn_handle_absolute;
+    } else if (strcasestr(Config.app.TSCN_MODE, "TPD")) {
+        tscn.hdlr = tscn_handle_touchpad;
+    } else {
+        tscn.hdlr = tscn_handle_relative;
+    }
+    tscn.axes[AINVX] = strcasestr(Config.app.TSCN_MODE, "INVX");
+    tscn.axes[AINVY] = strcasestr(Config.app.TSCN_MODE, "INVY");
+    tscn.axes[ASWAP] = false;
+    const char *rot = strcasestr(Config.app.TSCN_MODE, "ROT");
+    switch (rot ? rot[3] : '\0') {
+    case '1': tscn.axes[AINVY] ^= true; tscn.axes[ASWAP] = true; break;
+    case '2': tscn.axes[AINVX] ^= true; tscn.axes[AINVY] ^= true; break;
+    case '3': tscn.axes[AINVX] ^= true; tscn.axes[ASWAP] = true; break;
+    }
+    ESP_LOGI(TAG, "TSCN: current mode %s", Config.app.TSCN_MODE);
+    if (tscn.task) return ESP_OK;
+#   ifdef CONFIG_BASE_GPIO_INT
+    tscn.stop = true;
+#   endif
+    if (xTaskCreate(tscn_task, "tscn", 4096, NULL, 5, &tscn.task) == pdTRUE)
+        return ESP_OK;
+    ESP_LOGW(TAG, "TSCN: task creation failed");
+    return ESP_ERR_NO_MEM;
+}
+
+static void tscn_oncfg(void *a, esp_event_base_t base, int32_t id, void *data) {
+    const char *key = data;
+    if (base != CFG_EVENT || id != CFG_UPDATE || !strlen(key ?: "")) return;
+    if (strcasestr(key, "app.tscn.mode")) tscn_sync();
+}
+
 static void tscn_initialize() {
     const char *chip;
-    const uint8_t v3 = 0x79, v6 = 0x11;
+    uint8_t bus = NUM_I2C, addr = 0x38;
+#   ifdef CONFIG_BASE_BOARD_S3NL191     // active low reset
+    gexp_set_level(GPIO_NUM_21, false); msleep(50);
+    gexp_set_level(GPIO_NUM_21, true);  msleep(50);
+#   endif
     smbus_regval_t regs[] = {
-        RT_RBYTE(TP_PANEL_ID), RT_RBYTE(TP_CHIP_ID), { TP_DEVICE_MODE, 0x00 },
+        RT_RBYTE(TP_CHIP_ID),
+        RT_RBYTE(TP_PANEL_ID),
+        { TP_DEVICE_MODE, 0x00 },       // working: 0x00, factory: 0x40
+        { TP_INTR_MODE, 0x00 },         // interrupt polling
+        { TP_TH_GROUP, 0x08 },          // touch threshold
     };
-    tscn.bus = NUM_I2C;
-    tscn.addr = 0x38;
-    if (smbus_probe(tscn.bus, tscn.addr) ||
-        smbus_regtable(tscn.bus, tscn.addr, regs, 2) ||
-        (regs[0].val != v3 && regs[0].val != v6) ||
-        smbus_regtable(tscn.bus, tscn.addr, regs + 2, 3)
-    ) { tscn.addr = 0; return; }
-    switch (regs[1].val) {
+    if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, 2)) return;
+    switch (regs[0].val) {
     case 0x54: chip = "FT3558"; break;
     case 0x06: chip = "FT6206"; break;
     case 0x36: chip = "FT6236"; break;
     case 0x64: chip = "FT6336"; break;
-    default:   chip = "FT6X36"; break;
+    default:   return;
     }
-    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X", chip, tscn.bus, tscn.addr);
-    tscn_command(NULL, true);                           // sync
-#   ifdef CONFIG_BASE_DEBUG
-    tscn_command(NULL, false);                          // log
-#   endif
+    if (smbus_regtable(bus, addr, regs + 2, LEN(regs) - 2)) return;
+    tscn.bus = bus;
+    tscn.addr = addr;
+    esp_err_t err = config_nvs_open("tscn", false);
+    if (!err) err = config_nvs_read("hres", tscn.hres, sizeof(tscn.hres)) < 0;
+    if (!err) err = config_nvs_read("vres", tscn.vres, sizeof(tscn.vres)) < 0;
+    if (err) {
+        tscn.hres[RAMAX] = tscn.hres[RSLEN] = 1440;
+        tscn.vres[RAMAX] = tscn.vres[RSLEN] = 1920;
+        config_nvs_write("hres", tscn.hres, sizeof(tscn.hres));
+        config_nvs_write("vres", tscn.vres, sizeof(tscn.vres));
+    }
+    config_nvs_close();
+    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X: PANEL ID = 0x%02X",
+             chip, tscn.bus, tscn.addr, regs[1].val);
+    REGEVTS(CFG, tscn_oncfg, NULL, NULL);
+    tscn_sync();
 }
 
-esp_err_t tscn_read(tscn_data_t *dat) {
+esp_err_t tscn_read(tscn_data_t *dat, bool apply) {
+    if (!dat) return ESP_ERR_INVALID_ARG;
     if (!tscn.addr) return ESP_ERR_INVALID_STATE;
+    uint8_t buf[6 + 2];
     static const uint8_t gvals[] = { 0x00, 0x10, 0x14, 0x18, 0x1C, 0x48, 0x49 };
-    uint8_t buf[6], info[2];
-    esp_err_t err = smbus_rregs(tscn.bus, tscn.addr, TP_GESTURE_ID, info, 2);
-    if (!err) {
-        memset(dat, 0, sizeof(tscn_data_t));
-        if (info[0] == 0xFF || info[1] == 0xFF) info[0] = info[1] = 0;
-        LOOPN(i, LEN(gvals)) if (info[0] == gvals[i]) { dat->ges = i; break; }
-        if (( dat->num = info[1] ) > LEN(dat->pts)) err = ESP_ERR_NO_MEM;
-    }
-    LOOPN(i, err ? 0 : dat->num) {
+    esp_err_t err = smbus_rregs(tscn.bus, tscn.addr, TP_GESTURE_ID, buf + 6, 2);
+    if (err) return err;
+    memset(dat, 0, sizeof(tscn_data_t));
+    if (buf[6] == 0xFF || buf[7] == 0xFF) buf[6] = buf[7] = 0;
+    LOOPN(i, LEN(gvals)) if (buf[6] == gvals[i]) { dat->ges = i; break; }
+    if (( dat->num = buf[7] ) > LEN(dat->pts)) return ESP_ERR_NO_MEM;
+    LOOPN(i, dat->num) {
         err = smbus_rregs(tscn.bus, tscn.addr, TP_P1_XH + 6 * i, buf, 6);
+        if (err) return err;
         dat->pts[i].evt  = buf[0] >> 6;
         dat->pts[i].id   = buf[2] >> 4;
         dat->pts[i].x    = (buf[0] & 0xF) << 8 | buf[1];
         dat->pts[i].y    = (buf[2] & 0xF) << 8 | buf[3];
         dat->pts[i].wt   = buf[4];
         dat->pts[i].area = buf[5] >> 4;
+        tscn.hres[RAMAX] = MAX(tscn.hres[RAMAX], dat->pts[i].x);
+        tscn.vres[RAMAX] = MAX(tscn.vres[RAMAX], dat->pts[i].y);
+        dat->pts[i].px   = dat->pts[i].x * 10000 / tscn.hres[RAMAX];
+        dat->pts[i].py   = dat->pts[i].y * 10000 / tscn.vres[RAMAX];
     }
+    if (apply) tscn_post_process(dat);
     return err;
 }
 
-esp_err_t tscn_command(const char *ctrl, bool sync) {
+esp_err_t tscn_command(const char *ctrl) {
     if (!tscn.addr) return ESP_ERR_NOT_SUPPORTED;
-    if (sync) {
-        if (strcasestr(Config.app.TSCN_MODE, "ABS")) {
-            tscn.hdlr = tscn_handle_absolute;
-        } else if (strcasestr(Config.app.TSCN_MODE, "TPD")) {
-            tscn.hdlr = tscn_handle_touchpad;
-        } else {
-            tscn.hdlr = tscn_handle_relative;
-        }
-        tscn.axes[0] = strcasestr(Config.app.TSCN_MODE, "INVX");
-        tscn.axes[1] = strcasestr(Config.app.TSCN_MODE, "INVY");
-        tscn.axes[2] = false;
-        const char *rot = strcasestr(Config.app.TSCN_MODE, "ROT");
-        switch (rot ? rot[3] : '\0') {
-        case '1': tscn.axes[1] ^= true; tscn.axes[2] = true; break;
-        case '2': tscn.axes[0] ^= true; tscn.axes[1] ^= true; break;
-        case '3': tscn.axes[0] ^= true; tscn.axes[2] = true; break;
-        }
-        ESP_LOGI(TAG, "TSCN: current mode %s", Config.app.TSCN_MODE);
-        if (tscn.task) return ESP_OK;
-#   ifdef CONFIG_BASE_GPIO_INT
-        tscn.stop = true;
-#   endif
-        if (xTaskCreate(tscn_task, "tscn", 4096, NULL, 5, &tscn.task) == pdTRUE)
-            return ESP_OK;
-        ESP_LOGW(TAG, "TSCN: task creation failed");
-        return ESP_ERR_NO_MEM;
-    }
     if (ctrl) {
         tscn.stop = !strbool(ctrl);
         if (!tscn.stop && tscn.task) {
@@ -342,67 +468,51 @@ esp_err_t tscn_command(const char *ctrl, bool sync) {
         }
         return tscn.task ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
     }
-    const struct {
-        const char *name;
-        uint8_t reg;
-    } lst[] = {
-        { "Touch threshold",    TP_TH_GROUP },
-        { "Filter function",    TP_TH_DIFF },
-        { "Auto sleep mode",    TP_CTRL },
-        { "Auto sleep time",    TP_TIME_MONITOR },
-        { "Active data rate",   TP_TR_ACTIVE },
-        { "Monitor data rate",  TP_TR_MONITOR },
-        { "Move offset L2R",    TP_OFFSET_LR },
-        { "Move dist L2R",      TP_DIST_LR },
-        { "Move offset U2D",    TP_OFFSET_UD },
-        { "Move dist U2D",      TP_DIST_UD },
-        { "Rotate angle",       TP_RADIAN_VALUE },
-        { "Zoom dist",          TP_DIST_ZOOM },
-        { "Trigger mode",       TP_INTR_MODE },
-        { "Power mode",         TP_POWER_MODE },
-        { "Library ID",         TP_LIB_VER_H },
-        { "Firmware ID",        TP_FIRMW_ID },
-        { "Panel ID",           TP_PANEL_ID },
-        { "Release ID",         TP_RELEASE_ID },
-    };
 #   ifdef CONFIG_BASE_AUTO_ALIGN
     size_t nlen = 0;
-    LOOPN(i, LEN(lst)) { nlen = MAX(nlen, strlen(lst[i].name)); }
+    LOOPN(i, LEN(tscn_desc)) { nlen = MAX(nlen, strlen(tscn_desc[i].name)); }
+    LOOPN(i, LEN(tscn_rstr)) { nlen = MAX(nlen, strlen(tscn_rstr[i]) + 2); }
 #   else
     size_t nlen = 16;
 #   endif
-    uint8_t val;
+    uint8_t reg, val;
     const char *name;
-    LOOPN(i, LEN(lst)) {
-        if (!( name = lst[i].name )) { putchar("\n "[i % 2]); continue; }
-        esp_err_t err = smbus_read_byte(tscn.bus, tscn.addr, lst[i].reg, &val);
-        if (err) return err;
+    esp_err_t err = ESP_OK;
+    LOOPN(i, LEN(tscn_desc)) {
+        if (!( name = tscn_desc[i].name )) { putchar("\n "[i % 2]); continue; }
+        reg = tscn_desc[i].reg;
+        if (( err = smbus_read_byte(tscn.bus, tscn.addr, reg, &val) )) break;
         printf("%-*s: 0x%02X%s", nlen, name, val, i % 2 ? "\n" : " | ");
     }
-    if (LEN(lst) % 2) putchar('\n');
-    return ESP_OK;
+    if (LEN(tscn_desc) % 2) putchar('\n');
+    LOOPN(i, LEN(tscn_rstr)) {
+        printf("W %-*s: %4d | H %-*s: %4d\n",
+                nlen - 2, tscn_rstr[i], tscn.hres[i],
+                nlen - 2, tscn_rstr[i], tscn.vres[i]);
+    }
+    return err;
 }
 
 void tscn_print(tscn_data_t *dat, FILE *to, bool newline) {
     fprintf(to, "%sTouch screen: ", newline ? "" : "\r");
     LOOPN(i, dat->num) {
-        fprintf(to, "%sID %2u EVT %c X %4u Y %4u WT %3u AREA %u",
+        fprintf(to, "%sID %2u EVT %c X %4u Y %4u WT %3u AA %u",
                 i ? " | " : "", dat->pts[i].id, "PRC-"[dat->pts[i].evt],
                 dat->pts[i].x, dat->pts[i].y, dat->pts[i].wt, dat->pts[i].area);
     }
     if (dat->ges) {
         fprintf(to, " gesture = %s", tscn_gstr[dat->ges]);
     } else if (!dat->num) {
-        fprintf(to, " not touched");
+        fprintf(to, "not touched");
     }
     if (newline) fputc('\n', to);
 }
 #else // CONFIG_BASE_USE_TSCN
-esp_err_t tscn_read(tscn_data_t *d) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(d);
+esp_err_t tscn_read(tscn_data_t *d, bool a) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(d); NOTUSED(a);
 }
-esp_err_t tscn_status(int e) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(e);
+esp_err_t tscn_command(const char *c) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(c);
 }
 void tscn_print(tscn_data_t *d, FILE *s, bool n) {
     return; NOTUSED(d); NOTUSED(s); NOTUSED(n);
@@ -889,7 +999,7 @@ static esp_err_t als_atdeg(int hdeg, int vdeg, float vals[ALS_NUM + 1]) {
     esp_err_t err = pwm_set_degree(hdeg, vdeg);
     if (err) return err;
     if ((hdeg + vdeg) > -2) msleep(100);
-    memset(vals, 0, sizeof(float) * (ALS_NUM + 1));
+    memset(vals, 0, sizeof(vals));
     LOOPN(i, ALS_NUM) {
         LOOPN(j, 3) {
             vals[i] += als_brightness(i);

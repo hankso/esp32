@@ -521,9 +521,9 @@ void network_initialize() {
     if (err != ESP_ERR_INVALID_ARG)
         ESP_LOGE(TAG, "Failed to start STA: %s", esp_err_to_name(err));
     if (!strbool(Config.net.AP_AUTO)) return;
-    size_t alen = strlen((char *)config_ap.ap.ssid);
-    ssid = alen ? (char *)config_ap.ap.ssid : NULL;
-    pass = alen ? (char *)config_ap.ap.password : NULL;
+    slen = strlen((char *)config_ap.ap.ssid);
+    ssid = slen ? (char *)config_ap.ap.ssid : NULL;
+    pass = slen ? (char *)config_ap.ap.password : NULL;
     if (( err = wifi_ap_start(ssid, pass, NULL) ))
         ESP_LOGE(TAG, "Failed to start AP: %s", esp_err_to_name(err));
 }
@@ -575,14 +575,19 @@ esp_err_t network_parse_addr(const char *host, uint16_t port, void *sockaddr) {
 
 esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     // Arguments validation
-    if (!ssid && !strlen(Config.net.STA_SSID)) return ESP_ERR_INVALID_ARG;
+    if (!ssid) {
+        if (!strlen(Config.net.STA_SSID)) return ESP_ERR_INVALID_ARG;
+        ssid = Config.net.STA_SSID;
+        pass = Config.net.STA_PASS;
+    } else if (!pass) {
+        pass = "";
+    }
     if (!ip && strlen(Config.net.STA_HOST)) ip = Config.net.STA_HOST;
-    if (!ssid) ssid = Config.net.STA_SSID;
-    if (!pass) pass = Config.net.STA_PASS;
 
     // WiFi mode validation
     esp_err_t err = wifi_mode_switch(true, UNCHANGED, NULL);
     if (err) return err;
+
     if (getBits(WIFI_CONNECTED_BIT)) {
         wifi_ap_record_t record;
         err = esp_wifi_sta_get_ap_info(&record);
@@ -614,7 +619,7 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     snprintf((char *)sta->ssid, sizeof(sta->ssid), ssid);
     snprintf((char *)sta->password, sizeof(sta->password), pass);
     if (( err = esp_wifi_set_config(WIFI_IF_STA, &config_sta) )) return err;
-    return esp_wifi_connect();
+    return strlen(ssid) ? esp_wifi_connect() : ESP_OK;
 }
 
 esp_err_t wifi_sta_stop() {
@@ -663,10 +668,14 @@ esp_err_t wifi_sta_wait(uint16_t tout_ms) {
 }
 
 esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
-    if (!ssid && !strlen(Config.net.AP_SSID)) return ESP_ERR_INVALID_ARG;
+    if (!ssid) {
+        if (!strlen(Config.net.AP_SSID)) return ESP_ERR_INVALID_ARG;
+        ssid = Config.net.AP_SSID;
+        pass = Config.net.AP_PASS;
+    } else if (!pass) {
+        pass = "";
+    }
     if (!ip && strlen(Config.net.AP_HOST)) ip = Config.net.AP_HOST;
-    if (!ssid) ssid = Config.net.AP_SSID;
-    if (!pass) pass = Config.net.AP_PASS;
 
     esp_err_t err = wifi_mode_switch(UNCHANGED, true, NULL);
     if (err) return err;
@@ -683,8 +692,9 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     }
 
     wifi_ap_config_t *ap = &config_ap.ap;
-    size_t slen = strlen(ssid), ulen = strlen(Config.info.UID);
-    if (ulen && sizeof(ap->ssid) > (slen + ulen + 1)) {
+    size_t slen = ssid == Config.net.AP_SSID ? strlen(ssid) : 0;
+    size_t ulen = strlen(Config.info.UID), blen = slen + ulen + 1;
+    if (slen && ulen && (slen + ulen + 1) < sizeof(ap->ssid)) {
         sprintf((char *)ap->ssid, "%s-%s", ssid, Config.info.UID);
     } else {
         snprintf((char *)ap->ssid, sizeof(ap->ssid), ssid);

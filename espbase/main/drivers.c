@@ -744,7 +744,7 @@ static esp_err_t spi_gexp_get_level(gexp_num_t pin, bool *level, bool sync) {
 static void IRAM_ATTR gpio_isr(void *arg) {
     if (arg && (gpio_num_t)arg != PIN_INT) return;
 #   ifdef CONFIG_BASE_USE_TSCN
-    tscn_command(gpio_get_level(PIN_INT) ? "0" : "1", false);
+    tscn_command(gpio_get_level(PIN_INT) ? "off" : "on");
 #   endif
 #   ifdef CONFIG_BASE_GEXP_INT
     ets_printf("PIN_INT %s\n", gpio_get_level(PIN_INT) ? "RISE" : "FALL");
@@ -957,32 +957,32 @@ static UNUSED button_handle_t btn[2];
 
 static UNUSED void cb_button(void *arg, void *data) {
     static const char *BTAG = "button";
-    int pin = (int)data;
-    switch (iot_button_get_event(arg)) {
+    int pin = (int)data, val = (iot_button_get_event(arg) << 8) | pin;
+    scn_command(SCN_BTN, &val);
+    switch (val >> 8) {
     case BUTTON_PRESS_DOWN:
-        ESP_LOGI(BTAG, "%d press", pin);
+        ESP_LOGD(BTAG, "%d press", pin);
 #   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_D);
 #   endif
         break;
     case BUTTON_PRESS_UP:
-        ESP_LOGI(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
+        ESP_LOGD(BTAG, "%d release[%d]", pin, iot_button_get_ticks_time(arg));
 #   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_U);
 #   endif
         break;
     case BUTTON_SINGLE_CLICK:
-        ESP_LOGI(BTAG, "%d single click", pin);
-        scn_command(SCN_BTN, &pin);
+        ESP_LOGD(BTAG, "%d single click", pin);
         break;
     case BUTTON_DOUBLE_CLICK:
-        ESP_LOGI(BTAG, "%d double click", pin);
+        ESP_LOGD(BTAG, "%d double click", pin);
         break;
     case BUTTON_MULTIPLE_CLICK:
-        ESP_LOGI(BTAG, "%d click %d times", pin, iot_button_get_repeat(arg));
+        ESP_LOGD(BTAG, "%d click %d times", pin, iot_button_get_repeat(arg));
         break;
     case BUTTON_LONG_PRESS_HOLD:
-        ESP_LOGI(BTAG, "%d long press %d",
+        ESP_LOGD(BTAG, "%d long press %d",
                  pin, iot_button_get_long_press_hold_cnt(arg));
         break;
     default: break;
@@ -1212,9 +1212,7 @@ static void twdt_initialize() {
 
 void driver_initialize() {
     const char * tags[] = {
-        "gpio", "led_indicator",
-        "adc button", "knob",
-        "cam_hal", "camera",
+        "gpio", "led_indicator", "adc button", "knob", "cam_hal", "camera",
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 

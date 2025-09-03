@@ -33,33 +33,33 @@ double get_timestamp_us(const struct timeval *ts) {
 const char * format_datetime(const struct timespec *ts) {
     static char buf[18]; // xxxx-xx-xx-xxxxxx\0
     ts = (ts != NULL) ? ts : get_systime();
-    strftime(buf, sizeof(buf), "%F-%H%M%S", localtime(&ts->tv_sec));
+    strftime(buf, sizeof(buf), "%F-%H%M%S", gmtime(&ts->tv_sec));
     return buf;
 }
 
 const char * format_datetime_us(const struct timeval *ts) {
-    struct timespec tmp;
+    static char buf[18]; // xxxx-xx-xx-xxxxxx\0
     ts = (ts != NULL) ? ts : get_systime_us();
-    tmp.tv_sec = ts->tv_sec;
-    tmp.tv_nsec = ts->tv_usec * TIMESTAMP_U2N;
-    return format_datetime(&tmp);
+    strftime(buf, sizeof(buf), "%F-%H%M%S", localtime(&ts->tv_sec));
+    return buf;
 }
 
 const char * format_timestamp(const struct timespec *ts) {
     static char buf[13]; // xx:xx:xx.xxx\0
     ts = (ts != NULL) ? ts : get_systime();
-    strftime(buf, 9, "%T", localtime(&ts->tv_sec));
+    strftime(buf, 9, "%T", gmtime(&ts->tv_sec));
     uint16_t ms = ts->tv_nsec / TIMESTAMP_US;
     snprintf(buf + 8, 5, ".%03d", ms % 1000);
     return buf;
 }
 
 const char * format_timestamp_us(const struct timeval *ts) {
-    struct timespec tmp;
+    static char buf[13]; // xx:xx:xx.xxx\0
     ts = (ts != NULL) ? ts : get_systime_us();
-    tmp.tv_sec = ts->tv_sec;
-    tmp.tv_nsec = ts->tv_usec * TIMESTAMP_U2N;
-    return format_timestamp(&tmp);
+    strftime(buf, 9, "%T", localtime(&ts->tv_sec));
+    uint16_t ms = ts->tv_usec / TIMESTAMP_MS;
+    snprintf(buf + 8, 5, ".%03d", ms % 1000);
+    return buf;
 }
 
 double set_timestamp(struct timespec *ts, double timestamp) {

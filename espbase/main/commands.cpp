@@ -802,6 +802,14 @@ static esp_err_t register_drv() {
  * Utilities commands
  */
 
+#ifdef CONSOLE_UTIL_DATETIME
+static int util_date(int c, char **v) {
+    printf("Date time: %s\n", format_datetime_us(NULL));
+    printf("Boot time: %s\n", format_timestamp(NULL));
+    return ESP_OK;
+}
+#endif
+
 #ifdef CONSOLE_UTIL_VERSION
 static int util_version(int c, char **v) { version_info(); return ESP_OK; }
 #endif
@@ -1055,6 +1063,9 @@ static int util_hist(int argc, char **argv) {
 
 static esp_err_t register_util() {
     const esp_console_cmd_t cmds[] = {
+#ifdef CONSOLE_UTIL_DATETIME
+        ESP_CMD(util, date, "Get date and time string"),
+#endif
 #ifdef CONSOLE_UTIL_VERSION
         ESP_CMD(util, version, "Get version of firmware and SDK"),
 #endif
@@ -1430,6 +1441,7 @@ static struct {
     arg_str_t *key;
     arg_str_t *str;
     arg_str_t *mse;
+    arg_str_t *abs;
     arg_str_t *pad;
     arg_str_t *ctrl;
     arg_str_t *dial;
@@ -1441,13 +1453,14 @@ static struct {
     .key  = arg_str0("k", NULL, "CODE", "report keypress"),
     .str  = arg_str0("s", NULL, "STR", "report type in"),
     .mse  = arg_str0("m", NULL, "B|XYVH", "report mouse"),
+    .abs  = arg_str0("a", NULL, "XY", "report abs mouse"),
     .pad  = arg_str0("p", NULL, "BTXYXY", "report gamepad"),
     .ctrl = arg_str0("c", NULL, "1-15", "report system control"),
     .dial = arg_str0("d", NULL, "LRUD", "report S-Dial"),
     .tout = arg_int0("t", NULL, "0-65535", "event timeout in ms"),
     .tevt = arg_dbl0(NULL, "ts", "MSEC", "event unix timestamp in ms"),
     .tgt  = arg_str0(NULL, "to", "0-3|UBWS", "report to USB/BT/WIFI/SCN"),
-    .end  = arg_end(9)
+    .end  = arg_end(10)
 };
 
 static int app_hid(int argc, char **argv) {
@@ -1455,6 +1468,7 @@ static int app_hid(int argc, char **argv) {
     const char *typein = ARG_STR(app_hid_args.str, NULL);
     const char *keybd = ARG_STR(app_hid_args.key, NULL);
     const char *mouse = ARG_STR(app_hid_args.mse, NULL);
+    const char *abmse = ARG_STR(app_hid_args.abs, NULL);
     const char *gmpad = ARG_STR(app_hid_args.pad, NULL);
     const char *sctrl = ARG_STR(app_hid_args.ctrl, NULL);
     const char *sdial = ARG_STR(app_hid_args.dial, NULL);
@@ -1483,6 +1497,10 @@ static int app_hid(int argc, char **argv) {
         case 2: hid_report_mouse_move(to, vals[0], vals[1]); break;
         default: hid_report_mouse(to, 0, vals[0], vals[1], vals[2], vals[3]);
         }
+    } else if (abmse) {
+        int vals[2];
+        if (parse_all(mouse, vals, LEN(vals)) == 2)
+            hid_report_mouse_moveto(to, vals[0], vals[1]);
     } else if (gmpad) {
         int vals[4];
         switch (parse_all(gmpad, vals, LEN(vals))) {
@@ -1511,7 +1529,7 @@ static int app_hid(int argc, char **argv) {
     } else {
         printf(
             "Current HID is %d: %s\n"
-            "VID=0x%04X PID=0x%04X VER=0x%04X %s %s\n",
+            "VID=0x%04X PID=0x%04X VER=0x%04X VENDOR=%s SERIAL=%s\n",
             HIDTool.pad, HIDTool.dstr,
             HIDTool.vid, HIDTool.pid, HIDTool.ver,
             HIDTool.vendor, HIDTool.serial);
@@ -1678,7 +1696,7 @@ static int app_sen(int argc, char **argv) {
             fprintf(stderr, "\rTouch pad: %4d", val);
         } else if (index == 2) {
             tscn_data_t dat;
-            if (tscn_read(&dat)) goto error;
+            if (tscn_read(&dat, true)) goto error;
             tscn_print(&dat, stderr, false);
         } else if (index == 3) {
             uint16_t val = vlx_read();

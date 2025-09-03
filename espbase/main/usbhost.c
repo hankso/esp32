@@ -645,7 +645,6 @@ static void hid_host_task(void *arg) {
         }
         ESP_LOGD(TAG, "%s started", addr);
 
-        continue; // SKIP LOGs
         if (wcslen(info.iManufacturer))
             wprintf(L"Manufacturer : %ls\n", info.iManufacturer);
         if (wcslen(info.iProduct))

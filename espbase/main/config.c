@@ -47,8 +47,8 @@ config_t Config = {
     .web = {
         .WS_NAME   = "",
         .WS_PASS   = "",
-        .HTTP_NAME = "",
-        .HTTP_PASS = "",
+        .HTTP_NAME = "hank",
+        .HTTP_PASS = "16011106",
         .AUTH_BASE = "0",
     },
     .app = {
@@ -288,7 +288,7 @@ static esp_err_t nvs_load_str(config_entry_t *ent) {
 
 static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
     char *buf = NULL;
-    size_t len = 16;
+    size_t len = 16, off = 0;
     uint8_t data[8];
     nvs_handle hdl;
     esp_err_t err = nvs_open(info->namespace_name, NVS_READONLY, &hdl);
@@ -299,9 +299,9 @@ static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
         if (!err) err = nvs_get_str(hdl, info->key, buf, &len);
     } else if (info->type == NVS_TYPE_BLOB) {
         if (!err) err = nvs_get_blob(hdl, info->key, NULL, &len);
-        if (!err) err = EMALLOC(buf, len * 3);
-        if (!err) err = nvs_get_blob(hdl, info->key, buf + len * 2, &len);
-        if (!err) hexdumps((buf + len * 2), buf, len, MIN(32, len * 2));
+        if (!err) err = EMALLOC(buf, len + (off = MIN(40, len * 2 + 1)));
+        if (!err) err = nvs_get_blob(hdl, info->key, buf + off, &len);
+        if (!err) hexdumps(buf + off, buf, len, off);
     } else if (!( err = EMALLOC(buf, len) )) {
         switch (info->type) {
             case NVS_TYPE_U8:
@@ -406,6 +406,23 @@ esp_err_t config_nvs_open(const char *ns, bool ro) {
     return err;
 }
 
+int config_nvs_read(const char *key, void *buf, size_t size) {
+    if (!key || !buf || !size) return -ESP_ERR_INVALID_ARG;
+    size_t len;
+    esp_err_t err = ctx.handle ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (!err) err = nvs_get_blob(ctx.handle, key, NULL, &len);
+    if (!err) err = (len && len <= size) ? ESP_OK : ESP_ERR_INVALID_ARG;
+    if (!err) err = nvs_get_blob(ctx.handle, key, buf, &len);
+    return err ? -err : len;
+}
+
+int config_nvs_write(const char *key, const void *val, size_t len) {
+    if (!key || !val || !len) return -ESP_ERR_INVALID_ARG;
+    esp_err_t err = ctx.handle ? ESP_OK : ESP_ERR_INVALID_STATE;
+    if (!err) err = nvs_set_blob(ctx.handle, key, val, len);
+    return err ? -err : len;
+}
+
 esp_err_t config_nvs_commit() {
     if (!ctx.handle) return ESP_ERR_NVS_INVALID_HANDLE;
     esp_err_t err = nvs_commit(ctx.handle);
@@ -416,22 +433,16 @@ esp_err_t config_nvs_commit() {
 esp_err_t config_nvs_close() {
     if (!ctx.handle) return ESP_ERR_NVS_INVALID_HANDLE;
     esp_err_t err = config_nvs_commit();
-    nvs_close(ctx.handle); ctx.handle = 0;
+    TRYNULL(ctx.handle, nvs_close);
     return err;
 }
 
 bool config_nvs_remove(const char *key) {
-    if (config_nvs_open(NAMESPACE_CFG, false)) return false;
-    esp_err_t err = nvs_erase_key(ctx.handle, key);
-    if (err) ESP_LOGE(TAG, "erase `%s` fail: %s", key, esp_err_to_name(err));
-    return config_nvs_close() == ESP_OK;
+    return ctx.handle && key ? !nvs_erase_key(ctx.handle, key) : false;
 }
 
 bool config_nvs_clear() {
-    if (config_nvs_open(NAMESPACE_CFG, false)) return false;
-    esp_err_t err = nvs_erase_all(ctx.handle);
-    if (err) ESP_LOGE(TAG, "erase nvs data fail: %s", esp_err_to_name(err));
-    return config_nvs_close() == ESP_OK;
+    return ctx.handle ? !nvs_erase_all(ctx.handle) : false;
 }
 
 bool config_nvs_load() {

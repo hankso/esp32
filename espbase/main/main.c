@@ -26,12 +26,6 @@ void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 RTC_DATA_ATTR uint8_t count[3];
 
-void cb_config(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    const char *key = data;
-    if (base != CFG_EVENT || id != CFG_UPDATE || !strlen(key ?: "")) return;
-    if (strcasestr(key, "app.tscn.mode")) tscn_command(NULL, true);
-}
-
 void app_main(void) {
     bool stop = false;
     switch (esp_reset_reason()) {
@@ -72,6 +66,5 @@ void app_main(void) {
 
     led_set_blink(0);
     scn_command(SCN_INIT, NULL);
-    REGEVTS(CFG, cb_config, NULL, NULL);
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
 }

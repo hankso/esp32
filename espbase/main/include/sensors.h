@@ -34,11 +34,13 @@ typedef struct {
         uint8_t wt;         // 0-255, touch pressure
         uint8_t area : 4;   // 0-15, touch area
         uint16_t x, y;      // position in pixel
-    } pts[16];
-} tscn_data_t;
+        uint16_t px, py;    // position percentage [0, 10000]
+    } PACKED pts[16];
+    bool applied;           // rotation and selection applied: not raw data
+} PACKED tscn_data_t;
 
-esp_err_t tscn_read(tscn_data_t *);
-esp_err_t tscn_command(const char *ctrl, bool sync);
+esp_err_t tscn_read(tscn_data_t *, bool apply);
+esp_err_t tscn_command(const char *ctrl);   // start / stop / stat tscn task
 void tscn_print(tscn_data_t *, FILE *, bool newline);
 
 typedef struct {

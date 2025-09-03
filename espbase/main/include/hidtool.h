@@ -232,19 +232,26 @@ typedef struct {
 
 typedef struct {
     uint8_t buttons;
-    int16_t x, y;
+    uint16_t x, y;
     int8_t wheel, pan;
 } PACKED hid_abmse_report_t;
 
 typedef struct {
+    uint8_t tip : 1;
+    uint8_t rng : 1;
+    uint8_t : 6;
+    uint16_t x, y;
+} PACKED hid_point_report_t;
+
+typedef struct {
     struct {
-        uint8_t tip : 1;
+        uint8_t tip : 1;                            // whether touched
         uint8_t : 3;
-        uint8_t cid : 4;
-        uint16_t x, y;
-    } fingers[10];
-    uint16_t scan_time;
-    uint8_t count;
+        uint8_t cid : 4;                            // 0-9 finger id
+        uint16_t x, y;                              // 0~10000 percentage
+    } PACKED fingers[5];
+    uint16_t rate;                                  // sample rate
+    uint8_t count;                                  // 0-9 number of touched
 } PACKED hid_touch_report_t;
 
 typedef struct {
@@ -256,10 +263,10 @@ typedef struct {
 #define GMPAD_BUTTON_B                      BIT1
 #define GMPAD_BUTTON_X                      BIT2
 #define GMPAD_BUTTON_Y                      BIT3
-#define GMPAD_BUTTON_LB                     BIT4    // L2 of left shoulder
-#define GMPAD_BUTTON_RB                     BIT5    // R2 of right shoulder
-#define GMPAD_BUTTON_LS                     BIT6    // L3 of left joystick
-#define GMPAD_BUTTON_RS                     BIT7    // R3 of right joystick
+#define GMPAD_BUTTON_LB                     BIT4    // L2: left shoulder
+#define GMPAD_BUTTON_RB                     BIT5    // R2: right shoulder
+#define GMPAD_BUTTON_LS                     BIT6    // L3: left joystick
+#define GMPAD_BUTTON_RS                     BIT7    // R3: right joystick
 #define GMPAD_BUTTON_PREV                   BIT8    // back / select
 #define GMPAD_BUTTON_NEXT                   BIT9    // start
 #define GMPAD_BUTTON_HOME                   BIT10   // xbox
@@ -311,6 +318,7 @@ enum {
     REPORT_ID_KEYBD = 1,
     REPORT_ID_MOUSE = 2,
     REPORT_ID_ABMSE,
+    REPORT_ID_POINT,
     REPORT_ID_TOUCH,
     REPORT_ID_GMPAD,
     REPORT_ID_SCTRL,
@@ -324,7 +332,7 @@ typedef struct {
     uint8_t desc[512];                              // HID descriptor
     uint16_t dlen;                                  // HID descriptor length
     uint16_t vid, pid, ver;                         // vendor, product, version
-    const char *dstr;                               // device descriptor
+    char dstr[128];                                 // device description
     const char *vendor, *serial;                    // manufacturer, device uuid
 } hidtool_t;
 
@@ -345,6 +353,7 @@ typedef struct {
         hid_keybd_report_t keybd;
         hid_mouse_report_t mouse;
         hid_abmse_report_t abmse;
+        hid_point_report_t point;
         hid_touch_report_t touch;
         hid_gmpad_report_t gmpad;
         uint8_t sctrl;
@@ -368,7 +377,7 @@ bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
 bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
 
 /*
- * Mouse
+ * Mouse (relative and absolute)
  */
 
 const char * hid_btncode_str(uint8_t btns);
@@ -378,13 +387,6 @@ bool hid_report_mouse_moveto(hid_target_t, uint16_t, uint16_t);
 #define hid_report_mouse_move(t, x, y)   hid_report_mouse((t), 0, (x), (y), 0, 0)
 #define hid_report_mouse_scroll(t, v, h) hid_report_mouse((t), 0, 0, 0, (v), (h))
 #define hid_report_mouse_button(t, btn)  hid_report_mouse((t), (btn), 0, 0, 0, 0)
-
-/*
- * Touch
- */
-
-bool hid_report_touch(hid_target_t, uint16_t, uint16_t);
-bool hid_report_touch_tip(hid_target_t, uint16_t x, uint16_t y, uint32_t ms);
 
 /*
  * Gamepad
@@ -425,6 +427,7 @@ bool hid_report_gmpad_button(hid_target_t, uint16_t btn, uint8_t action);
  */
 
 typedef enum {
+    // see HID_USAGE_DESKTOP_SYSTEM_CONTROL in hiddesc.h
     SCTRL_PWDN  = 0x01, // shutdown
     SCTRL_SLEEP = 0x02, // sleep
     SCTRL_WAKE  = 0x03, // wakeup

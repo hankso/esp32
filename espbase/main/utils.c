@@ -23,10 +23,10 @@ void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
 
 uint64_t asleep(uint32_t ms, uint64_t next) {
     uint64_t curr = xTaskGetTickCount();
-    if (!next) {
-        next = curr;
-    } else if (curr < next) {
+    if (curr < next) {
         vTaskDelay(next - curr);
+    } else if (!next || (curr - next) > ms) {
+        next = curr;
     }
     return next + TIMEOUT(ms);
 }

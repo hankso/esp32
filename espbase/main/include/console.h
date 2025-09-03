@@ -15,6 +15,7 @@
 #define CONSOLE_SYS_SLEEP           //12292 Bytes
 #define CONSOLE_SYS_EXEC            // 7684 Bytes
 
+#define CONSOLE_UTIL_DATETIME       //  176 Bytes
 #define CONSOLE_UTIL_VERSION        //  272 Bytes
 #define CONSOLE_UTIL_LSHW           // 1988 Bytes
 #define CONSOLE_UTIL_LSPART         //  808 Bytes
