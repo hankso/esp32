@@ -1,42 +1,48 @@
 cmake_minimum_required(VERSION 3.16)
 
-set(COMPONENTS main)
-
-set(SDKCONFIG_DEFAULTS
-    ${CMAKE_CURRENT_LIST_DIR}/sdkconfig.defaults
-    ${CMAKE_CURRENT_LIST_DIR}/sdkconfig.local
-)
-set(EXTRA_COMPONENT_DIRS
-    $ENV{IDF_PATH}/../components
-    $ENV{IDF_PATH}/examples/common_components/iperf
-)
-
 include($ENV{IDF_PATH}/tools/cmake/version.cmake)
-include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
-set(helper_py python ${CMAKE_CURRENT_LIST_DIR}/helper.py)
+set(COMPONENTS main)
+set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
+set(SDKCONFIG_BASE "${CMAKE_CURRENT_LIST_DIR}/sdkconfig")
+set(SDKCONFIG_LOCAL "${SDKCONFIG_BASE}.local")
+set(SDKCONFIG_IDFVER "${SDKCONFIG_BASE}.defaults.v${IDF_VERSION_MAJOR}")
+set(SDKCONFIG_DEFAULTS "${SDKCONFIG_BASE}.defaults")
+if(EXISTS "${SDKCONFIG_LOCAL}")
+    list(APPEND SDKCONFIG_DEFAULTS "${SDKCONFIG_LOCAL}")
+endif()
+if(EXISTS "${SDKCONFIG_IDFVER}")
+    list(APPEND SDKCONFIG_DEFAULTS "${SDKCONFIG_IDFVER}")
+endif()
+if(EXISTS "$ENV{IDF_PATH}/../components")
+    set(EXTRA_COMPONENT_DIRS "$ENV{IDF_PATH}/../components")
+endif()
+
+set(helper_py python "${CMAKE_CURRENT_LIST_DIR}/helper.py")
 execute_process(COMMAND ${helper_py} prebuild)
 
+include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+idf_build_set_property(MINIMAL_BUILD ON)
 project(espbase VERSION 1.1.0)
 
 # CONFIG_BASE_XXX are defined in main/Kconfig.projbuild
 
 if(CONFIG_BASE_FFS_FAT STREQUAL "y")
-    if (IDF_VERSION_MAJOR LESS 5)
+    if(IDF_VERSION_MAJOR LESS 5)
         message(FATAL_ERROR "FAT FS is only supported on ESP-IDF v5.x. "
                             "Current version is ESP-IDF ${IDF_VERSION}.")
     endif()
     message(STATUS "Creating FAT File System image")
     fatfs_create_spiflash_image(
         ${CONFIG_BASE_FFS_PART}
-        ${CMAKE_CURRENT_LIST_DIR}/files
+        "${CMAKE_CURRENT_LIST_DIR}/files"
         FLASH_IN_PROJECT
     )
 elseif(CONFIG_BASE_FFS_SPI STREQUAL "y")
     message(STATUS "Creating SPI Flash File System image")
     spiffs_create_partition_image(
         ${CONFIG_BASE_FFS_PART}
-        ${CMAKE_CURRENT_LIST_DIR}/files
+        "${CMAKE_CURRENT_LIST_DIR}/files"
         FLASH_IN_PROJECT
     )
 endif()
@@ -51,17 +57,17 @@ function(nvs_create_partition_image partition template)
     partition_table_get_partition_info(
         offset "--partition-name ${partition}" "offset")
     if("${size}" AND "${offset}")
-        set(image_file ${CMAKE_BINARY_DIR}/${partition}.bin)
+        set(image_file "${CMAKE_BINARY_DIR}/${partition}.bin")
         add_custom_target(gen_${partition}_bin ALL
             COMMAND ${helper_py} --quiet gencfg
-            --tpl ${template_fullpath}
-            --pack ${image_file}
+            --tpl "${template_fullpath}"
+            --pack "${image_file}"
             --size ${size}
             --offset ${offset}
             DEPENDS ${arg_DEPENDS}
             )
         set_property(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}" APPEND PROPERTY
-            ADDITIONAL_MAKE_CLEAN_FILES ${image_file})
+            ADDITIONAL_MAKE_CLEAN_FILES "${image_file}")
         idf_component_get_property(margs esptool_py FLASH_ARGS)
         idf_component_get_property(sargs esptool_py FLASH_SUB_ARGS)
         esptool_py_flash_target(
@@ -82,6 +88,6 @@ endfunction()
 
 nvs_create_partition_image(
     nvs
-    ${CMAKE_CURRENT_LIST_DIR}/nvs_flash.csv
+    "${CMAKE_CURRENT_LIST_DIR}/nvs_flash.csv"
     FLASH_IN_PROJECT
 )

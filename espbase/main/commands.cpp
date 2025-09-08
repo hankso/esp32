@@ -248,10 +248,14 @@ static esp_err_t enable_gpio_light_wakeup() {
 static esp_err_t enable_gpio_deep_wakeup() {
     int pin_cnt = sys_sleep_args.pin->count;
     if (!pin_cnt) return ESP_OK;
-    int lvl = ARG_INT(sys_sleep_args.lvl, 0);
+    bool lvl = ARG_INT(sys_sleep_args.lvl, 0);
     const char *lvls = lvl ? "ANY_HIGH" : "ANY_LOW";
-    esp_sleep_ext1_wakeup_mode_t mode = \
-        lvl ? ESP_EXT1_WAKEUP_ANY_HIGH : ESP_EXT1_WAKEUP_ANY_LOW;
+#ifdef CONFIG_IDF_TARGET_ESP32
+    esp_sleep_ext1_wakeup_mode_t mode = ESP_EXT1_WAKEUP_ALL_LOW;
+#else
+    esp_sleep_ext1_wakeup_mode_t mode = ESP_EXT1_WAKEUP_ANY_LOW;
+#endif
+    if (lvl) mode = ESP_EXT1_WAKEUP_ANY_HIGH;
     gpio_num_t pin;
     uint64_t mask = 0;
     LOOPN(i, pin_cnt) {

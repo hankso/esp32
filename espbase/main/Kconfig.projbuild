@@ -60,6 +60,7 @@ menu "ESP Base Configuration"
 
     menuconfig BASE_USE_UART
         bool "Enable UART"
+        select LOG_COLORS
         default y
     if BASE_USE_UART
         config BASE_UART_NUM
@@ -462,8 +463,8 @@ menu "ESP Base Configuration"
 
         config BASE_USB_HID_DEVICE
             bool "Enable USB HID device mode"
-            select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4+
-            select TINYUSB_HID_COUNT    # for ESP-IDF v5.0+
+            select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4
+            # set TINYUSB_HID_COUNT=1   # for ESP-IDF v5.0+
             default y
         config BASE_USB_HID_DEVICE_TASK
             bool "Create a task for HID reports"
@@ -581,8 +582,8 @@ menu "ESP Base Configuration"
             default 39
     endif
 
-    config BASE_GPIO_DAC
-        int "DAC output"
+    config BASE_GPIO_DAC0
+        int "DAC output 0"
         depends on BASE_USE_DAC
         range 25 26
         default 25

@@ -694,7 +694,7 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     wifi_ap_config_t *ap = &config_ap.ap;
     size_t slen = ssid == Config.net.AP_SSID ? strlen(ssid) : 0;
     size_t ulen = strlen(Config.info.UID), blen = slen + ulen + 1;
-    if (slen && ulen && (slen + ulen + 1) < sizeof(ap->ssid)) {
+    if (slen && ulen && blen < sizeof(ap->ssid)) {
         sprintf((char *)ap->ssid, "%s-%s", ssid, Config.info.UID);
     } else {
         snprintf((char *)ap->ssid, sizeof(ap->ssid), ssid);
@@ -1189,12 +1189,11 @@ esp_err_t iperf_command(
     };
     if (config.time < config.interval) config.time = config.interval;
     if (!( err = iperf_start(&config) )) {
-        size_t blen = IP4ADDR_STRLEN_MAX;
-        char sip[blen], dip[blen];
+        char sip[IP4ADDR_STRLEN_MAX], dip[IP4ADDR_STRLEN_MAX];
         ESP_LOGI(TAG, "mode=%s-%s sip=%s:%d, dip=%s:%d, intval=%d, tout=%d",
             udp ? "udp" : "tcp", host ? "client" : "server",
-            inet_ntoa_r(config.source_ip4, sip, blen), config.sport,
-            inet_ntoa_r(config.destination_ip4, dip, blen), config.dport,
+            inet_ntoa_r(config.source_ip4, sip, sizeof(sip)), config.sport,
+            inet_ntoa_r(config.destination_ip4, dip, sizeof(dip)), config.dport,
             config.interval, config.time);
     }
     return err;

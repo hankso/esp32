@@ -73,12 +73,11 @@ def fromroot(*a): return op.join(ROOT_DIR, *a)
 def findone(tpl, string, default='', pos=0, endpos=sys.maxsize):
     if not isinstance(tpl, re.Pattern):
         tpl = re.compile(tpl)
-    try:
-        m = next(tpl.finditer(string, pos, endpos))
-        gs = m.groups()
-        return m.group() if not gs else (gs[0] if len(gs) == 1 else gs)
-    except StopIteration:
+    m = tpl.search(string, pos, endpos)
+    if not m:
         return default
+    gs = m.groups()
+    return m.group() if not gs else (gs[0] if len(gs) == 1 else gs)
 
 
 def execute(cmd, **kwargs):
@@ -172,17 +171,20 @@ def process_nvs(args):
     try:
         for c in ('nvs_flash/nvs_partition_generator', 'esptool_py/esptool'):
             sys.path.append(op.join(IDF_PATH, 'components', c))
-        from nvs_partition_gen import main as nvs_gen
-        from esptool import _main as nvs_flash
+        try:
+            from esp_idf_nvs_partition_gen.nvs_partition_gen import main as gen
+        except ImportError:
+            from nvs_partition_gen import main as gen
+        from esptool import _main as flash
         if op.isdir(op.dirname(args.pack)):
             dist = args.pack
         else:
             dist = tempfile.mktemp() + '.bin'
         sys.argv[1:] = ['generate', args.output, dist, args.size]
-        nvs_gen()
+        gen()
         if args.flash:
             sys.argv[1:] = ['-p', args.flash, 'write_flash', args.offset, dist]
-            nvs_flash()
+            flash()
     except (SystemExit, Exception) as e:
         return print('Generate NVS binary failed:', e, file=sys.stderr)
     finally:
@@ -335,13 +337,14 @@ def genfont(args):
 
 # see ESP-IDF docs -> API Guides -> Build system -> common requirements
 ESP_IDF_COMMON = '''
-    app_trace bootloader console cxx driver efuse esp32 esp_common esp_eth
-    esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif esp_phy esp_pm
-    esp_ringbuf esp_rom esp_system esp_timer esp_wifi espcoredump esptool_py
-    freertos hal heap ieee802154 log lwip main mbedtls newlib nvs_flash
-    openthread partition_table pthread soc spi_flash tcpip_adapter vfs
-    wpa_supplicant xtensa
+    app_trace bootloader bt cxx driver esp_app_format esp_bootloader_format
+    esp_common esp_eth esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif
+    esp_phy esp_pm esp_ringbuf esp_rom esp_system esp_timer esp_wifi
+    espcoredump esptool_py freertos hal heap log lwip main mbedtls newlib
+    partition_table soc efuse tcpip_adapter vfs wpa_supplicant xtensa
 '''.split()
+
+ESP_IDF_SKIP = 'arduino linux'.split()
 
 
 def glob_headers(dirname):
@@ -363,12 +366,12 @@ def find_includes(components, headers):
     3. find *.h files under INCLUDE_DIRS use `glob_headers`
     4. mark a component as dependency if `headers` are found
     '''
-    tpl = re.compile(r'INCLUDE_DIRS ([\w\-/" ]+)', re.I)
+    tpl = re.compile(r'(?<!_)INCLUDE_DIRS ([\w\-/" ]+)', re.I)
     comps = {}
     for cmakefile in glob.glob(op.join(components, '*/CMakeLists.txt')):
         compdir = op.dirname(cmakefile)
         compname = op.basename(compdir)
-        if compname in ESP_IDF_COMMON or 'arduino' in compname:
+        if compname in ESP_IDF_COMMON or compname in ESP_IDF_SKIP:
             continue
         found = set()
         with open(cmakefile, encoding='utf8') as f:
@@ -402,22 +405,28 @@ def update_dependencies(comps):
     compcmk = fromroot('main', 'CMakeLists.txt')
     if not op.isfile(compcmk):
         return
-    tpl = re.compile(r'REQUIRES ([\w\- ]+)')
-    try:
-        with open(compcmk, encoding='utf8') as f:
-            old_content = f.read()
-        comps = sorted(set(comps).union(findone(tpl, old_content).split()))
-        new_content = tpl.sub('REQUIRES ' + ' '.join(comps), old_content)
-        if new_content != old_content:
-            with open(compcmk, 'w', encoding='utf8') as f:
-                f.write(new_content)
-    except Exception as e:
-        print('Update main/CMakeLists.txt failed:', e)
+    tpl = re.compile(r'( *)REQUIRES([a-z0-9\s\-_]+)')
+    with open(compcmk, encoding='utf8') as f:
+        old_content = f.read()
+    prefix, old_comps = findone(tpl, old_content)
+    indent = prefix.count(' ') // 4 * 4
+    new_comps = sorted(comps)  # sorted(set(comps).union(old_comps.split()))
+    if indent:
+        sub = ' ' * indent + (
+            '\n' + ' ' * (indent + 4)
+        ).join(['REQUIRES'] + new_comps)
+    else:
+        sub = prefix + 'REQUIRES ' + ' '.join(new_comps)
+    new_content = tpl.sub(sub + '\n', old_content)
+    if new_content != old_content:
+        with open(compcmk, 'w', encoding='utf8') as f:
+            f.write(new_content)
+    return True
 
 
 def gendeps(args):
     headers = set()
-    tpl = re.compile(r'# *include *["<]([\w\.\-/]+)[>"]')
+    tpl = re.compile(r'# *include *"([\w\.\-/]+)"')
     for root, dirs, files in walk_exclude(fromroot('main')):
         for fn in filter(lambda fn: fn.endswith(('.c', '.cpp', '.h')), files):
             with open(op.join(root, fn), encoding='utf8') as f:
@@ -446,14 +455,20 @@ def gendeps(args):
     comps = sorted(comps, key=lambda v: len(v))
     if not args.quiet:
         print(' '.join(comps))
-    update_dependencies(comps)
+    try:
+        if update_dependencies(comps) and not args.quiet:
+            print('main/CMakeLists.txt up to date')
+    except Exception as e:
+        print('Update main/CMakeLists.txt failed:', e)
 
 
 def prebuild(args):
     print('-- Running prebuild scripts (%s) ...' % __file__)
     with suppress(Exception):
-        os.unlink(fromroot(
-            'managed_components', 'espressif__elf_loader', '.component_hash'))
+        assert '4.4' in IDF_PATH
+        lst = glob.glob(fromroot('managed_components', '*', '.component_hash'))
+        for path in lst:
+            os.unlink(path)
     try:
         srcdir = fromroot('webpage')
         dstdir = fromroot('files', 'www')
@@ -515,8 +530,9 @@ def sdkconfig(args):
         for i in (args.targets + args.unknown_args) if i
     ]
     mapping = {
-        op.basename(path)[10:]: path.replace('\\', '/')
-        for path in glob.glob(fromroot('sdkconfig*'))
+        op.basename(path)[10:]: path.replace('\\', '/') for path in
+        glob.glob(fromroot('sdkconfig*')) +
+        glob.glob(fromroot('build/sdkconfig*'))
     }
     mapping.setdefault('local', fromroot('sdkconfig.local'))
     try:
@@ -1223,11 +1239,14 @@ class Server(ThreadingMixIn, WSGIServer):
         super().__init__(*a, **k)
         self.base_environ['WS_VERSIONS'] = [str(v) for v in (13, 8, 7)]
         self.base_environ['WS_PROTOCOL'] = set()
-        if bottle.Bottle.wsgi != self.patch_wsgi:
-            bottle.Bottle.wsgi = self.patch_wsgi
+        if bottle.Bottle.wsgi != self.wsgi:
+            bottle.Bottle.wsgi = self.wsgi
 
     def get_request(self):
         client, addr = self.socket.accept()
+        self.base_environ['REQUEST_START'] = time.time()
+        self.base_environ['REMOTE_PORT'] = addr[1]
+        self.base_environ['REMOTE_HOST'] = '%s:%d' % addr
         if client.recv(1, socket.MSG_PEEK) == b'\x16':  # TLS client hello
             app = self.get_app()
             if hasattr(app, 'ssl_opt'):
@@ -1235,9 +1254,6 @@ class Server(ThreadingMixIn, WSGIServer):
             self.base_environ['HTTPS'] = 'yes'
         else:
             self.base_environ['HTTPS'] = 'no'
-        self.base_environ['REMOTE_PORT'] = addr[1]
-        self.base_environ['REMOTE_HOST'] = '%s:%d' % addr
-        self.base_environ['REQUEST_START'] = time.time()
         return client, addr
 
     def set_app(self, app):
@@ -1245,15 +1261,15 @@ class Server(ThreadingMixIn, WSGIServer):
         app.server = self
 
     @staticmethod
-    def patch_wsgi(app, environ, start_response, origin=bottle.Bottle.wsgi):
-        environ['wsgi.multithread'] = True
-        environ['wsgi.multiprocess'] = False
-        def get(key, default=''): return environ.get(key, default)
+    def wsgi(app, env, start_response, origin=bottle and bottle.Bottle.wsgi):
+        env['wsgi.multithread'] = True
+        env['wsgi.multiprocess'] = False
+        def get(key, default=''): return env.get(key, default)
         if (get('REQUEST_METHOD') != 'GET' or get('wsgi.websocket')) or (
             get('HTTP_UPGRADE').lower() != 'websocket' and
             get('HTTP_CONNECTION').lower() != 'upgrade'
         ) or not isinstance(getattr(app, 'server'), Server):
-            return origin(app, environ, start_response)
+            return origin(app, env, start_response)
         version = get('HTTP_SEC_WEBSOCKET_VERSION')
         if not version or version not in get('WS_VERSIONS'):
             header = {'Sec-Websocket-Version': ', '.join(get('WS_VERSIONS'))}
@@ -1292,12 +1308,12 @@ class Server(ThreadingMixIn, WSGIServer):
             except Exception:
                 start_response('500 Internal Server Error', [])
                 return [b'Could not patch ServerHandler.start_response']
-        environ.update({
+        env.update({
             'wsgi.websocket': WebSocket(get('wsgi.input'), write, compress),
             'wsgi.websocket_version': version,
         })
         write(b'')
-        origin(app, environ, lambda *a, **k: None)  # return value ignored
+        origin(app, env, lambda *a, **k: None)  # return value ignored
         return []
 
 

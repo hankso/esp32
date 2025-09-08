@@ -999,7 +999,7 @@ static esp_err_t als_atdeg(int hdeg, int vdeg, float vals[ALS_NUM + 1]) {
     esp_err_t err = pwm_set_degree(hdeg, vdeg);
     if (err) return err;
     if ((hdeg + vdeg) > -2) msleep(100);
-    memset(vals, 0, sizeof(vals));
+    memset(vals, 0, (ALS_NUM + 1) * sizeof(float));
     LOOPN(i, ALS_NUM) {
         LOOPN(j, 3) {
             vals[i] += als_brightness(i);
