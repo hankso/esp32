@@ -330,18 +330,3 @@ onMounted(refresh)
         <TreeView v-model:select="select" :items />
     </v-sheet>
 </template>
-
-<style scoped>
-.tree-view {
-    height: calc(100% - 36px - 1px);
-}
-
-.v-btn {
-    width: 36px;
-    height: inherit;
-    border-radius: 0;
-    margin-inline-end: 0 !important;
-    border-inline-start: thin solid
-        rgba(var(--v-border-color), var(--v-border-opacity)) !important;
-}
-</style>

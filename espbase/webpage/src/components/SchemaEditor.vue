@@ -8,19 +8,10 @@
                 </span>
             </v-expansion-panel-title>
             <v-expansion-panel-text>
-                <div class="fix-schema-editor-margin">
-                    <!--
-                    <v-textarea
-                        v-model="plain"
-                        hide-details="auto"
-                        :error-messages="error"
-                    ></v-textarea>
-                    -->
-                    <CodeJar v-model="plain" language="json" line-number />
-                    <v-scroll-y-transition>
-                        <p v-show="error">{{ error }}</p>
-                    </v-scroll-y-transition>
-                </div>
+                <CodeJar v-model="plain" language="json" line-number />
+                <v-scroll-y-transition>
+                    <p v-show="error">{{ error }}</p>
+                </v-scroll-y-transition>
             </v-expansion-panel-text>
         </v-expansion-panel>
     </v-expansion-panels>
@@ -56,8 +47,10 @@ watch(
 </script>
 
 <style scoped>
-.fix-schema-editor-margin {
-    margin: -8px -24px -16px; /* hotfix for v-expansion-panel-text__wrapper */
+:deep(.v-expansion-panel-text__wrapper) {
+    padding: 0;
+    overflow: hidden;
+    border-radius: 4px;
 }
 
 .code-jar {

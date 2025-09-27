@@ -15,8 +15,6 @@ extern "C" {
 void sensors_initialize();
 
 float temp_celsius();       // degC
-uint16_t tpad_read();       // a.u.
-uint16_t vlx_read();        // mm
 
 typedef struct {
     uint8_t ges;
@@ -43,6 +41,10 @@ esp_err_t tscn_read(tscn_data_t *, bool apply);
 esp_err_t tscn_command(const char *ctrl);   // start / stop / stat tscn task
 void tscn_print(tscn_data_t *, FILE *, bool newline);
 
+esp_err_t mscn_status();    // IST3931
+
+int vlx_read();             // mm
+
 typedef struct {
     float brightness;       // lux
     float temperature;      // degC
@@ -51,7 +53,7 @@ typedef struct {
     float altitude;         // meter
 } gy39_data_t;
 
-esp_err_t gy39_read(uint8_t bus, gy39_data_t *);
+esp_err_t gy39_read(gy39_data_t *);
 
 typedef enum {
 #   define ALS_NUM 4
@@ -68,8 +70,7 @@ float als_brightness(uint8_t idx); // lux, idx < ALS_NUM
 
 esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg);
 
-void mscn_status();         // IST3931
-void pwr_status();          // BQ25895
+esp_err_t pwr_status();     // BQ25895
 
 #ifdef __cplusplus
 }

@@ -10,14 +10,40 @@
 #include "config.h"
 
 #include "nvs.h"
+#include "esp_mac.h"
+#include "esp_flash.h"
 #include "esp_timer.h"
 #include "esp_system.h"
+#include "esp_chip_info.h"
 #include "esp_heap_caps.h"
 #include "esp_partition.h"
 #include "esp_image_format.h"
+#include "bootloader_common.h"
 #include "soc/efuse_periph.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+
+esp_err_t errval() {
+    switch (errno) {
+    case 0:         return ESP_OK;
+    case ENOMEM:    return ESP_ERR_NO_MEM;
+    case EINVAL:    return ESP_ERR_INVALID_ARG;
+    case EBUSY:     return ESP_ERR_INVALID_STATE;
+    case EEXIST:    return ESP_ERR_INVALID_STATE;
+    case ERANGE:    return ESP_ERR_INVALID_SIZE;
+    case ENOSPC:    return ESP_ERR_INVALID_SIZE;
+    case ENOENT:    return ESP_ERR_NOT_FOUND;
+    case ENOTSUP:   return ESP_ERR_NOT_SUPPORTED;
+    case ETIMEDOUT: return ESP_ERR_TIMEOUT;
+    case EPERM:     return ESP_ERR_NOT_ALLOWED;
+    default:        return ESP_FAIL;
+    }
+}
+
+const char *errstr() {
+    esp_err_t err = errval();
+    return err == ESP_FAIL && errno ? strerror(errno) : esp_err_to_name(err);
+}
 
 void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
 
@@ -34,11 +60,11 @@ uint64_t asleep(uint32_t ms, uint64_t next) {
 int stridx(const char *str, const char *tpl) {
     size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
     if (!slen || !tlen) return -1;
-    size_t cnt = strcnt(tpl, ",;/\\|", -1);
+    size_t cnt = strncnt(tpl, ",;/\\|", -1);
     uint16_t idx, ret = parse_u16(str, &idx);       // case 1: number as index
     if (ret && idx < MIN(cnt ?: tlen, tlen)) return idx;
     const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
-    if (tmp && cnt) return strcnt(tpl, ",;/\\|", tmp - tpl);
+    if (tmp && cnt) return strncnt(tpl, ",;/\\|", tmp - tpl);
     if (tmp && slen == 1) return tmp - tpl;         // case 3: "ABC"
     if (slen > 1 && !cnt && ( tmp = strchr(tpl, str[0]) ))
         return tmp - tpl;                           // case 4: match first char
@@ -46,12 +72,12 @@ int stridx(const char *str, const char *tpl) {
     return -1;
 }
 
-bool strbool(const char *str) {
-    if (!str) return false;
-    return !strcmp(str, "1") || !strcasecmp(str, "y") || !strcasecmp(str, "on");
+bool strtob(const char *str) {
+    if (!strlen(str ?: "")) return false;
+    return strspn(str, "1yY") == 1 || !strcasecmp(str, "on");
 }
 
-size_t strcnt(const char *str, const char *wants, size_t slen) {
+size_t strncnt(const char *str, const char *wants, size_t slen) {
     if (!strlen(wants ?: "")) return 0;
     size_t cnt = 0, idx = 0, len = strnlen(str ?: "", slen);
     while (idx < len) { if (strchr(wants, str[idx++])) cnt++; }
@@ -64,7 +90,7 @@ char * strtrim(char *str, const char *chars) {
     size_t head = strspn(str, chars);
     size_t tail = slen - 1;
     while (tail > head && strchr(chars, str[tail])) { tail--; }
-    str[++tail] = '\0';
+    str[tail + 1] = '\0';
     return str + head;
 }
 
@@ -166,10 +192,10 @@ size_t parse_all(const char *str, int *var, size_t size) {
 size_t parse_pin(const char *str, int *arr, size_t len, const char **names) {
     size_t num = parse_all(str, arr, len);
     LOOPN(i, names ? num : 0) {
-        if (arr[i] == GPIO_NUM_NC) continue;
+        if (arr[i] == GPIO_NUM_NC || !names[i]) continue;
         const char *usage = gpio_usage(arr[i], names[i]);
         if (!usage || startswith(usage, "Strapping")) continue; // not used
-        if (strcmp(usage, names[i] ?: "")) {
+        if (strcmp(usage, names[i])) {
             printf("Invalid pin %d: already used as %s", arr[i], usage);
             return 0;
         }
@@ -398,6 +424,22 @@ const char * format_size(double bytes) {
     return buf;
 }
 
+const char * format_time(double secs) {
+    static char buf[16];
+    if (secs < 1) {
+        snprintf(buf, sizeof(buf), "%3.0f ms", secs * 1e3);
+    } else if (secs < 60) {
+        snprintf(buf, sizeof(buf), "%4.1f s", secs);
+    } else if (secs < 3600) {
+        snprintf(buf, sizeof(buf), "%4.1f m", secs / 60);
+    } else if (secs < 86400) {
+        snprintf(buf, sizeof(buf), "%4.1f h", secs / 3600);
+    } else if (secs < UINT32_MAX) {
+        snprintf(buf, sizeof(buf), "%4.1f d", secs / 86400);
+    }
+    return buf;
+}
+
 static void * createTimer(int64_t us, void (*func)(void *), void *arg) {
     esp_timer_handle_t hdl = NULL;
     const esp_timer_create_args_t args = { .callback = func, .arg = arg };
@@ -448,55 +490,73 @@ bool notify_wait_for(uint32_t target, uint32_t tout_ms, uint32_t wait_ms) {
     return val == target;
 }
 
-static bool task_compare(uint8_t sort_attr, TaskStatus_t *a, TaskStatus_t *b) {
+#define TASK_MAXID  29
+#define TASK_TIME   30
+#define TASK_TOTAL  31
+static uint32_t task_hist[TASK_TOTAL + 1];
+
+static bool task_compare(tsort_t sort, TaskStatus_t *a, TaskStatus_t *b) {
     int aid = a->xCoreID > 1 ? -1 : a->xCoreID;
     int bid = b->xCoreID > 1 ? -1 : b->xCoreID;
-    if (sort_attr == 0) return a->xTaskNumber < b->xTaskNumber;
-    if (sort_attr == 1) return a->eCurrentState < b->eCurrentState;
-    if (sort_attr == 2) {
-        int rst = strcmp(a->pcTaskName, b->pcTaskName);
-        return rst ? rst < 0 : aid < bid;
+    int rst = strcmp(a->pcTaskName, b->pcTaskName);
+    switch (sort) {
+    case TSORT_STATE: return a->eCurrentState < b->eCurrentState;
+    case TSORT_TID:   return a->xTaskNumber < b->xTaskNumber;
+    case TSORT_CPU:   return aid < bid;
+    case TSORT_PRI:   return a->uxCurrentPriority < b->uxCurrentPriority;
+    case TSORT_NAME:  return rst ? rst < 0 : aid < bid;
+    case TSORT_USAGE:
+        if (a->xTaskNumber <= TASK_MAXID && b->xTaskNumber <= TASK_MAXID)
+            return (a->ulRunTimeCounter - task_hist[a->xTaskNumber]) <
+                   (b->ulRunTimeCounter - task_hist[b->xTaskNumber]);
+        return a->ulRunTimeCounter < b->ulRunTimeCounter;
+    default:          return a->usStackHighWaterMark < b->usStackHighWaterMark;
     }
-    if (sort_attr == 3) return a->uxCurrentPriority < b->uxCurrentPriority;
-    if (sort_attr == 4) return aid < bid;
-    if (sort_attr == 5) return a->ulRunTimeCounter < b->ulRunTimeCounter;
-    return a->usStackHighWaterMark < b->usStackHighWaterMark;
 }
 
-void task_info(uint8_t sort_attr) {
+void task_info(tsort_t sort) {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
-    //                              Running Ready Blocked Suspended Deleted
-    const char *taskname, states[] = "*RBSD";
-    uint32_t ulTotalRunTime = 0;
+    uint32_t total = 0, curr = xTaskGetTickCount(), dt;
     uint16_t num = uxTaskGetNumberOfTasks();
     TaskStatus_t tmp, *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
     if (tasks == NULL) {
         printf("Could not allocate space for tasks list");
         return;
     }
-    if (!( num = uxTaskGetSystemState(tasks, num, &ulTotalRunTime) )) {
+    if (!( num = uxTaskGetSystemState(tasks, num, &total) )) {
         printf("TaskStatus_t array size too small. Skip");
-        vPortFree(tasks);
-        return;
+        goto exit;
     }
-    LOOPN(i, num) { LOOP(j, i + 1, num) { // sort tasks by specified attribute
-        if (task_compare(sort_attr, tasks + i, tasks + j)) continue;
+#   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
+    LOOPN(i, num) { total += tasks[i].ulRunTimeCounter; }
+#   endif
+    LOOPN(i, num) { LOOP(j, i + 1, num) {       // sort tasks by sort_attr
+        if (task_compare(sort, tasks + i, tasks + j)) continue;
         tmp = tasks[i]; tasks[i] = tasks[j]; tasks[j] = tmp;
     } }
-#   ifndef CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS
-    LOOPN(i, num) { ulTotalRunTime += tasks[i].ulRunTimeCounter; }
-#   endif
-    printf("TID State Name           Pri CPU Used StackHW\n");
+    printf("S ID CPU Pri Name            StackHW Used %s\n",
+            format_time(pdTICKS_TO_MS(curr - task_hist[TASK_TIME]) / 1e3));
     LOOPN(i, num) {
-        if (!strcmp(taskname = tasks[i].pcTaskName, "IDLE"))
-            taskname = tasks[i].xCoreID ? "CPU 1 App" : "CPU 0 Pro";
-        printf("%3d  (%c)  %-15s %2d %3d %3d%% %7s\n",
-               tasks[i].xTaskNumber, states[tasks[i].eCurrentState],
-               taskname, tasks[i].uxCurrentPriority,
-               tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
-               100 * tasks[i].ulRunTimeCounter / (ulTotalRunTime ?: 1),
-               format_size(tasks[i].usStackHighWaterMark));
+        printf(
+            "%c %-2d %3d %3d %-15s %7s %3.0f%% ",
+            // Current Ready Blocked Suspended Deleted
+            "*RBSD"[tasks[i].eCurrentState], tasks[i].xTaskNumber,
+            tasks[i].xCoreID > 1 ? -1 : tasks[i].xCoreID,
+            tasks[i].uxCurrentPriority, tasks[i].pcTaskName,
+            format_size(tasks[i].usStackHighWaterMark),
+            1e2 * tasks[i].ulRunTimeCounter / total
+        );
+        if (tasks[i].xTaskNumber > TASK_MAXID) {
+            putchar('\n');
+        } else {
+            dt = tasks[i].ulRunTimeCounter - task_hist[tasks[i].xTaskNumber];
+            task_hist[tasks[i].xTaskNumber] = tasks[i].ulRunTimeCounter;
+            printf("%5.0f%%\n", 1e2 * dt / (total - task_hist[TASK_TOTAL]));
+        }
     }
+    task_hist[TASK_TIME] = curr;
+    task_hist[TASK_TOTAL] = total;
+exit:
     vPortFree(tasks);
 #else
     puts("Unsupported command! Enable `CONFIG_FREERTOS_USE_TRACE_FACILITY` "
@@ -506,12 +566,14 @@ void task_info(uint8_t sort_attr) {
 }
 
 void version_info() {
-    printf("ESP  IDF: %s\n"
-           "FreeRTOS: %s\n"
-           "Firmware: %s\n"
-           "Compiled: %s %s\n",
-           esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
-           Config.info.VER, __DATE__, __TIME__);
+    printf(
+        "ESP  IDF: %s\n"
+        "FreeRTOS: %s\n"
+        "Firmware: %s\n"
+        "Compiled: %s %s\n",
+        esp_get_idf_version(), tskKERNEL_VERSION_NUMBER,
+        Config.info.VER, __DATE__, __TIME__
+    );
 }
 
 void memory_info() {
@@ -534,7 +596,7 @@ void memory_info() {
         printf("%8s ", format_size(tfree));
         printf("%3d%% ", total ? 100 * info.total_allocated_bytes / total : 0);
         printf("%3d%% ", tfree ? 100 * tfrag / tfree : 0);
-        printf("0x%08x\n", caps[i]);
+        printf("0x%08" PRIu32 "\n", caps[i]);
     }
 }
 
@@ -548,7 +610,7 @@ static const char * chip_model_str(esp_chip_model_t model) {
     case CHIP_ESP32:    return "ESP32";
 #else
     case CHIP_ESP32:
-        switch (REG_GET_FIELD(EFUSE_BLK0_RDATA3_REG, EFUSE_RD_CHIP_VER_PKG)) {
+        switch (bootloader_common_get_chip_ver_pkg()) {
         case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ6:     return "ESP32-D0WD-Q6";
         case EFUSE_RD_CHIP_VER_PKG_ESP32D0WDQ5:     return "ESP32-D0WD-Q5";
         case EFUSE_RD_CHIP_VER_PKG_ESP32D2WDQ5:     return "ESP32-D2WD-Q5";
@@ -563,23 +625,32 @@ static const char * chip_model_str(esp_chip_model_t model) {
 }
 
 void hardware_info() {
+    uint32_t fid, size;
     esp_chip_info_t info;
     esp_chip_info(&info);
+    esp_flash_read_id(NULL, &fid);
+    esp_flash_get_physical_size(NULL, &size);
+#ifdef IDF_TARGET_V4
+    uint16_t revision = info.full_revision;
+#else
+    uint16_t revision = info.revision;
+#endif
     printf(
         "Chip UID: %s-%s\n"
         "   Model: %s\n"
         "   Cores: %d\n"
         "Revision: %d.%d\n"
-        "Features: %s %s flash%s%s%s%s\n",
+        "Features: %s %s flash%s%s%s%s\n"
+        "   Flash: MID %02X CID %04X\n",
         Config.info.NAME, Config.info.UID,
         chip_model_str(info.model), info.cores,
-        info.revision, info.full_revision % 100, // full = major * 100 + minor
-        format_size(spi_flash_get_chip_size()),
+        revision / 100, revision % 100, format_size(size),
         info.features & CHIP_FEATURE_EMB_FLASH ? "Embedded" : "External",
         info.features & CHIP_FEATURE_EMB_PSRAM ? " | Embedded PSRAM" : "",
         info.features & CHIP_FEATURE_WIFI_BGN ? " | WiFi 802.11bgn" : "",
         info.features & CHIP_FEATURE_BLE ? " | BLE" : "",
-        info.features & CHIP_FEATURE_BT ? " | BT" : ""
+        info.features & CHIP_FEATURE_BT ? " | BT" : "",
+        (uint8_t)(fid >> 16), (uint16_t)(fid & 0xFFFF)
     );
 
     const struct {
@@ -592,7 +663,7 @@ void hardware_info() {
         { "ETH", ESP_MAC_ETH },
     };
     LOOPN(i, LEN(macs)) {
-        uint8_t buf[8] = { 0 };
+        uint8_t buf[6] = { 0 };
         if (esp_read_mac(buf, macs[i].type)) continue;
         printf(" %s MAC: " MACSTR "\n", macs[i].name, MAC2STR(buf));
     }
@@ -709,7 +780,7 @@ void partition_info() {
 #   endif
         }
 #endif
-        printf("%-12s %-4s %-9s 0x%06X 0x%06X %3d%% %s\n",
+        printf("%-12s %-4s %-9s 0x%06" PRIX32 " 0x%06" PRIX32 " %3d%% %s\n",
                part->label, partition_type_str(part->type),
                partition_subtype_str(part->type, subtype),
                part->address, part->size, partition_used(part),

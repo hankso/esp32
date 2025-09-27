@@ -10,77 +10,55 @@
 #include "hidtool.h"            // for hid_xxx
 #include "config.h"
 
-static const char *TAG = "Sensor";
+static const char *TAG = "Sensors";
 
 static UNUSED uint8_t maskread(uint8_t val, uint8_t mask) {
     const uint8_t lowest_bitmap[] = { 0, 1, 2, 0, 3, 5, 0, 8, 4, 7, 6 };
     return bitsread(val, lowest_bitmap[(mask & ~(mask - 1)) % 11], mask);
 }
 
-/******************************************************************************
+/*
  * Internal temperature sensor
  */
 
-#ifdef SOC_TEMP_SENSOR_SUPPORTED
+#if !defined(SOC_TEMP_SENSOR_SUPPORTED)
+
+float temp_celsius() { return 0; }
+
+#elif defined(IDF_TARGET_V4)
 #   include "driver/temp_sensor.h"
 
 static void temp_initialize() {
-    temp_sensor_config_t temp_conf = TSENS_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK( temp_sensor_set_config(temp_conf) );
+    temp_sensor_config_t config = TSENS_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( temp_sensor_set_config(config) );
     ESP_ERROR_CHECK( temp_sensor_start() );
-    ESP_LOGI(TAG, "Temperature is %.3f celsius degree", temp_celsius());
+    ESP_LOGI(TAG, "Temperature is %.3f °C", temp_celsius());
 }
 
 float temp_celsius() {
     float deg;
-    temp_sensor_read_celsius(&deg);
-    return deg;
+    return temp_sensor_read_celsius(&deg) ? 0 : deg;
 }
 #else
-float temp_celsius() { return 0; }
+#   include "driver/temperature_sensor.h"
+
+static temperature_sensor_handle_t temp;
+
+static void temp_initialize() {
+    esp_log_level_set("temperature_sensor", ESP_LOG_WARN);
+    temperature_sensor_config_t config = TEMPERATURE_SENSOR_CONFIG_DEFAULT(0, 80);
+    ESP_ERROR_CHECK( temperature_sensor_install(&config, &temp) );
+    ESP_ERROR_CHECK( temperature_sensor_enable(temp) );
+    ESP_LOGI(TAG, "Temperature is %.3f °C", temp_celsius());
+}
+
+float temp_celsius() {
+    float deg;
+    return temperature_sensor_get_celsius(temp, &deg) ? 0 : deg;
+}
 #endif
 
-/******************************************************************************
- * Internal touch pad
- */
-
-#ifdef CONFIG_BASE_USE_TPAD
-#   include "soc/touch_sensor_periph.h"
-#   include "driver/touch_pad.h"
-
-static touch_pad_t tpad = TOUCH_PAD_MAX;
-
-static touch_pad_t gpio2tpad(gpio_num_t pin) {
-    LOOPN(i, SOC_TOUCH_SENSOR_NUM) {
-        if (touch_sensor_channel_io_map[i] == pin) return i;
-    }
-    return TOUCH_PAD_MAX;
-}
-
-static void tpad_initialize() {
-    if (( tpad = gpio2tpad(PIN_TPAD) ) == TOUCH_PAD_MAX) {
-        ESP_LOGE(TAG, "Touch: invalid pin %d", PIN_TPAD);
-        return;
-    }
-    ESP_ERROR_CHECK( touch_pad_init() );
-    touch_pad_set_voltage(
-        TOUCH_HVOLT_2V7, TOUCH_LVOLT_0V5, TOUCH_HVOLT_ATTEN_1V);
-    touch_pad_config(tpad, 0);  // threshold=0
-    touch_pad_filter_start(10); // period=10ms
-    ESP_LOGI(TAG, "Touch pad is %d", tpad_read());
-}
-
-uint16_t tpad_read() {
-    if (tpad == TOUCH_PAD_MAX) return 0;
-    uint16_t val;
-    touch_pad_read_filtered(tpad, &val);
-    return val;
-}
-#else
-uint16_t tpad_read() { return 0; }
-#endif
-
-/******************************************************************************
+/*
  * Touch Screen
  */
 
@@ -128,6 +106,7 @@ static struct {
 #   define AINVX            0
 #   define AINVY            1
 #   define ASWAP            2
+    void *nvs;
     void (*hdlr)(tscn_data_t *dat);
 } tscn;
 
@@ -240,7 +219,6 @@ static void tscn_handle_absolute(tscn_data_t *dat) {
 }
 
 static void tscn_handle_touchpad(tscn_data_t *dat) {
-#ifdef CONFIG_BASE_BOARD_S3NL191
     hid_report_t report = {
         .id = REPORT_ID_POINT,
         .point = {
@@ -251,7 +229,7 @@ static void tscn_handle_touchpad(tscn_data_t *dat) {
         }
     };
     hid_report_send(HID_TARGET_ALL, &report);
-#else
+#if 0
     static hid_report_t report = {
         .id = REPORT_ID_TOUCH,
         .touch = { .rate = 0x0101 }
@@ -342,10 +320,8 @@ static void tscn_task(void *arg) {
 
 static esp_err_t tscn_sync() {
     if (tscn.hdlr == tscn_handle_selection) {
-        config_nvs_open("tscn", false);
-        config_nvs_write("hres", tscn.hres, sizeof(tscn.hres));
-        config_nvs_write("vres", tscn.vres, sizeof(tscn.vres));
-        config_nvs_close();
+        config_nvs_write(tscn.nvs, "hres", tscn.hres, sizeof(tscn.hres));
+        config_nvs_write(tscn.nvs, "vres", tscn.vres, sizeof(tscn.vres));
     }
     if (strcasestr(Config.app.TSCN_MODE, "REC")) {
         tscn.hres[RSMIN] = tscn.hres[RSLEN] = tscn.hres[RAMAX];
@@ -385,13 +361,8 @@ static void tscn_oncfg(void *a, esp_event_base_t base, int32_t id, void *data) {
     if (strcasestr(key, "app.tscn.mode")) tscn_sync();
 }
 
-static void tscn_initialize() {
-    const char *chip;
-    uint8_t bus = NUM_I2C, addr = 0x38;
-#   ifdef CONFIG_BASE_BOARD_S3NL191     // active low reset
-    gexp_set_level(GPIO_NUM_21, false); msleep(50);
-    gexp_set_level(GPIO_NUM_21, true);  msleep(50);
-#   endif
+static esp_err_t tscn_initialize(int bus, int addr) {
+    if (tscn.addr) return ESP_ERR_INVALID_STATE;
     smbus_regval_t regs[] = {
         RT_RBYTE(TP_CHIP_ID),
         RT_RBYTE(TP_PANEL_ID),
@@ -399,31 +370,33 @@ static void tscn_initialize() {
         { TP_INTR_MODE, 0x00 },         // interrupt polling
         { TP_TH_GROUP, 0x08 },          // touch threshold
     };
-    if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, 2)) return;
-    switch (regs[0].val) {
+    esp_err_t err = smbus_regtable(bus, addr, regs, 2);
+    const char *chip;
+    switch (err ? 0 : regs[0].val) {
     case 0x54: chip = "FT3558"; break;
     case 0x06: chip = "FT6206"; break;
     case 0x36: chip = "FT6236"; break;
     case 0x64: chip = "FT6336"; break;
-    default:   return;
+    default:   return err ?: ESP_ERR_NOT_SUPPORTED;
     }
-    if (smbus_regtable(bus, addr, regs + 2, LEN(regs) - 2)) return;
-    tscn.bus = bus;
-    tscn.addr = addr;
-    esp_err_t err = config_nvs_open("tscn", false);
-    if (!err) err = config_nvs_read("hres", tscn.hres, sizeof(tscn.hres)) < 0;
-    if (!err) err = config_nvs_read("vres", tscn.vres, sizeof(tscn.vres)) < 0;
-    if (err) {
+    if (( err = smbus_regtable(bus, addr, regs + 2, LEN(regs) - 2) ))
+        return err;
+    if (!tscn.nvs) config_nvs_open(&tscn.nvs, "tscn", false);
+    if (config_nvs_read(tscn.nvs, "hres", tscn.hres, sizeof(tscn.hres)) < 0 ||
+        config_nvs_read(tscn.nvs, "vres", tscn.vres, sizeof(tscn.vres)) < 0
+    ) {
         tscn.hres[RAMAX] = tscn.hres[RSLEN] = 1440;
         tscn.vres[RAMAX] = tscn.vres[RSLEN] = 1920;
-        config_nvs_write("hres", tscn.hres, sizeof(tscn.hres));
-        config_nvs_write("vres", tscn.vres, sizeof(tscn.vres));
+        config_nvs_write(tscn.nvs, "hres", tscn.hres, sizeof(tscn.hres));
+        config_nvs_write(tscn.nvs, "vres", tscn.vres, sizeof(tscn.vres));
     }
-    config_nvs_close();
-    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X: PANEL ID = 0x%02X",
-             chip, tscn.bus, tscn.addr, regs[1].val);
-    REGEVTS(CFG, tscn_oncfg, NULL, NULL);
+    tscn.bus = bus;
+    tscn.addr = addr;
     tscn_sync();
+    REGEVTS(CFG, tscn_oncfg, NULL, NULL);
+    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X: PANEL ID = 0x%02X",
+             chip, bus, addr, regs[1].val);
+    return err;
 }
 
 esp_err_t tscn_read(tscn_data_t *dat, bool apply) {
@@ -456,9 +429,9 @@ esp_err_t tscn_read(tscn_data_t *dat, bool apply) {
 }
 
 esp_err_t tscn_command(const char *ctrl) {
-    if (!tscn.addr) return ESP_ERR_NOT_SUPPORTED;
+    if (!tscn.addr) return ESP_ERR_INVALID_STATE;
     if (ctrl) {
-        tscn.stop = !strbool(ctrl);
+        tscn.stop = !strtob(ctrl);
         if (!tscn.stop && tscn.task) {
             if (xPortInIsrContext()) {
                 vTaskNotifyGiveFromISR(tscn.task, NULL);
@@ -519,7 +492,7 @@ void tscn_print(tscn_data_t *d, FILE *s, bool n) {
 }
 #endif // CONFIG_BASE_USE_TSCN
 
-/******************************************************************************
+/*
  * Multiple Screens
  */
 
@@ -570,21 +543,16 @@ void tscn_print(tscn_data_t *d, FILE *s, bool n) {
 #   define MS_EXIT          0xE3 // return to normal mode
 #   define MS_DELAY         0xF0
 
-typedef struct {
-    uint8_t bus, addr;
-    bool busy, adc, donb, resb;
-} ist_ctx_t;
-
 static esp_err_t ist3931_send(
-    ist_ctx_t *ctx, uint8_t type, const uint8_t *buf, size_t len
+    uint8_t bus, uint8_t addr, uint8_t type, const uint8_t *buf, size_t len
 ) {
-    if (!ctx->addr) return ESP_ERR_INVALID_STATE;
+    if (!addr) return ESP_ERR_INVALID_STATE;
     esp_err_t err = ESP_OK;
     size_t cnt = 0;
     uint8_t *ptr = (uint8_t *)buf, *tmp;
     while (cnt < len && (*ptr++ & MS_DELAY) != MS_DELAY) { cnt++; }
     if (cnt == 1) {
-        smbus_write_byte(ctx->bus, ctx->addr, type, buf[0]);
+        smbus_write_byte(bus, addr, type, buf[0]);
     } else if (cnt > 1) {
         if (( err = EMALLOC(tmp, cnt * 2) )) return err;
         ptr = tmp;
@@ -592,58 +560,48 @@ static esp_err_t ist3931_send(
             *ptr++ = type;
             *ptr++ = buf[i];
         }
-        err = smbus_wregs(ctx->bus, ctx->addr, tmp[0], tmp + 1, cnt * 2 - 1);
+        err = smbus_wregs(bus, addr, tmp[0], tmp + 1, cnt * 2 - 1);
         TRYFREE(tmp);
         if (err) return err;
     }
     if (len > cnt) {
         msleep(buf[cnt] & 0xF);
-        err = ist3931_send(ctx, type, buf + cnt + 1, len - cnt - 1);
+        err = ist3931_send(bus, addr, type, buf + cnt + 1, len - cnt - 1);
     }
     return err;
 }
 
-static esp_err_t ist3931_set_window(ist_ctx_t *ctx, uint8_t x, uint8_t y) {
+static esp_err_t ist3931_rect(uint8_t bus, uint8_t addr, uint8_t x, uint8_t y) {
     uint8_t cmds[] = {
         MS_SETAY1 | bitnread(y, 4, 2),
         MS_SETAY0 | (y & 0xF),
         MS_SETAX  | (x & 0x1F)
     };
-    return ist3931_send(ctx, MS_REG_CMD, cmds, sizeof(cmds));
+    return ist3931_send(bus, addr, MS_REG_CMD, cmds, sizeof(cmds));
 }
 
-static esp_err_t ist3931_read_status(ist_ctx_t *ctx) {
-    if (!ctx->addr) return ESP_ERR_INVALID_STATE;
+static esp_err_t ist3931_read_status(uint8_t bus, uint8_t addr, bool verbose) {
     uint8_t val;
-    esp_err_t err = smbus_write_byte(ctx->bus, ctx->addr, MS_REG_CMD, MS_RDST);
-    if (!err) {
-        msleep(5);
-        err = i2c_master_read_from_device(ctx->bus, ctx->addr, &val, 1, 20);
-    }
-    if (!err) {
-        ctx->busy = bitread(val, 7);
-        ctx->adc  = bitread(val, 6);
-        ctx->donb = !bitread(val, 5);
-        ctx->resb = !bitread(val, 4);
+    esp_err_t err = smbus_write_byte(bus, addr, MS_REG_CMD, MS_RDST);
+    if (!err) err = i2c_wtrd(bus, addr, NULL, 0, &val, 1);
+    if (!err && verbose) {
         printf("Busy: %d, ADC: %d, Display: %d, Reset: %d\n",
-            ctx->busy, ctx->adc, ctx->donb, ctx->resb);
+               bitread(val, 7), bitread(val, 6),
+               !bitread(val, 5), !bitread(val, 4));
     }
     return err;
 }
 
-static esp_err_t ist3931_read_frame(ist_ctx_t *ctx) {
-    if (!ctx->addr) return ESP_ERR_INVALID_STATE;
-    uint8_t v[16 + 1], l = sizeof(v); memset(v, 0, l);
-    esp_err_t err = ist3931_set_window(ctx, 0, 0);
-    if (!err) err = smbus_write_byte(ctx->bus, ctx->addr, MS_REG_CMD, MS_RDRAM);
-    if (!err) err = i2c_master_read_from_device(ctx->bus, ctx->addr, v, l, 50);
-    if (!err) ESP_LOG_BUFFER_HEX(TAG, v + 1, l - 1);
+static esp_err_t ist3931_read_frame(uint8_t bus, uint8_t addr, bool verbose) {
+    uint8_t buf[16 + 1], len = sizeof(buf); memset(buf, 0, len);
+    esp_err_t err = ist3931_rect(bus, addr, 0, 0);
+    if (!err) err = smbus_write_byte(bus, addr, MS_REG_CMD, MS_RDRAM);
+    if (!err) err = i2c_wtrd(bus, addr, NULL, 0, buf, len);
+    if (!err && verbose) hexdump(buf + 1, len - 1, 80);
     return err;
 }
 
-static ist_ctx_t ist;
-
-const uint8_t init_cmds[] = {
+const uint8_t cmds[] = {
     MS_RESET,               // soft reset
     MS_DELAY | 0xF,         // delay 50ms
     MS_DELAY | 0xF,
@@ -677,34 +635,42 @@ const uint8_t test_dats[] = {
     0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
 };
 
-void mscn_status() {
-    ist3931_read_status(&ist);
-    ist3931_read_frame(&ist);
+static struct {
+    uint8_t bus, addr;
+} ist;
+
+esp_err_t mscn_status() {
+    if (!ist.addr) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = ist3931_read_status(ist.bus, ist.addr, true);
+    if (!err) err = ist3931_read_frame(ist.bus, ist.addr, true);
+    return err;
 }
 
-static void mscn_initialize() {
-    ist.bus = NUM_I2C;
-    ist.addr = 0x3F;
-    if (smbus_probe(ist.bus, ist.addr) ||
-        ist3931_read_status(&ist) ||
-        ist3931_send(&ist, MS_REG_CMD, init_cmds, LEN(init_cmds)) ||
-        ist3931_set_window(&ist, 0, 4) ||
-        ist3931_send(&ist, MS_REG_DAT, test_dats, LEN(test_dats))
-    ) { ist.addr = 0; return; }
-    ESP_LOGI(TAG, "MSCN: found IST3931 at I2C %d-%02X", ist.bus, ist.addr);
+static esp_err_t mscn_initialize(uint8_t bus, uint8_t addr) {
+    if (ist.addr) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = ist3931_read_status(bus, addr, false);
+    if (!err) err = ist3931_send(bus, addr, MS_REG_CMD, icmds, LEN(icmds));
+    if (!err) err = ist3931_rect(bus, addr, 0, 4);
+    if (!err) err = ist3931_send(bus, addr, MS_REG_DAT, idats, LEN(idats));
+    if (!err) {
+        ist.bus = bus;
+        ist.addr = addr;
+        ESP_LOGI(TAG, "MSCN: found IST3931 at I2C %d-%02X", bus, addr);
+    }
+    return err;
 }
 #else // CONFIG_BASE_USE_MSCN
-void mscn_status() {}
+esp_err_t mscn_status() { return ESP_ERR_NOT_SUPPORTED; }
 #endif // CONFIG_BASE_USE_MSCN
 
-/******************************************************************************
+/*
  * Distance Measurement
  */
 
 #ifdef CONFIG_BASE_VLX_SENSOR
 
 typedef struct {
-    uint8_t bus, addr, tcc, msrc, dss, pre, final, stop, spad;
+    uint8_t tcc, msrc, dss, pre, final, stop, spad;
     uint16_t pre_pclks, final_pclks, pre_mclks, final_mclks, msrc_mclks;
     uint32_t pre_us, final_us, msrc_us, budget_us;
 } vlx_ctx_t;
@@ -736,7 +702,7 @@ static uint16_t vlx_tout2val(uint16_t tout) {
 }
 
 // VL53L0X_GetInfoFromDevice + VL53L0X_SetSpadMap
-static esp_err_t vlx_sync_spad(vlx_ctx_t *ctx) {
+static esp_err_t vlx_sync_spad(uint8_t bus, uint8_t addr) {
     smbus_regval_t regs[] = {
         // VL53L0X_GetSpadInfo
         { 0x80, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 }, { 0xFF, 0x06 },
@@ -752,7 +718,7 @@ static esp_err_t vlx_sync_spad(vlx_ctx_t *ctx) {
         { 0xFF, 0x01 }, { 0x4F, 0x00 }, { 0x4E, 0x2C },
         { 0xFF, 0x00 }, { 0xB6, 0xB4 },
     }, *spad = RT_FIND_REG(regs, 0x92), *smap = RT_FIND_REG(regs, 0xB0);
-    esp_err_t err = smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs));
+    esp_err_t err = smbus_regtable(bus, addr, regs, LEN(regs));
     if (err || !spad || !smap) return err ?: ESP_FAIL;
     uint8_t first = (spad->val & 0x80) ? 12 : 0, total = spad->val & 0x7F;
     for (int cnt = 0, i = 0; i < 48; i++) {
@@ -763,17 +729,19 @@ static esp_err_t vlx_sync_spad(vlx_ctx_t *ctx) {
             cnt++;
         }
     }
-    return smbus_regtable(ctx->bus, ctx->addr, smap, 6);
+    return smbus_regtable(bus, addr, smap, 6);
 }
 
 // VL53L0X_GetMeasurementTimingBudget
-static esp_err_t vlx_sync_timing(vlx_ctx_t *ctx, bool get) {
+static esp_err_t vlx_sync_timing(
+    uint8_t bus, uint8_t addr, vlx_ctx_t *ctx, bool get
+) {
     static smbus_regval_t regs[] = {
         RT_RBYTE(0x01), RT_RBYTE(0x46),
         RT_RBYTE(0x50), RT_RWORD(0x51),
         RT_RBYTE(0x70), RT_RWORD(0x71),
     };
-    esp_err_t err = smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs));
+    esp_err_t err = smbus_regtable(bus, addr, regs, LEN(regs));
     if (!err) {
         ctx->msrc  = bitread(regs[0].val, 2);
         ctx->dss   = bitread(regs[0].val, 3);
@@ -814,47 +782,47 @@ static esp_err_t vlx_sync_timing(vlx_ctx_t *ctx, bool get) {
 }
 
 // VL53L0X_StartMeasurement
-static esp_err_t vlx_startc(vlx_ctx_t *ctx, uint32_t period_ms) {
+static esp_err_t vlx_startc(uint8_t bus, uint8_t addr, uint32_t period_ms) {
     static smbus_regval_t regs[] = {
         { 0x80, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 }, { 0x91, 0x3C }, // stop
         { 0x00, 0x01 }, { 0xFF, 0x00 }, { 0x80, 0x00 }, RT_RWORD(0xF8),
     };
-    esp_err_t err = smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs));
+    esp_err_t err = smbus_regtable(bus, addr, regs, LEN(regs));
     if (err) return err;
     if (period_ms == UINT32_MAX)
-        return smbus_write_byte(ctx->bus, ctx->addr, 0x00, 0x01); // singleshot
+        return smbus_write_byte(bus, addr, 0x00, 0x01);     // singleshot
     if (!period_ms)
-        return smbus_write_byte(ctx->bus, ctx->addr, 0x00, 0x02); // backtoback
+        return smbus_write_byte(bus, addr, 0x00, 0x02);     // backtoback
     uint32_t v = period_ms * (regs[7].val ?: 1);
     uint8_t buf[] = { v >> 24, (v >> 16) & 0xFF, (v >> 8) & 0xFF, v & 0xFF };
-    err = smbus_wregs(ctx->bus, ctx->addr, 0x04, buf, LEN(buf));
-    return err ?: smbus_write_byte(ctx->bus, ctx->addr, 0x00, 0x04); // timed
+    err = smbus_wregs(bus, addr, 0x04, buf, LEN(buf));
+    return err ?: smbus_write_byte(bus, addr, 0x00, 0x04);  // timed
 }
 
 // VL53L0X_StopMeasurement
-static UNUSED esp_err_t vlx_stopc(vlx_ctx_t *ctx) {
+static UNUSED esp_err_t vlx_stopc(uint8_t bus, uint8_t addr) {
     static smbus_regval_t regs[] = {
         { 0x00, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 },
         { 0x91, 0x00 }, { 0x00, 0x01 }, { 0xFF, 0x00 },
     };
-    return smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs));
+    return smbus_regtable(bus, addr, regs, LEN(regs));
 }
 
 // VL53L0X_PerformSingleRangingMeasurement
-static uint16_t vlx_range(vlx_ctx_t *ctx, bool oneshot) {
+static uint16_t vlx_range(uint8_t bus, uint8_t addr, bool oneshot) {
     static smbus_regval_t regs[] = {
         RT_WAIT0(0x00, 0x01, 100),
         RT_WAIT1(0x13, 0x07, 100), RT_RWORD(0x1E), { 0x0B, 0x01 }
     };
     return (
         oneshot ? (
-            vlx_startc(ctx, UINT32_MAX) ||
-            smbus_regtable(ctx->bus, ctx->addr, regs, LEN(regs))
-        ) : smbus_regtable(ctx->bus, ctx->addr, regs + 1, LEN(regs) - 1)
+            vlx_startc(bus, addr, UINT32_MAX) ||
+            smbus_regtable(bus, addr, regs, LEN(regs))
+        ) : smbus_regtable(bus, addr, regs + 1, LEN(regs) - 1)
     ) ? UINT16_MAX : regs[2].val;
 }
 
-static esp_err_t vlx_setup(vlx_ctx_t *ctx) {
+static esp_err_t vlx_setup(uint8_t bus, uint8_t addr, vlx_ctx_t *ctx) {
     smbus_regval_t pre[] = {
         // VL53L0X_DataInit
         { 0x88, 0x00 }, { 0x80, 0x01 }, { 0xFF, 0x01 }, { 0x00, 0x00 },
@@ -895,47 +863,65 @@ static esp_err_t vlx_setup(vlx_ctx_t *ctx) {
         { 0x0B, 0x01 }, { 0x00, 0x00 },
         { 0x01, 0xE8 }, // calibration end
     };
-    esp_err_t err = smbus_regtable(ctx->bus, ctx->addr, pre, LEN(pre));
-    if (!err) err = vlx_sync_spad(ctx);
-    if (!err) err = smbus_regtable(ctx->bus, ctx->addr, post, LEN(post));
-    if (!err) err = vlx_sync_timing(ctx, true);
-    if (!err) err = smbus_write_byte(ctx->bus, ctx->addr, 0x01, 0xE8);
-    if (!err) err = vlx_sync_timing(ctx, false);
-    if (!err) err = smbus_regtable(ctx->bus, ctx->addr, calib, LEN(calib));
+    esp_err_t err = smbus_regtable(bus, addr, pre, LEN(pre));
+    if (!err) err = vlx_sync_spad(bus, addr);
+    if (!err) err = smbus_regtable(bus, addr, post, LEN(post));
+    if (!err) err = vlx_sync_timing(bus, addr, ctx, true);
+    if (!err) err = smbus_write_byte(bus, addr, 0x01, 0xE8);
+    if (!err) err = vlx_sync_timing(bus, addr, ctx, false);
+    if (!err) err = smbus_regtable(bus, addr, calib, LEN(calib));
     if (!err) ctx->stop = RT_FIND_REG(pre, 0x91)->val;
     return err;
 }
 
-static vlx_ctx_t vlx;
+static struct {
+    uint8_t bus, addr;
+    vlx_ctx_t ctx;
+} vlx;
 
-static void vlx_initialize() {
-    vlx.bus = I2C_NUM_0;
-    vlx.addr = 0x29;
-    if (smbus_probe(vlx.bus, vlx.addr) || vlx_setup(&vlx) || vlx.stop != 0x3C) {
-        vlx.bus = vlx.addr = 0;
-    } else {
-        ESP_LOGI(TAG, "VLX: found VL53L0X at I2C %d-%02X", vlx.bus, vlx.addr);
+static esp_err_t vlx_initialize(uint8_t bus, uint8_t addr) {
+    if (vlx.addr) return ESP_ERR_INVALID_STATE;
+    esp_err_t err = vlx_setup(bus, addr, &vlx.ctx);
+    if (!err) err = vlx.ctx.stop == 0x3C ? ESP_OK : ESP_FAIL;
+    if (!err) {
+        vlx.bus = bus;
+        vlx.addr = addr;
+        ESP_LOGI(TAG, "VLX: found VL53L0X at I2C %d-%02X", bus, addr);
     }
+    return err;
 }
 
-uint16_t vlx_read() { return vlx_range(&vlx, true); }
+int vlx_read() { return vlx.addr ? vlx_range(vlx.bus, vlx.addr, true) : -1; }
 #else
-uint16_t vlx_read() { return UINT16_MAX; }
+int vlx_read() { return -1; }
 #endif
 
-/******************************************************************************
+/*
  * Ambient Light and Temperature Sensor
  */
 
-esp_err_t gy39_read(uint8_t bus, gy39_data_t *d) {
-    uint8_t addr = 0x5B, b[0x0E];
-    esp_err_t err = smbus_rregs(bus, addr, 0x00, b, sizeof(b));
+static struct {
+    uint8_t bus, addr;
+} gy39;
+
+esp_err_t gy39_initialize(uint8_t bus, uint8_t addr) {
+    if (gy39.addr) return ESP_ERR_INVALID_STATE;
+    gy39.bus = bus;
+    gy39.addr = addr;
+    return ESP_OK;
+}
+
+esp_err_t gy39_read(gy39_data_t *d) {
+    if (!d) return ESP_ERR_INVALID_ARG;
+    if (!gy39.addr) return ESP_ERR_INVALID_STATE;
+    uint8_t b[0x0E];
+    esp_err_t err = smbus_rregs(gy39.bus, gy39.addr, 0x00, b, sizeof(b));
     if (err) return err;
-    d->brightness = 1e-2 * ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
+    d->brightness  = 1e-2 * ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]);
     d->temperature = 1e-2 * ((b[4] << 8) | b[5]);
-    d->atmosphere = 1e-5 * ((b[6] << 24) | (b[7] << 16) | (b[8] << 8) | b[9]);
-    d->humidity = 1e-2 * ((b[10] << 8) | b[11]);
-    d->altitude = (b[12] << 8) | b[13];
+    d->atmosphere  = 1e-5 * ((b[6] << 24) | (b[7] << 16) | (b[8] << 8) | b[9]);
+    d->humidity    = 1e-2 * ((b[10] << 8) | b[11]);
+    d->altitude    = (b[12] << 8) | b[13];
     return err;
 }
 
@@ -949,17 +935,10 @@ esp_err_t gy39_read(uint8_t bus, gy39_data_t *d) {
 
 #ifdef CONFIG_BASE_ALS_TRACK
 static struct {
-    uint8_t bus;
-    uint8_t addr[ALS_NUM];
-} als;
+    uint8_t bus, addr;
+} als[ALS_NUM];
 
-static uint8_t als_addrs[] = {
-    0b01000100, 0b01000101,         // east, west
-    0b01000110, 0b01000111          // south, north
-};
-
-static void als_initialize() {
-    uint8_t bus = als.bus = NUM_I2C;
+static esp_err_t als_initialize(uint8_t bus, uint8_t addr) {
     smbus_regval_t regs[] = {
         RT_RWORD(0x7E), RT_RWORD(0x7F),
         // 15:12 RN[3:0] = 1100b    automatic full-scale
@@ -974,25 +953,27 @@ static void als_initialize() {
         RT_WWORD(0x02, 0x0800),     // low-limit 20.48 lux
         RT_WWORD(0x03, 0xBFFF),     // high-limit 83865 lux
     };
-    LOOPN(i, MIN(ALS_NUM, LEN(als_addrs))) {
-        uint8_t addr = als_addrs[i];
-        if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, LEN(regs)))
-            continue;
-        ESP_LOGI(TAG, "ALS: found %c%c %04X at I2C %d-%02X",
-                 regs[0].val >> 8, regs[0].val & 0xFF, regs[1].val, bus, addr);
-        als.addr[i] = addr;
+    esp_err_t err = smbus_regtable(bus, addr, regs, LEN(regs));
+    if (!err) LOOPN(i, LEN(als)) {
+        if (als[i].addr) continue;
+        als[i].bus = bus;
+        als[i].addr = addr;
+        ESP_LOGI(TAG, "ALS: found %c%c OPT%04X at I2C %d-%02X",
+                 (uint8_t)(regs[0].val >> 8),
+                 (uint8_t)(regs[0].val & 0xFF),
+                 (uint16_t)regs[1].val, bus, addr);
+        return ESP_OK;
     }
+    return ESP_ERR_INVALID_SIZE;    // all occupied
 }
 
 float als_brightness(uint8_t idx) {
     uint16_t val = 0;
-    if (idx < ALS_NUM && als.addr[idx] &&
-        !smbus_read_word(als.bus, als.addr[idx], 0x00, &val)) {
-        // Equation 3 at Page 20 of OPT3001 datasheet:
-        //   lux = 0.01 * 2^E[3:0] * R[11:0]
-        return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
-    }
-    return 0;
+    if (idx >= LEN(als) || !als[idx].addr) return 0;
+    if (smbus_read_word(als[idx].bus, als[idx].addr, 0x00, &val)) return 0;
+    // Equation 3 at Page 20 of OPT3001 datasheet:
+    //   lux = 0.01 * 2^E[3:0] * R[11:0]
+    return 0.01 * (1 << (val >> 12)) * (val & 0xFFF);
 }
 
 static esp_err_t als_atdeg(int hdeg, int vdeg, float vals[ALS_NUM + 1]) {
@@ -1013,7 +994,7 @@ static esp_err_t als_atdeg(int hdeg, int vdeg, float vals[ALS_NUM + 1]) {
 }
 
 esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg) {
-#define ALS_LOG(h, v, b) ESP_LOGI(TAG, "ALS: H %3d V %3d %8.2f lux", h, v, b)
+#   define ALS_LOG(h, v, b) ESP_LOGI(TAG, "ALS: H %3d V %3d %8.2f lux", h, v, b)
     float bmax = 0, bmin = 1e10, btmp, bval[ALS_NUM + 1];
     esp_err_t err = (hdeg && vdeg) ? ESP_OK : ESP_ERR_INVALID_ARG;
     if (!err) err = pwm_get_degree(hdeg, vdeg);
@@ -1073,7 +1054,8 @@ esp_err_t als_tracking(als_track_t method, int *hdeg, int *vdeg) {
         return ESP_ERR_INVALID_ARG;
     }
     if (bmax != 0 || bmin != 1e10) return pwm_set_degree(*hdeg, *vdeg);
-    return ESP_ERR_NOT_FOUND;
+    return ESP_FAIL;
+#   undef ALS_LOG
 }
 #else
 float als_brightness(uint8_t i) { return 0; NOTUSED(i); }
@@ -1082,7 +1064,7 @@ esp_err_t als_tracking(als_track_t i, int *h, int *v) {
 }
 #endif // CONFIG_BASE_ALS_TRACK
 
-/******************************************************************************
+/*
  * Battery Management
  */
 
@@ -1102,22 +1084,24 @@ static struct {
     uint8_t bus, addr;
 } pwr;
 
-static void pwr_initialize() {
-    uint8_t bus = NUM_I2C, addr = 0x6A;
+static esp_err_t pwr_initialize(uint8_t bus, uint8_t addr) {
+    if (pwr.addr) return ESP_ERR_INVALID_STATE;
     smbus_regval_t regs[] = {
         RT_WAIT2(PWR_SYSTEM, 0x07, 0),
         RT_SBITS(PWR_SYSTEM, 0x80),
         { PWR_WATDOG, 0b10001101 },
         { PWR_BATFET, 0b01001000 },
     };
-    if (smbus_probe(bus, addr) || smbus_regtable(bus, addr, regs, LEN(regs)))
-        return;
-    ESP_LOGI(TAG, "PWR: found BQ25895 at I2C %d-%02X", bus, addr);
-    pwr.bus = bus;
-    pwr.addr = addr;
+    esp_err_t err = smbus_regtable(bus, addr, regs, LEN(regs));
+    if (!err) {
+        pwr.bus = bus;
+        pwr.addr = addr;
+        ESP_LOGI(TAG, "PWR: found BQ25895 at I2C %d-%02X", bus, addr);
 #ifdef CONFIG_BASE_DEBUG
-    pwr_status();
+        pwr_status();
 #endif
+    }
+    return err;
 }
 
 static int cumsum(uint8_t byte, int base, int step) {
@@ -1139,8 +1123,8 @@ static UNUSED uint8_t cumsub(int val, int step) {
     return byte;
 }
 
-void pwr_status() {
-    if (!pwr.addr) return;
+esp_err_t pwr_status() {
+    if (!pwr.addr) return ESP_ERR_INVALID_STATE;
     uint8_t bus = pwr.bus, addr = pwr.addr, reg[0x15];
     esp_err_t err = smbus_read_byte(bus, addr, PWR_CONADC, reg + 0);
     if (!err) err = smbus_read_byte(bus, addr, PWR_ADCBUS, reg + 1);
@@ -1161,7 +1145,7 @@ void pwr_status() {
         }
     }
     if (!err) err = smbus_rregs(bus, addr, 0x00, reg, sizeof(reg));
-    if (err) return;
+    if (err) return err;
     const char * INPTYPE[] = {
         "No input", "USB Host SDP", "USB CDP(1.5A)", "USB DCP(3.25A)",
         "ADJ DCP(1.5A)", "Unknown(0.5A)", "Non-standard(<2.4A)", "OTG"
@@ -1243,30 +1227,36 @@ void pwr_status() {
         cumsum(reg[19] & 0x3F, 100, 50),
         bitread(reg[20], 7), bitread(reg[20], 6)
     );
+    return err;
 }
 
-/******************************************************************************
+/*
  * Sensor API
  */
 
+smbus_device_t devices[] = {
+#ifdef CONFIG_BASE_USE_TSCN
+    { 0x38, tscn_initialize },
+#endif
+#ifdef CONFIG_BASE_USE_MSCN
+    { 0x3F, mscn_initialize },
+#endif
+#ifdef CONFIG_BASE_VLX_SENSOR
+    { 0x29, vlx_initialize },
+#endif
+    { 0x5B, gy39_initialize },
+#ifdef CONFIG_BASE_ALS_TRACK
+    { 0x44, als_initialize },
+    { 0x45, als_initialize },
+    { 0x46, als_initialize },
+    { 0x47, als_initialize },
+#endif
+    { 0x6A, pwr_initialize },
+};
+
 void sensors_initialize() {
+    LOOPN(bus, I2C_NUM_MAX) { smbus_detect(bus, devices, LEN(devices)); }
 #ifdef SOC_TEMP_SENSOR_SUPPORTED
     temp_initialize();
 #endif
-#ifdef CONFIG_BASE_USE_TPAD
-    tpad_initialize();
-#endif
-#ifdef CONFIG_BASE_USE_TSCN
-    tscn_initialize();
-#endif
-#ifdef CONFIG_BASE_USE_MSCN
-    mscn_initialize();
-#endif
-#ifdef CONFIG_BASE_VLX_SENSOR
-    vlx_initialize();
-#endif
-#ifdef CONFIG_BASE_ALS_TRACK
-    als_initialize();
-#endif
-    pwr_initialize();
 }

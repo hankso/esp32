@@ -8,8 +8,7 @@ const mode = import.meta.env.MODE
 const info = process.env.BUILD_INFO
 
 const runtime = reactive({
-    ap: '',
-    sta: '',
+    ip: '',
     lshw: '',
     lsmem: '',
     lspart: '',

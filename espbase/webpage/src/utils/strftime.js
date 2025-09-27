@@ -53,24 +53,20 @@ function cmap(char, date) {
             return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
                 .toISOString()
                 .slice(0, 10)
-        case 'T':
-            return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
-                .toISOString()
-                .slice(11, -5)
         case 'H':
             return zpad(date.getHour(), 2)
-        case 'k':
-            return date.getHour()
         case 'I':
             return zpad(((date.getHour() + 11) % 12) + 1, 2)
+        case 'k':
+            return date.getHour()
         case 'l':
             return ((date.getHour() + 11) % 12) + 1
         case 'm':
             return zpad(date.getMonth() + 1, 2)
-        case 'n':
-            return date.getMonth() + 1
         case 'M':
             return zpad(date.getMinutes(), 2)
+        case 'n':
+            return date.getMonth() + 1
         case 'p':
             return date.getHour() < 12 ? 'AM' : 'PM'
         case 'P':
@@ -79,6 +75,12 @@ function cmap(char, date) {
             return Math.round(date.getTime() / 1000)
         case 'S':
             return zpad(date.getSeconds(), 2)
+        case 't':
+            return zpad(date.getMilliseconds(), 3)
+        case 'T':
+            return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+                .toISOString()
+                .slice(11, -5)
         case 'u':
             return date.getDay() || 7
         case 'w':
@@ -102,7 +104,6 @@ function cmap(char, date) {
 
 export default function strftime(fmt, date) {
     if (type(fmt) !== 'string') return ''
-    if (date < 1e11) date *= 1e3
-    date = new Date(date ?? getTimestamp())
+    date = new Date(!date ? getTimestamp() : date < 1e11 ? date * 1e3 : date)
     return fmt.replace(/%[a-z]\b/gi, m => cmap(m.slice(1), date) + '' || m)
 }

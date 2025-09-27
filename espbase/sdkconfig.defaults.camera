@@ -1,5 +1,5 @@
 # ESP Base Configuration
-CONFIG_BASE_PSRAM=y
+CONFIG_BASE_USE_CAM=y
 
 # Serial flasher config
 CONFIG_ESPTOOLPY_FLASHFREQ_80M=y

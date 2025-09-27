@@ -48,23 +48,22 @@ void app_main(void) {
     esp_register_shutdown_handler(shutdown);
 
     // 1. low level drivers     // dependencies
-    config_initialize();
+    config_initialize();        // nvs
     driver_initialize();        // button, knob, led_indicator, u8g2, lvgl, lcd
 
     // 2. necessary modules
     filesys_initialize();       // elf_loader
-    console_initialize();
-    network_initialize();       // iperf
+    console_initialize();       // filesys
+    network_initialize();       // wifi, eth, mdns, iperf
     update_initialize();        // filesys, network
 
     // 3. optional modules
-    sensors_initialize();       // drivers
+    sensors_initialize();       // temperature, touch
     hidtool_initialize();       // filesys
     usbmode_initialize();       // hidtool, esp_tinyusb, usb_host_xxx
-    btmode_initialize();        // hidtool
+    btmode_initialize();        // hidtool, bluedroid
     server_initialize();        // network, update, filesys, console
 
-    led_set_blink(0);
     scn_command(SCN_INIT, NULL);
     console_handle_loop(NULL);  // run REPL on CONFIG_ESP_MAIN_TASK_AFFINITY
 }

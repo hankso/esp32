@@ -23,7 +23,7 @@
 static const char *TAG = "USBMode";
 static int state = -ESP_ERR_USBMODE_NOT_INITED;
 
-/******************************************************************************
+/*
  * USBMode: Serial JTAG
  */
 
@@ -31,6 +31,9 @@ static esp_err_t serial_jtag_init() {
 #ifndef SOC_USB_SERIAL_JTAG_SUPPORTED
     return ESP_ERR_NOT_SUPPORTED;
 #else
+#   ifndef IDF_TARGET_V4
+    if (usb_serial_jtag_is_driver_installed()) return ESP_OK;
+#   endif
     usb_serial_jtag_driver_config_t conf = \
         USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
     esp_err_t err = usb_serial_jtag_driver_install(&conf);
@@ -46,7 +49,7 @@ static esp_err_t serial_jtag_exit() {
 #endif
 }
 
-/******************************************************************************
+/*
  * USBMode APIs
  */
 
@@ -103,7 +106,7 @@ static const char * usbmode_str(usbmode_t mode) {
     }
 }
 
-esp_err_t usbmode_switch(usbmode_t mode, bool restart) {
+esp_err_t usbmode_switch(usbmode_t mode, bool reboot) {
     esp_err_t err = ESP_OK;
     if (mode == state) return err;
     bool exited = state == -ESP_ERR_USBMODE_DISABLED || \
@@ -121,7 +124,7 @@ esp_err_t usbmode_switch(usbmode_t mode, bool restart) {
         }
         config_set("sys.usb.mode", usbmode_str(mode));
         if (!exited) {
-            if (restart) esp_restart(); // reboot here
+            if (reboot) esp_restart();
             state = -ESP_ERR_USBMODE_PENDING_REBOOT;
             ESP_LOGI(TAG, "mode set to %s (pending)", usbmode_str(mode));
             return err;

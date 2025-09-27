@@ -13,9 +13,11 @@ extern "C" {
 #endif
 
 // All values (number, boolean, text) are stored as strings
-// `on`, `yes` are interpreted as True (see utils.c -> strbool)
+// `1`, `on`, `yes` are interpreted as True (see utils.c -> strtob)
 
-typedef struct config_system {
+typedef struct {
+    const char * TIMEZONE;  // Set local timezone (see man tzset(3))
+    const char * PROMPT;    // Console promption string
     const char * DIR_DATA;  // Directory to storage font, image files etc.
     const char * DIR_DOCS;  // Directory to generated documentation
     const char * DIR_HTML;  // Directory to static webpage files
@@ -27,30 +29,33 @@ typedef struct config_system {
     const char * BT_SCAN;   // Bluetooth discoverable
 } config_sys_t;
 
-typedef struct config_network {
+typedef struct {
+    const char * ETH_HOST;  // Static IP address of Ethernet
+    const char * ETH_GATE;  // Gateway IP address of Ethernet
     const char * STA_SSID;  // SSID of the AP to connect after startup
     const char * STA_PASS;  // Password of the AP to connect
-    const char * STA_HOST;  // Static IP address (ignore DHCP)
+    const char * STA_HOST;  // Static IP address of WiFi station
+    const char * STA_GATE;  // Gateway IP address of WiFi station
     const char * AP_SSID;   // SSID of the AP to serve (hotspot name)
     const char * AP_PASS;   // Password of the AP to serve
     const char * AP_HOST;   // Gateway IP address
     const char * AP_CHAN;   // Channel of AP (1~14)
     const char * AP_NCON;   // Max number of stations of AP (1~253)
-    const char * AP_NAPT;   // Enable WiFi NAT router (IDF_TARGET_V5)
+    const char * AP_NAPT;   // Enable WiFi NAT router (IDF V5+)
     const char * AP_HIDE;   // Hide AP SSID (not shown on scan)
     const char * AP_AUTO;   // Switch to AP mode if STA connection failed
     const char * SC_AUTO;   // Enable SmartConfig if STA connection failed
 } config_net_t;
 
-typedef struct config_webserver {
+typedef struct {
     const char * WS_NAME;   // Username to auth websocket connection
     const char * WS_PASS;   // Password to auth websocket connection
     const char * HTTP_NAME; // Username to auth webserver (HTTP)
     const char * HTTP_PASS; // Password to auth webserver (HTTP)
-    const char * AUTH_BASE; // Use basic HTTP authorization method (base64)
+    const char * AUTH_BASE; // Whether to use basic/digest HTTP authorization
 } config_web_t;
 
-typedef struct config_application {
+typedef struct {
     const char * MDNS_RUN;  // Enable mDNS service
     const char * MDNS_HOST; // Register mDNS hostname
     const char * SNTP_RUN;  // Enable SNTP service
@@ -58,14 +63,14 @@ typedef struct config_application {
     const char * TSCN_MODE; // Select touchscreen mode
     const char * HID_MODE;  // Select gamepad layout
     const char * HID_HOST;  // UDP target IP address
+    const char * HBT_AUTO;  // Auto start heartbeat task
+    const char * HBT_URL;   // URL to post heartbeat info
     const char * OTA_AUTO;  // Enable auto updation checking
     const char * OTA_URL;   // URL to fetch firmware from
-    const char * TIMEZONE;  // Set local timezone (see tzset(3) man)
-    const char * PROMPT;    // Console promption string
 } config_app_t;
 
 // Informations are readonly after config_initialize
-typedef struct config_information {
+typedef struct {
     const char * NAME;      // Program name
     const char * VER;       // Program version
     const char * UID;       // Unique serial number
@@ -85,7 +90,7 @@ enum { CFG_UPDATE };
 ESP_EVENT_DECLARE_BASE(CFG_EVENT);
 
 void config_initialize();
-bool config_loads(const char *json);    // load Config from json
+esp_err_t config_loads(const char *);   // load Config from json
 char * config_dumps();                  // dump Config into json
 void config_stats();                    // print configurations
 
@@ -100,21 +105,16 @@ void config_stats();                    // print configurations
  * config_nvs_load / config_nvs_dump to sync between.
  */
 const char * config_get(const char *key);
-bool config_set(const char *key, const char *val);
+esp_err_t config_set(const char *key, const char *val);
 
 /* NVS helper functions (similar like Arduino-ESP32 library `Preference`) */
-esp_err_t config_nvs_init();
-esp_err_t config_nvs_open(const char *ns, bool ro); // open namespace in NVS
-int config_nvs_read(const char *key, void *buf, size_t size);
-int config_nvs_write(const char *key, const void *val, size_t len);
-bool config_nvs_remove(const char *key);// remove one entry in NVS
-bool config_nvs_clear();                // remove all entries in NVS
-esp_err_t config_nvs_commit();          // must be called after config_nvs_open
-esp_err_t config_nvs_close();           // close NVS with auto commit
-
-bool config_nvs_load();                 // NVS Flash => RAM Config
-bool config_nvs_dump();                 // RAM Config => NVS Flash
-void config_nvs_stats();                // get NVS partition information
+esp_err_t config_nvs_open(void **ptr, const char *ns, bool ro);
+int config_nvs_read(void *hdl, const char *key, void *buf, size_t size);
+int config_nvs_write(void *hdl, const char *key, const void *val, size_t len);
+esp_err_t config_nvs_delete(void *hdl, const char *key); // remove or erase all
+esp_err_t config_nvs_close(void **ptr); // close NVS with auto commit
+esp_err_t config_nvs_load();            // NVS Flash => RAM Config
+esp_err_t config_nvs_dump();            // RAM Config => NVS Flash
 void config_nvs_list(bool all);         // print [all] entries in NVS
 
 #ifdef __cplusplus

@@ -3,6 +3,7 @@
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2019-05-27 15:29:05
  */
+
 #include "server.h"
 #include "config.h"             // for Config
 #include "update.h"             // for ota_updation_xxx
@@ -26,11 +27,6 @@
 #define FLAG_DIR_DOCS   BIT3
 #define FLAG_DIR_HTML   BIT4
 
-#define TYPE_HTML "text/html"
-#define TYPE_TEXT "text/plain"
-#define TYPE_JSON "application/json"
-#define TYPE_UENC "application/x-www-form-urlencoded"
-#define TYPE_MPRT "multipart/form-data"
 #define CHUNK_SIZE 2048
 
 #define send_str httpd_resp_sendstr // simple alias
@@ -115,7 +111,8 @@ static void free_params(void *ctx) {
 static void parse_params(char *buf, bool body, void **arg) {
     if (!buf || !arg) return;
     http_param_t **ctx = (http_param_t **)arg, *ptr, *param;
-    for (char *tok = strtok(buf, "&"); tok; tok = strtok(NULL, "&")) {
+    char *tok, *save = NULL;
+    for (tok = strtok_r(buf, "&", &save); tok; tok = strtok_r(0, "&", &save)) {
         char *eql = strchr(tok, '=') ?: (tok + strlen(tok));
         char *key = strndup(tok, eql - tok);
         char *val = strlen(eql) > 1 ? strdup(eql + 1) : NULL;
@@ -137,20 +134,21 @@ static void parse_params(char *buf, bool body, void **arg) {
 }
 
 // parse and match key-val pairs: <key1>[="<val1>"]<sep><key2>="<val2>"
-static size_t parse_kvs(char *inp, const char *sep, size_t argc,
+static size_t parse_kvs(char *inp, const char *sep, size_t num,
                         const char **keys, const char **vals)
 {
-    if (!argc || !keys || !vals) return 0;
-    memset(vals, 0, sizeof(const char *) * argc);
-    for (char *tok = strtok(inp, sep); tok; tok = strtok(NULL, sep)) {
+    if (!num || !keys || !vals) return 0;
+    memset(vals, 0, sizeof(const char *) * num);
+    char *tok, *save = NULL;
+    for (tok = strtok_r(inp, sep, &save); tok; tok = strtok_r(0, sep, &save)) {
         char *eql = strchr(tok, '=') ?: (tok + strlen(tok));
-        LOOPN(i, argc) {
+        LOOPN(i, num) {
             if (strncmp(tok, keys[i], eql - tok) || strlen(eql) < 2) continue;
             vals[i] = strtrim(eql + 1, "\""); break;
         }
     }
     size_t count = 0;
-    LOOPN(i, argc) { if (vals[i]) count++; }
+    LOOPN(i, num) { if (vals[i]) count++; }
     return count;
 }
 
@@ -193,12 +191,8 @@ static size_t url_decode(char *buf, size_t len) {
 //                      )"
 
 typedef struct {
-    const char *host;
-    const char *user;
-    const char *pass;
-    size_t hlen, ulen, plen;
-    char *basic;
-    char ha1[33];
+    const char *host, *user, *pass;
+    char ha1[33], b64[33 / 3 * 4];
 } http_auth_t;
 
 static const char * md5_catcol(char out[33], size_t argc, ...) {
@@ -220,39 +214,35 @@ static const char * md5_catcol(char out[33], size_t argc, ...) {
     return out;
 }
 
-static void auth_exit(void *arg) {
-    http_auth_t *ctx = arg;
-    if (ctx) {
-        TRYFREE(ctx->basic);
-        TRYFREE(ctx);
-    }
-}
-
 static http_auth_t * auth_init() {
     http_auth_t *ctx = NULL;
-    if (ECALLOC(ctx, 1, sizeof(http_auth_t))) return ctx;
-    ctx->hlen = strlen(ctx->host = Config.info.NAME);
-    ctx->ulen = strlen(ctx->user = Config.web.HTTP_NAME);
-    ctx->plen = strlen(ctx->pass = Config.web.HTTP_PASS);
-    md5_catcol(ctx->ha1, 3, ctx->user, ctx->host, ctx->pass);
-    char buf[ctx->ulen + ctx->plen + 2];        // 2 for ':' and '\0'
-    sprintf(buf, "%s:%s", ctx->user, ctx->pass);
-    size_t len = (strlen(buf) + 2) / 3 * 4 + 7; // 7 for "Basic " and '\0'
-    if (!ECALLOC(ctx->basic, 1, len))
-        b64encode(buf, stpcpy(ctx->basic, "Basic "), strlen(buf));
+    if (ECALLOC(ctx, 1, sizeof(http_auth_t))) return NULL;
+    size_t hlen = strlen(ctx->host = Config.info.NAME);
+    size_t ulen = strlen(ctx->user = Config.web.HTTP_NAME);
+    size_t plen = strlen(ctx->pass = Config.web.HTTP_PASS);
+    if (hlen && ulen && plen && (ulen + plen) < (sizeof(ctx->b64) / 4 * 3)) {
+        char tmp[ulen + plen + 2];
+        sprintf(tmp, "%s:%s", ctx->user, ctx->pass);
+        b64encode(ctx->b64, tmp, sizeof(tmp));
+        md5_catcol(ctx->ha1, 3, ctx->user, ctx->host, ctx->pass);
+    } else {
+        ESP_LOGW(TAG, "Invalid host/name/pass length for HTTP Auth. Skip");
+        TRYFREE(ctx);
+    }
     return ctx;
 }
 
 static char * auth_request(http_auth_t *ctx, bool basic) {
     char *buf = NULL;
     if (!ctx) return buf;
-    if (!basic && !EMALLOC(buf, ctx->hlen + 62 + 10 + 32)) {
+    size_t hlen = strlen(ctx->host);
+    if (!basic && !EMALLOC(buf, hlen + 62 + 10 + 32)) {
         char ts[11], nonce[33];
         snprintf(ts, sizeof(ts), "%.0f", get_timestamp_us(NULL));
         md5_catcol(nonce, 2, ctx->host, ts);
         sprintf(buf, "Digest realm=\"%s\",nonce=\"%s\",opaque=\"%s\","
                      "qop=\"auth\",algorithm=\"MD5\"", ctx->host, nonce, ts);
-    } else if (basic && !EMALLOC(buf, ctx->hlen + 15)) {
+    } else if (basic && !EMALLOC(buf, hlen + 15)) {
         sprintf(buf, "Basic realm=\"%s\"", ctx->host);
     }
     return buf;
@@ -260,17 +250,17 @@ static char * auth_request(http_auth_t *ctx, bool basic) {
 
 static bool auth_validate(http_auth_t *ctx, const char *method, char *resp) {
     if (!ctx) return false;
-    if (startswith(resp, "Basic ")) return !strcmp(ctx->basic ?: "", resp);
+    if (startswith(resp, "Basic ")) return !strcmp(ctx->b64, resp + 6);
     if (!startswith(resp, "Digest ")) return false;
     const char *vals[10], *keys[10] = {
         "realm", "username", "nonce", "qop", "algorithm", "response",
         "opaque", "uri", "nc", "cnonce",
     };
-    if (parse_kvs(resp + 7, ", ", 10, keys, vals) != 10) return false;
+    if (parse_kvs(resp + 7, ", ", LEN(keys), keys, vals) != 10) return false;
     char nonce[33], ha2[33], digest[33];
-    md5_catcol(nonce,   2, vals[0], vals[6]);
-    md5_catcol(ha2,     2, method, vals[7]);
-    md5_catcol(digest,  6, ctx->ha1, nonce, vals[8], vals[9], "auth", ha2);
+    md5_catcol(nonce,  2, vals[0], vals[6]);
+    md5_catcol(ha2,    2, method, vals[7]);
+    md5_catcol(digest, 6, ctx->ha1, nonce, vals[8], vals[9], "auth", ha2);
     const char *tgt[6] = {ctx->host, ctx->user, nonce, "auth", "MD5", digest};
     LOOPN(i, LEN(tgt)) { if (strcmp(vals[i], tgt[i])) return false; }
     return (strtol(vals[6], NULL, 0) + 86400) > get_timestamp_us(NULL);
@@ -334,14 +324,14 @@ static esp_err_t send_err(httpd_req_t *req, int code, const char *msg) {
 
 static const char * guess_type(const char *filename) {
     const char *ext = strrchr(filename, '.');
-    if (!ext || !strlen(++ext))  return TYPE_TEXT;
+    if (!ext || !strlen(++ext))  return CTYPE_TEXT;
     if (!strcmp(ext, "gz")) {
         char *prev = memrchr(filename, '.', ext - filename - 1);
         if (!prev) return "application/x-gzip";
         ext = prev + 1;
     }
-    if (startswith(ext, "htm"))  return TYPE_HTML;
-    if (startswith(ext, "json")) return TYPE_JSON;
+    if (startswith(ext, "htm"))  return CTYPE_HTML;
+    if (startswith(ext, "json")) return CTYPE_JSON;
     if (startswith(ext, "css"))  return "text/css";
     if (startswith(ext, "xml"))  return "text/xml";
     if (startswith(ext, "ttf"))  return "font/ttf";
@@ -356,7 +346,7 @@ static const char * guess_type(const char *filename) {
     if (startswith(ext, "pdf"))  return "application/pdf";
     if (startswith(ext, "zip"))  return "application/zip";
     if (startswith(ext, "js"))   return "application/javascript";
-    return TYPE_TEXT;
+    return CTYPE_TEXT;
 }
 
 static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
@@ -409,8 +399,8 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
 #define PARSE_ERROR     4
     if (!req->content_len) return send_err(req, 400, "Invalid content length");
     char *ctype = get_header(req, "Content-Type"), *buf = NULL;
-    char *bdary = strstr(ctype ?: "", "boundary=");
-    if (!ctype || !strstr(ctype, TYPE_MPRT) || strlen(bdary ?: "") < 9) {
+    char *bdary = ctype ? strstr(ctype, "boundary=") : NULL;
+    if (!ctype || !strstr(ctype, CTYPE_MPRT) || strlen(bdary ?: "") < 9) {
         TRYFREE(ctype);
         return send_err(req, 400, "Invalid content type");
     }
@@ -566,7 +556,7 @@ static esp_err_t check_request(httpd_req_t *req) {
         }
     }
     if (!err) { // parse POST body which size < CHUNK_SIZE
-        bool wanted = has_header(req, "Content-Type", TYPE_UENC);
+        bool wanted = has_header(req, "Content-Type", CTYPE_UENC);
         size_t clen = req->content_len < CHUNK_SIZE ? req->content_len : 0;
         if (clen && wanted) {
             char buf[clen + 1];
@@ -595,7 +585,7 @@ static esp_err_t check_request(httpd_req_t *req) {
         const char *mstr = http_method_str(req->method);
         http_auth_t *ctx = httpd_get_global_user_ctx(req->handle);
         if (ctx && !auth_validate(ctx, mstr, auth)) {
-            if (( rstr = auth_request(ctx, strbool(Config.web.AUTH_BASE)) )) {
+            if (( rstr = auth_request(ctx, strtob(Config.web.AUTH_BASE)) )) {
                 httpd_resp_set_hdr(req, "Connection", "keep-alive");
                 httpd_resp_set_hdr(req, "WWW-Authenticate", rstr);
                 send_err(req, 401, "Please login first");
@@ -707,7 +697,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
             if (!fisdir(path)) return send_err(req, 400, "No entries found");
             char *json = filesys_listdir_json(FILESYS_FLASH, path);
             if (!json)         return send_err(req, 500, "JSON dump failed");
-            httpd_resp_set_type(req, TYPE_JSON);
+            httpd_resp_set_type(req, CTYPE_JSON);
             send_str(req, json);
             TRYFREE(json);
             return ESP_OK;
@@ -738,7 +728,7 @@ static esp_err_t on_config(httpd_req_t *req) {
     CHECK_REQUEST(req);
     if (req->method == HTTP_POST) {
         const char *json = get_param(req, "json", FROM_BODY);
-        if (json && !config_loads(json)) {
+        if (json && config_loads(json) != ESP_OK) {
             send_err(req, 500, "Failed to load config from JSON");
         } else {
             send_str(req, NULL);
@@ -748,7 +738,7 @@ static esp_err_t on_config(httpd_req_t *req) {
         if (!json) {
             send_err(req, 500, "Failed to dump config into JSON");
         } else {
-            httpd_resp_set_type(req, TYPE_JSON);
+            httpd_resp_set_type(req, CTYPE_JSON);
             send_str(req, json);
         }
         TRYFREE(json);
@@ -756,7 +746,7 @@ static esp_err_t on_config(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static inline void restart(void *arg) { esp_restart(); NOTUSED(arg); }
+static inline void reboot(void *arg) { esp_restart(); NOTUSED(arg); }
 
 static esp_err_t on_update_file(httpd_req_t *req, const char *name,
                                 size_t idx, char *data, size_t len, bool end)
@@ -771,8 +761,8 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
     if (end) {
         if (!ota_updation_end()) goto error;
         fprintf(stderr, "Update success: %s\n", format_size(idx + len));
-        send_str(req, "OTA Updation success: reboot now");
-        setTimeout(500, restart, NULL);
+        send_str(req, "OTA Updation success: rebooting now");
+        setTimeout(500, reboot, NULL);
     }
     return ESP_OK;
 error:
@@ -849,7 +839,7 @@ static void handle_audio_streaming(void *arg) {
     audio_evt_t *evt = arg;
     notify_increase(evt->task);
     if (!evt->len) goto stop;
-    if (!socket_send_all(autio_ctx.fd, evt->data, evt->len)) goto exit;
+    if (!socket_send_all(audio_ctx.fd, evt->data, evt->len)) goto exit;
 stop:
     UREGEVTS(AVC, audio_ctx.inst);
     if (audio_ctx.stop) AUDIO_STOP();
@@ -915,10 +905,10 @@ static esp_err_t on_media(httpd_req_t *req) {
         }
         if (strcmp(video ?: "", "mjpg")) {
             char *json = NULL;
-            if (CAMERA_DUMPS((const char *)&json)) {
+            if (CAMERA_DUMPS(json)) {
                 send_err(req, 500, "Failed to dump config from JSON");
             } else {
-                httpd_resp_set_type(req, TYPE_JSON);
+                httpd_resp_set_type(req, CTYPE_JSON);
                 send_str(req, json);
             }
             TRYFREE(json);
@@ -927,7 +917,7 @@ static esp_err_t on_media(httpd_req_t *req) {
         if (video_ctx.inst) return send_err(req, 403, "Video stream is busy");
         const char *resp =
             "HTTP/1.1 200 OK\r\n"
-            "Content-Type: multipart/x-mixed-replace;boundary=--FRAME\r\n"
+            "Content-Type: multipart/x-mixed-replace;boundary=FRAME\r\n"
             "Cache-Control: no-store\r\n"
             "X-Framerate: 60\r\n\r\n";
         int fd = video_ctx.fd = httpd_req_to_sockfd(req);
@@ -1091,7 +1081,7 @@ void server_loop_begin() {
     config.max_uri_handlers = LEN(apis);
     config.uri_match_fn = rewrite_api;
     config.global_user_ctx = auth_init();
-    config.global_user_ctx_free_fn = auth_exit;
+    config.global_user_ctx_free_fn = free;
 
     // Call stack: httpd_start => httpd_thread => httpd_server => select
     // If select rfds:

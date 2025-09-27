@@ -162,16 +162,16 @@ function onCommand(key, cmdline, success, failed, name) {
                 content: [
                     'This terminal supports ANSI Escape Codes (\\x1b[xm).',
                     `However, it does ${escape('NOT', 31)} support cursor,
-                    erase or scroll commands.`.replace(/\s{2,}/g, ' '),
-                    escape('\tThis is blue string', 34),
-                    escape('\tThis is blink text', 32, 5),
-                    'This is xterm-256-color foreground:',
+                    erase or scroll commands.\n`.replace(/\s{2,}/g, ' '),
+                    escape('\tE.g. blue string', 34),
+                    escape('\tE.g. blink text', 32, 5),
+                    '\nThe xterm-256-color foreground:',
                     Array.from({ length: 256 }, (v, i) =>
-                        escape((i % 64 ? '' : '\n') + '0', 38, 5, i)
+                        escape((!i || i % 64 ? '' : '\n') + '0', 38, 5, i)
                     ).join(''),
-                    'This is xterm-256-color background:',
+                    '\nThe xterm-256-color background:',
                     Array.from({ length: 256 }, (v, i) =>
-                        escape((i % 64 ? '' : '\n') + ' ', 48, 5, i)
+                        escape((!i || i % 64 ? '' : '\n') + ' ', 48, 5, i)
                     ).join(''),
                 ].join('\n'),
             })
@@ -258,5 +258,18 @@ defineExpose({
 .fix-terminal .t-example-li code {
     /* display \n and \t */
     white-space: pre;
+}
+
+.fix-terminal div,
+.fix-terminal code,
+.fix-terminal .t-cmd-key,
+.fix-terminal .t-cmd-tips-content {
+    /* display ~ and ^ in mono font */
+    font-family:
+        Monaco,
+        Consolas,
+        Lucida Console,
+        'Courier New',
+        monospace;
 }
 </style>

@@ -121,11 +121,16 @@ onBeforeUnmount(destroy)
 }
 
 .codejar-editor {
+    height: 100%;
     padding-left: 8px;
 }
 
 .codejar-editor :deep(.token:before) {
     opacity: 0.2;
+}
+
+.code-jar :deep(.codejar-wrap) {
+    height: 100%;
 }
 
 .code-jar :deep(.codejar-linenumbers-inner-wrap) {

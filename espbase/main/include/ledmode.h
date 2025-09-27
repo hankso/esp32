@@ -8,11 +8,6 @@
 
 #include "globals.h"
 
-#if defined(CONFIG_BASE_LED_INDICATOR) && !__has_include("led_indicator.h")
-#   warning "Run `idf.py add-dependency espressif/led_indicator`"
-#   undef CONFIG_BASE_LED_INDICATOR
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif

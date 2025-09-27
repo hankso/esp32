@@ -7,18 +7,28 @@
 #include "ledmode.h"
 #include "drivers.h"
 
-#include "driver/ledc.h"
-
-#ifdef CONFIG_BASE_LED_INDICATOR
-#   include "led_indicator.h"
-#else
-#   include "led_strip.h"
+#if defined(CONFIG_BASE_BOARD_S3ECAM) || defined(CONFIG_BASE_BOARD_S3XMINI)
+#   if defined(CONFIG_BASE_USE_LED) && !defined(CONFIG_BASE_LED_MODE_RMT)
+#       define CONFIG_BASE_LED_MODE_RMT
+#       undef CONFIG_BASE_LED_MODE_GPIO
+#       undef CONFIG_BASE_LED_MODE_LEDC
+#   endif
 #endif
 
-#define SPEED_MODE  LEDC_LOW_SPEED_MODE
-#define LED_TMR     LEDC_TIMER_0
-#define LED_RES     LEDC_TIMER_13_BIT
-#define LED_CH      LEDC_CHANNEL_0
+#ifdef CONFIG_BASE_USE_LED
+#   include "driver/ledc.h"
+#   define SPEED_MODE  LEDC_LOW_SPEED_MODE
+#   define LED_TMR     LEDC_TIMER_0
+#   define LED_RES     LEDC_TIMER_13_BIT
+#   define LED_CH      LEDC_CHANNEL_0
+#   if __has_include("led_indicator.h")
+#       define WITH_IND
+#       include "led_indicator.h"
+#   else
+#       warning "Run `idf.py add-dependency espressif/led_indicator`"
+#       include "led_strip.h"
+#   endif
+#endif
 
 static UNUSED const char * TAG = "LEDMode";
 static UNUSED led_blink_t state = LED_BLINK_RESET;
@@ -28,10 +38,11 @@ static UNUSED led_blink_t state = LED_BLINK_RESET;
 #endif
 
 #if !defined(CONFIG_BASE_USE_LED)           // led disabled
+
 static void *led_handle = NULL;
 void led_initialize() {}
 
-#elif defined(CONFIG_BASE_LED_INDICATOR)    // led enabled with component
+#elif defined(WITH_IND)                     // led enabled with component
 
 #   ifdef CONFIG_BASE_LED_MODE_RMT
 static const blink_step_t double_red_blink[] = {
@@ -160,12 +171,13 @@ void led_initialize() {
         ESP_LOGW(TAG, "initialize indicator failed");
 #   ifdef CONFIG_BASE_LED_MODE_GPIO
     } else {
-        gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT); // gpio_get_level
+        gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT);
 #   endif
     }
+    led_set_blink(LED_BLINK_CONNECTED);
 }
 
-#else // CONFIG_BASE_LED_INDICATOR          // led enabled without component
+#else // WITH_IND                           // led enabled without component
 
 typedef struct { uint8_t p, r, g, b; } led_color_t;
 typedef struct {
@@ -228,16 +240,17 @@ void led_initialize() {
         return;
     }
     led_strip_clear(local.strip);
-#   else // CONFIG_LED_MODE_XXX
+#   else // CONFIG_BASE_LED_MODE_XXX
     ESP_LOGW(TAG, "disabled by CONFIG_LED_MODE_XXX");
     return;
-#   endif // CONFIG_LED_MODE_XXX
+#   endif // CONFIG_BASE_LED_MODE_XXX
     led_handle = &local;
+    led_set_blink(0);
 }
 
 #endif // CONFIG_BASE_USE_LED
 
-#if !defined(CONFIG_BASE_LED_INDICATOR) && defined(CONFIG_BASE_LED_MODE_RMT)
+#if !defined(WITH_IND) && defined(CONFIG_BASE_LED_MODE_RMT)
 static esp_err_t led_flush(int index, bool refresh) {
     uint8_t
         p = led_handle->color[index].p,
@@ -253,7 +266,7 @@ static esp_err_t led_flush(int index, bool refresh) {
 esp_err_t led_set_light(int index, uint8_t brightness) {
     if (!led_handle) return ESP_ERR_INVALID_STATE;
     if (index >= CONFIG_BASE_LED_NUM) return ESP_ERR_INVALID_ARG;
-#if defined(CONFIG_BASE_LED_INDICATOR)
+#if defined(WITH_IND)
 #   if defined(CONFIG_BASE_LED_MODE_LEDC) || defined(CONFIG_BASE_LED_MODE_RMT)
     return led_indicator_set_brightness(
         led_handle, INSERT_INDEX(index < 0 ? MAX_INDEX : index, brightness));
@@ -275,13 +288,13 @@ esp_err_t led_set_light(int index, uint8_t brightness) {
         if (( err = led_flush(i, index == i || !i) )) break;
     }
     return err;
-#endif // CONFIG_LED_MODE_XXX
+#endif // CONFIG_BASE_LED_MODE_XXX
     return ESP_ERR_INVALID_STATE;
 }
 
 uint8_t led_get_light(int index) {
     if (!led_handle || index >= CONFIG_BASE_LED_NUM) return 0;
-#if defined(CONFIG_BASE_LED_INDICATOR)
+#if defined(WITH_IND)
     return led_indicator_get_brightness(led_handle);
 #elif defined(CONFIG_BASE_LED_MODE_GPIO)
     return gpio_get_level(PIN_LED) ? 0xFF : 0;
@@ -298,7 +311,7 @@ esp_err_t led_set_color(int index, uint32_t color) {
     if (!led_handle) return ESP_ERR_INVALID_STATE;
     if (index >= CONFIG_BASE_LED_NUM) return ESP_ERR_INVALID_ARG;
     uint8_t r = (color >> 16) & 0xFF, g = (color >> 8) & 0xFF, b = color & 0xFF;
-#if defined(CONFIG_BASE_LED_INDICATOR)
+#if defined(WITH_IND)
 #   if defined(CONFIG_BASE_LED_MODE_RMT)
     return led_indicator_set_rgb(
         led_handle, SET_IRGB(index < 0 ? MAX_INDEX : index, r, g, b));
@@ -324,7 +337,7 @@ esp_err_t led_set_color(int index, uint32_t color) {
 
 uint32_t led_get_color(int index) {
     if (!led_handle || index >= CONFIG_BASE_LED_NUM) return 0;
-#if defined(CONFIG_BASE_LED_INDICATOR)
+#if defined(WITH_IND)
     return led_indicator_get_rgb(led_handle);
 #elif defined(CONFIG_BASE_LED_MODE_GPIO)
     return led_get_light(index) ? 0xFFFFFF : 0;
@@ -339,7 +352,7 @@ uint32_t led_get_color(int index) {
 
 esp_err_t led_set_blink(led_blink_t blink) {
     if (!led_handle) return ESP_ERR_INVALID_STATE;
-#ifdef CONFIG_BASE_LED_INDICATOR
+#ifdef WITH_IND
     esp_err_t err = ESP_OK;
     if (state > LED_BLINK_RESET) err = led_indicator_stop(led_handle, state);
     if (blink == LED_BLINK_RESET) {

@@ -7,7 +7,12 @@
 #include "screen.h"
 #include "drivers.h"            // for I2C_XXX && PIN_XXX
 
-#ifdef CONFIG_BASE_USE_SCN
+#ifndef CONFIG_BASE_USE_SCN
+void scn_initialize() {}
+esp_err_t scn_command(scn_cmd_t c, const void *a) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(c); NOTUSED(a);
+}
+#else // CONFIG_BASE_USE_SCN
 
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
@@ -74,13 +79,13 @@ static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
         if (conf.pin_bit_mask) return gpio_config(&conf);
     }   break;
     case U8X8_MSG_GPIO_CS:
-        if (ctx.cs != GPIO_NUM_NC)  { gpio_set_level(ctx.cs, arg); } break;
+        if (ctx.cs != GPIO_NUM_NC)  gpio_set_level(ctx.cs, arg); break;
     case U8X8_MSG_GPIO_RESET:
-        if (ctx.rst != GPIO_NUM_NC) { gpio_set_level(ctx.rst, arg); } break;
+        if (ctx.rst != GPIO_NUM_NC) gpio_set_level(ctx.rst, arg); break;
     case U8X8_MSG_GPIO_I2C_CLOCK:
-        if (ctx.scl != GPIO_NUM_NC) { gpio_set_level(ctx.scl, arg); } break;
+        if (ctx.scl != GPIO_NUM_NC) gpio_set_level(ctx.scl, arg); break;
     case U8X8_MSG_GPIO_I2C_DATA:
-        if (ctx.sda != GPIO_NUM_NC) { gpio_set_level(ctx.sda, arg); } break;
+        if (ctx.sda != GPIO_NUM_NC) gpio_set_level(ctx.sda, arg); break;
     case U8X8_MSG_DELAY_MILLI: msleep(arg); break;
     }
     return 0;
@@ -88,22 +93,10 @@ static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
 
 #   if defined(CONFIG_BASE_SCN_I2C)
 static uint8_t u8g2_i2c_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
-    static i2c_cmd_handle_t cmd;
-    switch (msg) {
-    case U8X8_MSG_BYTE_SET_DC:
-        if (ctx.dc != GPIO_NUM_NC) { gpio_set_level(ctx.dc, arg); } break;
-    case U8X8_MSG_BYTE_START_TRANSFER: {
-        esp_err_t err = i2c_master_start(cmd = i2c_cmd_link_create());
-        if (err) return err;
-        i2c_master_write_byte(cmd, ctx.addr << 1 | I2C_MASTER_WRITE, true);
-    }   break;
-    case U8X8_MSG_BYTE_SEND: i2c_master_write(cmd, ptr, arg, true); break;
-    case U8X8_MSG_BYTE_END_TRANSFER: {
-        i2c_master_stop(cmd);
-        esp_err_t err = i2c_master_cmd_begin(ctx.bus, cmd, TIMEOUT(100));
-        i2c_cmd_link_delete(cmd);
-        return err;
-    }
+    if (msg == U8X8_MSG_BYTE_SET_DC){
+        if (ctx.dc != GPIO_NUM_NC) gpio_set_level(ctx.dc, arg);
+    } else if (msg == U8X8_MSG_BYTE_SEND) {
+        if (i2c_wtrd(ctx.bus, ctx.addr, ptr, arg, NULL, 0)) return 1;
     }
     return 0;
 }
@@ -160,7 +153,7 @@ static esp_err_t u8g2_ui_cmd(scn_cmd_t cmd, const char *arg) {
         u8g2_DrawBox(&ctx.hdl, 0, YS, x, YE - YS);
         u8g2_DrawStr(&ctx.hdl, middle, YE + 10, buf);
         u8g2_SendBuffer(&ctx.hdl);
-    } else {
+    } else if (cmd != SCN_STAT) {
         return ESP_ERR_NOT_SUPPORTED;
     }
     return ESP_OK;
@@ -288,8 +281,8 @@ static void scn_lvgl_init() {
     }
 #   endif
 
-    if (!err) gexp_set_level(ctx.bl, true);
     if (!err) err = esp_lcd_panel_disp_on_off(ctx.hdl, true);
+    if (!err) gexp_set_level(ctx.bl, true);
 
 #   ifdef WITH_LVGL
 #       ifdef CONFIG_FREERTOS_UNICORE
@@ -317,7 +310,7 @@ static void scn_lvgl_init() {
         },
         .flags = {
             .buff_dma   = true,
-#       if CONFIG_BASE_PSRAM
+#       ifdef CONFIG_PSRAM
             .buff_spiram = true,
 #       endif
 #       if LVGL_VERSION_MAJOR >= 9
@@ -337,7 +330,9 @@ exit:
         gexp_set_level(ctx.bl, false);
         gexp_set_level(ctx.rd, false);
         TRYNULL(ctx.hdl, esp_lcd_panel_del);
+#   ifdef CONFIG_BASE_SCN_I80
         TRYNULL(ctx.bhdl, esp_lcd_del_i80_bus);
+#   endif
 #   ifdef WITH_LVGL
         TRYNULL(ctx.disp, lvgl_port_remove_disp);
 #   endif
@@ -391,7 +386,7 @@ void scn_initialize() {
     ctx.speed = CONFIG_BASE_SCN_SPI_SPEED;
     ctx.mode = CONFIG_BASE_SCN_SPI_MODE;
     ctx.bus = NUM_SPI;
-    ctx.cs = PIN_CS1;
+    ctx.cs = GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SDFS);
     ctx.probed = true;
 #elif !defined(CONFIG_BASE_SCN_I2C_ALT)         // Screen using default I2C
     ctx.speed = CONFIG_BASE_I2C_SPEED;
@@ -399,30 +394,14 @@ void scn_initialize() {
     ctx.bus = NUM_I2C;  // already initialized
     ctx.sda = PIN_SDA;
     ctx.scl = PIN_SCL;
-    ctx.probed = smbus_probe(ctx.bus, ctx.addr) == ESP_OK;
+    ctx.probed = i2c_probe(ctx.bus, ctx.addr) == ESP_OK;
 #else                                           // Screen using dedicated I2C
-    ctx.speed = CONFIG_BASE_SCN_I2C_SPEED;
+    ctx.speed = CONFIG_BASE_SCN_I2C_SPEED;  // TODO: apply i2c speed
     ctx.addr = CONFIG_BASE_SCN_I2C_ADDR;
-    if (NUM_I2C == I2C_NUM_0) {
-        ctx.bus = I2C_NUM_1;
-        ctx.sda = PIN_SDA1;
-        ctx.scl = PIN_SCL1;
-    } else {
-        ctx.bus = I2C_NUM_0;
-        ctx.sda = PIN_SDA0;
-        ctx.scl = PIN_SCL0;
-    }
-    const i2c_config_t i2c_config = {
-        .mode               = I2C_MODE_MASTER,
-        .sda_io_num         = ctx.sda,
-        .sda_pullup_en      = GPIO_PULLUP_ENABLE,
-        .scl_io_num         = ctx.scl,
-        .scl_pullup_en      = GPIO_PULLUP_ENABLE,
-        .master.clk_speed   = ctx.speed,
-    };
-    esp_err_t err = i2c_param_config(ctx.bus, &i2c_config);
-    if (!err) err = i2c_driver_install(ctx.bus, I2C_MODE_MASTER, 0, 0, 0);
-    if (!err) ctx.probed = smbus_probe(ctx.bus, ctx.addr) == ESP_OK;
+    ctx.bus = NUM_I2C == I2C_NUM_0 ? I2C_NUM_1 : I2C_NUM_0;
+    ctx.sda = NUM_I2C == I2C_NUM_0 ? PIN_SDA1 : PIN_SDA0;
+    ctx.scl = NUM_I2C == I2C_NUM_0 ? PIN_SCL1 : PIN_SDA1;
+    ctx.probed = i2c_probe(ctx.bus, ctx.addr) == ESP_OK;
 #endif // CONFIG_BASE_SCN_SPI
 
     if (!ctx.probed) return;
@@ -444,40 +423,35 @@ void scn_initialize() {
     }
 }
 
-void scn_status() {
-    if (!ctx.probed) {
-        puts("Screen not probed");
-        return;
-    }
-    printf("Using Screen %dx%d %dbpp "
-           "INV:%d|%d|%d SWAP:%d GAP:%d|%d ROT:%d BL:%d RST:%d ",
-           SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH,
-           ctx.axes[0], ctx.axes[1], ctx.axes[2], ctx.axes[3],
-           ctx.axes[4], ctx.axes[5], ctx.axes[6], ctx.bl, ctx.rst);
-    bool mhz = ctx.speed > 1000000;
-    char unit = "KM"[mhz];
-    int speed = ctx.speed / 1000 / (mhz ? 1000 : 1);
+esp_err_t scn_command(scn_cmd_t cmd, const void *arg) {
+    if (!ctx.probed) return ESP_ERR_INVALID_STATE;
+    if (cmd == SCN_STAT) {
+        printf("Using Screen %dx%d %dbpp "
+               "INV:%d|%d|%d SWAP:%d GAP:%d|%d ROT:%d BL:%d RST:%d ",
+               SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_DEPTH,
+               ctx.axes[0], ctx.axes[1], ctx.axes[2], ctx.axes[3],
+               ctx.axes[4], ctx.axes[5], ctx.axes[6], ctx.bl, ctx.rst);
+        bool mhz = ctx.speed > 1000000;
+        char unit = "KM"[mhz];
+        int speed = ctx.speed / 1000 / (mhz ? 1000 : 1);
 #if defined(CONFIG_BASE_SCN_I2C)
-    printf("I2C %d-0x%02X %d%cHz SDA:%d SCL:%d",
-           ctx.bus, ctx.addr, speed, unit, ctx.sda, ctx.scl);
+        printf("I2C %d-0x%02X %d%cHz SDA:%d SCL:%d",
+               ctx.bus, ctx.addr, speed, unit, ctx.sda, ctx.scl);
 #elif defined(CONFIG_BASE_SCN_SPI)
-    printf("SPI %d %d%cHz CS:%d DC:%d", ctx.bus, speed, unit, ctx.cs, ctx.dc);
+        printf("SPI %d %d%cHz CS:%d DC:%d",
+               ctx.bus, speed, unit, ctx.cs, ctx.dc);
 #elif defined(CONFIG_BASE_SCN_I80)
-    printf("I80 %dP %d%cHz CS:%d DC:%d WR:%d RD:%d",
-           ctx.bus, speed, unit, ctx.cs, ctx.dc, ctx.wr, ctx.rd);
+        printf("I80 %dP %d%cHz CS:%d DC:%d WR:%d RD:%d",
+               ctx.bus, speed, unit, ctx.cs, ctx.dc, ctx.wr, ctx.rd);
 #endif
 #if defined(WITH_U8G2)
-    puts(" (U8G2)");
+        puts(" (U8G2)");
 #elif defined(WITH_LVGL)
-    puts(" (LVGL)");
-    scn_command(SCN_STAT, NULL);
+        puts(" (LVGL)");
 #else
-    puts(" (ESP_LCD)");
+        puts(" (ESP_LCD)");
 #endif
-}
-
-esp_err_t scn_command(scn_cmd_t cmd, const void *arg) {
-    if (!ctx.probed) return ESP_ERR_NOT_FOUND;
+    }
 #if defined(WITH_U8G2)
     return u8g2_ui_cmd(cmd, arg);
 #else
@@ -531,16 +505,10 @@ esp_err_t scn_command(scn_cmd_t cmd, const void *arg) {
         lvgl_port_unlock();
         return err;
 #   else
-        return ESP_ERR_NOT_SUPPORTED;
+        if (cmd != SCN_STAT) return ESP_ERR_NOT_SUPPORTED;
 #   endif
     }
     return ESP_OK;
 #endif // WITH_U8G2
-}
-#else // CONFIG_BASE_USE_SCN
-void scn_initialize() {}
-void scn_status() { puts("Screen not enabled"); }
-esp_err_t scn_command(scn_cmd_t c, const void *a) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(c); NOTUSED(a);
 }
 #endif // CONFIG_BASE_USE_SCN

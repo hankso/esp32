@@ -5,6 +5,15 @@
   "description": "Generated from espbase/main/config.h",
   "type": "object",
   "properties": {
+    "sys.timezone": {
+      "description": "Set local timezone (see man tzset(3))",
+      "type": "string"
+    },
+    "sys.prompt": {
+      "description": "Console promption string",
+      "type": "string",
+      "pattern": "^[0-9a-zA-Z >$]+$"
+    },
     "sys.dir.data": {
       "description": "Directory to storage font, image files etc.",
       "type": "string"
@@ -35,7 +44,7 @@
     "sys.adc.mult": {
       "description": "ADC multi-sampling to filter noise",
       "type": "number",
-      "minumum": 1,
+      "minimum": 1,
       "maximum": 255
     },
     "sys.usb.mode": {
@@ -63,6 +72,22 @@
       "type": "string",
       "pattern": "^[01yn]?$"
     },
+    "net.eth.host": {
+      "description": "Static IP address of Ethernet",
+      "type": "string",
+      "anyOf": [
+        { "format": "ipv4" },
+        { "maxLength": 0 }
+      ]
+    },
+    "net.eth.gate": {
+      "description": "Gateway IP address of Ethernet",
+      "type": "string",
+      "anyOf": [
+        { "format": "ipv4" },
+        { "maxLength": 0 }
+      ]
+    },
     "net.sta.ssid": {
       "description": "SSID of the AP to connect after startup",
       "type": "string",
@@ -80,7 +105,15 @@
       ]
     },
     "net.sta.host": {
-      "description": "Static IP address (ignore DHCP)",
+      "description": "Static IP address of WiFi station",
+      "type": "string",
+      "anyOf": [
+        { "format": "ipv4" },
+        { "maxLength": 0 }
+      ]
+    },
+    "net.sta.gate": {
+      "description": "Gateway IP address of WiFi station",
       "type": "string",
       "anyOf": [
         { "format": "ipv4" },
@@ -223,6 +256,19 @@
         { "maxLength": 0 }
       ]
     },
+    "app.hbt.auto": {
+      "description": "Auto start heartbeat task",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "app.hbt.url": {
+      "description": "URL to post heartbeat info",
+      "type": "string",
+      "anyOf": [
+        { "format": "uri-reference" },
+        { "maxLength": 0 }
+      ]
+    },
     "app.ota.auto": {
       "description": "Enable auto updation checking",
       "type": "string",
@@ -235,15 +281,6 @@
         { "format": "uri-reference" },
         { "maxLength": 0 }
       ]
-    },
-    "app.timezone": {
-      "description": "Set local timezone (see tzset(3) man)",
-      "type": "string"
-    },
-    "app.prompt": {
-      "description": "Console promption string",
-      "type": "string",
-      "pattern": "^[0-9a-zA-Z >$]+$"
     }
   }
 }

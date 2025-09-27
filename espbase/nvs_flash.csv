@@ -5,4 +5,9 @@ counter,        data,       u32,        0
 uid,            data,       string,     {UID}
 
 config,         namespace,
-app.ota.url,    data,       string,     {URL}
+net.ap.ssid,    data,       string,     {NAME}
+net.ap.pass,    data,       string,     {UID}
+web.http.name,  data,       string,     hank
+web.http.pass,  data,       string,     {NAME}
+app.ota.url,    data,       string,     {URL}/{OTA}
+app.hbt.url,    data,       string,     {URL}/{HBT}

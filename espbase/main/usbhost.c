@@ -45,13 +45,13 @@ static struct {
     void * vfs_hdl;
     QueueHandle_t queue;
     EventGroupHandle_t evtgrp;
-    union {
+    struct {
         uint8_t address;    // for MSC
-        uint32_t vid_pid;   // for CDC
+        uint16_t vid, pid;  // for CDC
     };
 } ctx = { ESP_OK, false, NULL, NULL, NULL, { 0 } };
 
-/******************************************************************************
+/*
  * Helper functions
  */
 
@@ -82,19 +82,6 @@ static bool setBits(EventBits_t bits) {
 
 static void clearBits(EventBits_t bits) {
     if (ctx.evtgrp) xEventGroupClearBits(ctx.evtgrp, bits);
-}
-
-static uint32_t usb_dev_vid_pid(void *dev_hdl) {
-    const usb_device_desc_t *desc;
-    esp_err_t err = usb_host_get_device_descriptor(dev_hdl, &desc);
-    if (err) return 0;
-    return desc->idVendor << 16 | desc->idProduct;
-}
-
-static const char * vpstr(uint32_t vp) {
-    static char buf[14]; // 0xXXXX:0xXXXX
-    snprintf(buf, sizeof(buf), "0x%04X:0x%04X", vp >> 16, vp & 0xFFFF);
-    return buf;
 }
 
 static void print_devinfo(usb_device_handle_t dev_hdl) {
@@ -204,7 +191,7 @@ static esp_err_t usbh_common_exit() {
     return ctx.err;
 }
 
-/******************************************************************************
+/*
  * USBMode: CDC Host
  */
 
@@ -219,7 +206,6 @@ static bool cdc_acm_rx_cb(const uint8_t *data, size_t size, void *arg) {
 }
 
 static void cdc_acm_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
-    uint32_t vp;
     switch (event->type) {
     case CDC_ACM_HOST_ERROR:
         ESP_LOGE(TAG, "%s error %d", CDC, event->data.error);
@@ -228,15 +214,18 @@ static void cdc_acm_cb(const cdc_acm_host_dev_event_data_t *event, void *arg) {
         ESP_LOGI(TAG, "%s got serial state notification 0x%04X",
                 CDC, event->data.serial_state.val);
         break;
-    case CDC_ACM_HOST_DEVICE_DISCONNECTED:
-        if (( vp = usb_dev_vid_pid(event->data.cdc_hdl) )) {
-            ESP_LOGI(TAG, "%s closed %s", CDC, vpstr(vp));
+    case CDC_ACM_HOST_DEVICE_DISCONNECTED: {
+        const usb_device_desc_t *desc;
+        usb_device_handle_t hdl = (void *)event->data.cdc_hdl;
+        if (!usb_host_get_device_descriptor(hdl, &desc)) {
+            ESP_LOGI(TAG, "%s closed 0x%04X:0x%04X",
+                     CDC, desc->idVendor, desc->idProduct);
         } else {
             ESP_LOGI(TAG, "%s closed", CDC);
         }
         cdc_acm_host_close(event->data.cdc_hdl);
         setBits(BIT_DEVICE_EXIT);
-        break;
+    }   break;
     default: ESP_LOGW(TAG, "%s unhandled event: %d", CDC, event->type);
     }
 }
@@ -246,7 +235,8 @@ bool usbdev_interest(const void *desc); // implemented in usbdev.c
 static void cdc_host_cb(usb_device_handle_t dev) {
     const usb_device_desc_t *desc;
     if (!usb_host_get_device_descriptor(dev, &desc) && usbdev_interest(desc)) {
-        ctx.vid_pid = desc->idVendor << 16 | desc->idProduct;
+        ctx.vid = desc->idVendor;
+        ctx.pid = desc->idProduct;
         setBits(BIT_DEVICE_INIT);
     } else {
         print_devinfo(dev);
@@ -286,8 +276,7 @@ static void cdc_host_task(void *arg) {
 
         cdc_acm_dev_hdl_t dev;
         cdc_acm_line_coding_t line_coding;
-        uint16_t v = ctx.vid_pid >> 16, p = ctx.vid_pid & 0xFFFF;
-        if (( ctx.err = cdc_acm_host_open(v, p, 0, &device_conf, &dev) )) {
+        if (( ctx.err = cdc_acm_host_open(ctx.vid, ctx.pid, 0, &device_conf, &dev) )) {
             ESP_LOGE(TAG, "%s not opened: %s", CDC, esp_err_to_name(ctx.err));
             goto close;
         }
@@ -296,11 +285,9 @@ static void cdc_host_task(void *arg) {
             goto close;
         }
 
-        ESP_LOGI(TAG, "%s opened device %s %u,%u%c%c",
-                CDC, vpstr(ctx.vid_pid),
-                line_coding.dwDTERate,
-                line_coding.bDataBits,
-                "NOEMS"[line_coding.bParityType],
+        ESP_LOGI(TAG, "%s opened device 0x%04X:0x%04X %" PRIu32 ",%u%c%c",
+                CDC, ctx.vid, ctx.pid, line_coding.dwDTERate,
+                line_coding.bDataBits, "NOEMS"[line_coding.bParityType],
                 "1H2"[line_coding.bCharFormat]);
         cdc_acm_host_desc_print(dev);
 
@@ -342,7 +329,7 @@ esp_err_t cdc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_HOST
 
-/******************************************************************************
+/*
  * USBMode: MSC Host
  */
 
@@ -362,8 +349,8 @@ static void msc_host_cb(const msc_host_event_t *event, void *arg) {
     case MSC_DEVICE_DISCONNECTED:
         dev = event->device.handle;
         if (!msc_host_get_device_info(dev, &info)) {
-            ESP_LOGI(TAG, "%s closed %s",
-                     MSC, vpstr(info.idVendor << 16 | info.idProduct));
+            ESP_LOGI(TAG, "%s closed 0x%04X:0x%04X",
+                     MSC, info.idVendor, info.idProduct);
         } else {
             ESP_LOGI(TAG, "%s closed", MSC);
         }
@@ -427,8 +414,8 @@ static void msc_host_task(void *arg) {
             wprintf(L"SerialNumber : %ls\n", info.iSerialNumber);
         uint64_t cap = (uint64_t)info.sector_size * info.sector_count;
         printf("Total        : %s\n"
-               "Sector       : %u Bytes\n"
-               "Count        : 0x%08X\n",
+               "Sector       : %" PRIu32 " Bytes\n"
+               "Count        : 0x%08" PRIX32 "\n",
                format_size(cap), info.sector_size, info.sector_count);
         msc_host_print_descriptors(dev);
 
@@ -469,7 +456,7 @@ esp_err_t msc_host_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_MSC_HOST
 
-/******************************************************************************
+/*
  * USBMode: HID Host
  */
 
@@ -506,8 +493,8 @@ static void hid_event_cb(
     case HID_HOST_INTERFACE_EVENT_DISCONNECTED: {
         hid_host_dev_info_t info;
         if (!hid_host_get_device_info(dev, &info)) {
-            ESP_LOGI(TAG, "%s closed %s",
-                     addr, vpstr(info.VID << 16 | info.PID));
+            ESP_LOGI(TAG, "%s closed 0x%04X:0x%04X",
+                     addr, info.VID, info.PID);
         } else {
             ESP_LOGI(TAG, "%s closed", addr);
         }
@@ -595,7 +582,7 @@ static void hid_host_task(void *arg) {
             ESP_LOGE(TAG, "%s no devinfo: %s", addr, esp_err_to_name(ctx.err));
             goto close;
         }
-        ESP_LOGD(TAG, "%s opened %s", addr, vpstr(info.VID << 16 | info.PID));
+        ESP_LOGD(TAG, "%s opened 0x%04X:0x%04X", addr, info.VID, info.PID);
 
         // patch for 20250723 TouchScreen
         bool patchts = info.VID == 0x27C0 && info.PID == 0x0859;

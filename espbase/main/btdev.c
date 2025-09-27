@@ -12,6 +12,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
 
+#include "esp_mac.h"
 #include "esp_bt.h"
 #include "esp_bt_defs.h"
 #include "esp_bt_main.h"
@@ -21,7 +22,7 @@
 #include "esp_gap_bt_api.h"
 #include "esp_gap_ble_api.h"
 
-/******************************************************************************
+/*
  * Utilities
  */
 
@@ -133,7 +134,7 @@ static const char * uuid_str(esp_bt_uuid_t *uuid) {
     if (uuid->len == 2) {
         snprintf(buf, sizeof(buf), "%04X", uuid->uuid.uuid16);
     } else if (uuid->len == 4) {
-        snprintf(buf, sizeof(buf), "%08X", uuid->uuid.uuid32);
+        snprintf(buf, sizeof(buf), "%08" PRIX32, uuid->uuid.uuid32);
     } else if (uuid->len == 16) {
         size_t size = 0;
         LOOPND(i, uuid->len) {
@@ -146,7 +147,7 @@ static const char * uuid_str(esp_bt_uuid_t *uuid) {
     return buf;
 }
 
-/******************************************************************************
+/*
  * BT & BLE scan
  */
 
@@ -270,7 +271,7 @@ static UNUSED void scan_print_devinfo(scan_rst_t *devs, int count) {
         default:                                dstr = "Unknown"; break;
         }
         if (ptr->bt.cod)
-            printf("%s %s Minor 0x%02X Format %d",
+            printf("%s %s Minor 0x%02" PRIu32 " Format %" PRIu32,
                     sstr, dstr, esp_bt_gap_get_cod_minor_dev(ptr->bt.cod),
                     esp_bt_gap_get_cod_format_type(ptr->bt.cod));
 #else
@@ -361,7 +362,7 @@ static esp_err_t ble_scan_entry(uint32_t tout_ms, bool verbose) {
 }
 #endif
 
-/******************************************************************************
+/*
  * BT & BLE GAP callback
  */
 
@@ -636,12 +637,12 @@ static void ble_gap_cb(
 #   endif
     } else if (event == ESP_GAP_BLE_NC_REQ_EVT) {           // ESP_IO_CAP_IO
         esp_ble_sec_key_notif_t *key = &param->ble_security.key_notif;
-        ESP_LOGI(T, BDASTR " confirm passkey: %d",
+        ESP_LOGI(T, BDASTR " confirm passkey: %" PRIu32,
                  BDA2STR(key->bd_addr), key->passkey);
         esp_ble_confirm_reply(key->bd_addr, true);
     } else if (event == ESP_GAP_BLE_PASSKEY_NOTIF_EVT) {    // ESP_IO_CAP_OUT
         esp_ble_sec_key_notif_t *key = &param->ble_security.key_notif;
-        ESP_LOGI(T, BDASTR " notify passkey: %d",
+        ESP_LOGI(T, BDASTR " notify passkey: %" PRIu32,
                  BDA2STR(key->bd_addr), key->passkey);
     } else if (event == ESP_GAP_BLE_PASSKEY_REQ_EVT) {      // ESP_IO_CAP_IN
         esp_ble_sec_req_t *req = &param->ble_security.ble_req;
@@ -657,6 +658,10 @@ static void ble_gap_cb(
 }
 #endif // CONFIG_BT_BLE_ENABLED
 
+#ifdef IDF_TARGET_V4
+#   define esp_bt_gap_set_device_name esp_bt_dev_set_device_name
+#endif
+
 esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     esp_err_t err = ESP_OK;
     if (BT_ENABLED()) return err;
@@ -665,7 +670,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
         ctx.evtgrp = xEventGroupCreate();
         setBits(BT_SCAN_DONE_BIT | BLE_SCAN_DONE_BIT);
         ctx.cmode = ESP_BT_CONNECTABLE;
-        ctx.dmode = Config.sys.BT_SCAN
+        ctx.dmode = strtob(Config.sys.BT_SCAN)
                     ? ESP_BT_GENERAL_DISCOVERABLE
                     : ESP_BT_NON_DISCOVERABLE;
     }
@@ -684,7 +689,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
     if (gmpad_tricks) {
         snprintf(name, sizeof(name), "%s-%s",
                  Config.info.NAME, Config.app.HID_MODE);
-#ifdef IDF_TARGET_V5
+#ifndef IDF_TARGET_V4
         uint8_t mac[6]; esp_read_mac(mac, ESP_MAC_BT);
         mac[1] += HIDTool.pad;      // set different MAC for difference layout
         if (!err) err = esp_iface_mac_addr_set(mac, ESP_MAC_BT);
@@ -709,7 +714,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 
 #ifdef CONFIG_BT_CLASSIC_ENABLED
     if (HAS_BT(mode)) {
-        if (!err) err = esp_bt_dev_set_device_name(name);
+        if (!err) err = esp_bt_gap_set_device_name(name);
         if (!err) err = esp_bt_gap_register_callback(bt_gap_cb);
         if (!err) err = esp_bt_gap_set_pin(ESP_BT_PIN_TYPE_VARIABLE, 0, NULL);
         if (!err) err = esp_bt_gap_set_scan_mode(ctx.cmode, ctx.dmode);
@@ -758,13 +763,13 @@ esp_err_t bt_common_exit(bool clean) {
     if (!err) err = esp_bt_controller_deinit();
     if (!err && clean) {
         err = esp_bt_mem_release(ESP_BT_MODE_BTDM);
-        if (!err) return ESP_FAIL; // need restart
+        if (!err) return ESP_FAIL; // need reboot
     }
     ctx.mode = 0;
     return err;
 }
 
-/******************************************************************************
+/*
  * BT HID Device
  */
 
@@ -920,7 +925,7 @@ esp_err_t bt_hidd_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_BT_HID_DEVICE
 
-/******************************************************************************
+/*
  * BLE HID Device
  */
 

@@ -60,6 +60,7 @@ static void filesys_exit(filesys_dev_t *dev) {
 static esp_err_t filesys_init(
     filesys_dev_t *dev, filesys_type_t type, const char *mp, const char *part
 ) {
+    esp_err_t err = ESP_OK;
 #ifdef CONFIG_BASE_USE_FFS
     if (type == FILESYS_FLASH) {
         mp = mp ?: CONFIG_BASE_FFS_MP;
@@ -85,7 +86,7 @@ static esp_err_t filesys_init(
             .max_files              = 10,
             .allocation_unit_size   = CONFIG_WL_SECTOR_SIZE
         };
-        esp_err_t err = esp_vfs_fat_spiflash_mount(mp, part, &conf, &wlhdl);
+        err = esp_vfs_fat_spiflash_mount(mp, part, &conf, &wlhdl);
 #   else
         esp_vfs_spiffs_conf_t conf = {
             .base_path              = mp,
@@ -93,7 +94,7 @@ static esp_err_t filesys_init(
             .max_files              = 10,
             .format_if_mount_failed = false
         };
-        esp_err_t err = esp_vfs_spiffs_register(&conf);
+        err = esp_vfs_spiffs_register(&conf);
 #   endif
         if (!err) {
             filesys_exit(dev);
@@ -119,12 +120,17 @@ static esp_err_t filesys_init(
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         sdspi_device_config_t spi = {
             .host_id  = host.slot = NUM_SPI,
-            .gpio_cs  = PIN_CS0,
+#       ifdef CONFIG_BASE_BOARD_S3ECAM
+            .gpio_cs  = GPIO_NUM_4,
+#       else
+            .gpio_cs  = GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SDFS),
+#       endif
             .gpio_cd  = SDSPI_SLOT_NO_CD,
             .gpio_wp  = SDSPI_SLOT_NO_WP,
             .gpio_int = SDSPI_SLOT_NO_INT,
         };
-        esp_err_t err = esp_vfs_fat_sdspi_mount(mp, &host, &spi, &mount, &card);
+        if (!( err = esp_vfs_fat_sdspi_mount(mp, &host, &spi, &mount, &card) ))
+            gpio_usage(spi.gpio_cs, "SPI CS SDCard");
 #   elif defined(CONFIG_IDF_TARGET_ESP32S3)         // SDMMC - ESP32S3
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         sdmmc_slot_config_t mmc = {
@@ -139,7 +145,16 @@ static esp_err_t filesys_init(
             .width = CONFIG_BASE_SDFS_MMC,
             .flags = SDMMC_SLOT_FLAG_INTERNAL_PULLUP,
         };
-        esp_err_t err = esp_vfs_fat_sdmmc_mount(mp, &host, &mmc, &mount, &card);
+        if (!( err = esp_vfs_fat_sdmmc_mount(mp, &host, &mmc, &mount, &card) )) {
+            char buf[16];
+            gpio_num_t *dat = &mmc.d0;
+            gpio_usage(mmc.clk, "MMC CLK");
+            gpio_usage(mmc.cmd, "MMC CMD");
+            LOOPN(i, CONFIG_BASE_SDFS_MMC) {
+                snprintf(buf, sizeof(buf), "MMC D%d", i);
+                gpio_usage(dat[i], strdup(buf));
+            }
+        }
 #   else                                            // SDMMC - ESP32
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         sdmmc_slot_config_t mmc = SDMMC_SLOT_CONFIG_DEFAULT();
@@ -244,13 +259,14 @@ void filesys_print_info(filesys_type_t type) {
             100 * info.used / (info.total ?: 1));
 #ifdef CONFIG_BASE_USE_SDFS
     if (info.type != FILESYS_SDCARD || !info.card) return;
+    uint16_t mhz = info.card->max_freq_khz / 1000;
     printf( // see sdmmc_card_print_info
         "Name: %s\n"
         "S/N:  %d\n"
         "VPID: 0x%04X:0x%04X\n"
         "Type: %s\n"
         "Size: %s\n"
-        "Freq: %d %cHz%s\n"
+        "Freq: %u%cHz%s\n"
         "CSD:  sector_size=%d, read_block_len=%d, capacity=0x%0*X\n"
         "SCR:  sd_spec=%d, bus_width=%d (valid if type = SDIO)\n",
         info.card->cid.name, info.card->cid.serial,
@@ -258,8 +274,7 @@ void filesys_print_info(filesys_type_t type) {
         info.card->is_sdio ? "SDIO" : info.card->is_mmc ? "MMC" :
         info.card->ocr & SD_OCR_SDHC_CAP ? "SDHC/SDXC" : "SDSC",
         format_size(info.card->csd.capacity * info.card->csd.sector_size),
-        info.card->max_freq_khz / (info.card->max_freq_khz < 1000 ? 1 : 1000),
-        info.card->max_freq_khz < 1000 ? 'K' : 'M',
+        mhz ?: (uint16_t)info.card->max_freq_khz, mhz ? 'M' : 'K',
         info.card->is_ddr ? ", DDR" : "",
         info.card->csd.sector_size, info.card->csd.read_block_len,
         info.card->csd.capacity >> 16 ? 8 : 4, info.card->csd.capacity,
@@ -285,7 +300,7 @@ char * filesys_norm_r(
         if (!startswith(path, prepend)) {
             snprintf(buf, PATH_MAX_LEN, "%s/%s", prepend, path);
         } else {
-            strncpy(buf, path, PATH_MAX_LEN - 1);
+            snprintf(buf, PATH_MAX_LEN, path);
         }
     } else if (!startswith(path, prepend)) { // change mountpoint
         char *slash = strdup(strchr(path + 1, '/') ?: "");
@@ -296,16 +311,17 @@ char * filesys_norm_r(
     } else {
         return buf;
     }
-    char *out, *inp;
+#define IS_SEP(c) ( (c) == '/' || (c) == '\\' )
+    char *out, *inp, *prev;
     for (out = inp = buf; inp[0]; inp++) {
-        if (strchr("\\/", inp[0])) {
-            inp += (strspn(inp, "\\/") ?: 1) - 1;   // skip joining slashes
+        if (IS_SEP(inp[0])) {
+            inp += strspn(inp, "\\/") - 1;          // skip joining slashes
             if (inp[1] == '\0') break;              // trim the tail slash
             if (inp[1] == '.') {                    // handle './' and '../'
-                if (strchr("\\/", inp[2])) {
+                if (IS_SEP(inp[2])) {
                     inp++; continue;
-                } else if (inp[2] == '.' && strchr("\\/", inp[3])) {
-                    char *prev = memrchr(buf, '/', out - buf);
+                } else if (inp[2] == '.' && IS_SEP(inp[3])) {
+                    prev = memrchr(buf, '/', out - buf);
                     if (prev && prev != buf) out = prev;
                     inp += 2; continue;
                 }
@@ -335,11 +351,11 @@ static char * filesys_vjoin(
         va_copy(ap, argv);
     } else {
         argc -= idx + 1;
-        len = strlen(strncpy(path, buf, sizeof(path) - 1));
+        len = snprintf(path, sizeof(path), buf);
     }
     while (argc--) {
-        const char *chunk = va_arg(ap, const char *) ?: "";
-        if (strchr("\\/", chunk[0])) chunk++;
+        const char *chunk = va_arg(ap, const char *);
+        if (!chunk || !(chunk += strspn(chunk, "\\/"))[0]) continue;
         len += snprintf(path + len, sizeof(path) - len, "/%s", chunk);
     }
     va_end(ap);
@@ -365,7 +381,7 @@ const char * filesys_join(filesys_type_t type, size_t argc, ...) {
 
 bool filesys_touch(filesys_type_t type, const char *path) {
     FILE *fd = fopen(filesys_norm(type, path), "a");
-    return fd && fclose(fd) == 0; // try utime if not working
+    return fd && fclose(fd) == 0; // utime is not defined in ESP_IDF
 }
 
 static const char * statperm(mode_t mode) {
@@ -417,7 +433,7 @@ void filesys_pstat(filesys_type_t type, const char *path) {
     printf("  File: %s\n"
            "  Size: %ld\t\tBlocks: %ld\tIO Block: %ld\t%s\n"
            "Device: %xh/%dd\t\tInode: %d\tLinks: %d\n"
-           "Access: (%04o/%s)  Uid: %d\tGid: %d\n"
+           "Access: (%04" PRIo32 "/%s)  Uid: %d\tGid: %d\n"
            "Access: %s\nModify: %s\nChange: %s\n",
            path, st.st_size, st.st_blocks, st.st_blksize, desc,
            st.st_dev, st.st_dev, st.st_ino, st.st_nlink,
@@ -601,17 +617,17 @@ char * filesys_listdir_json(filesys_type_t type, const char *path) {
     return json;
 }
 
-uint8_t * filesys_load(filesys_type_t type, const char *path, size_t *lim) {
+uint8_t * filesys_load(filesys_type_t type, const char *path, size_t *limit) {
     struct stat st;
     uint8_t *buf = NULL;
     if (stat(path = filesys_norm(type, path), &st) || !st.st_size ||
-        (lim && st.st_size > *lim) || EMALLOC(buf, st.st_size)) return buf;
+        (limit && st.st_size > *limit) || EMALLOC(buf, st.st_size)) return buf;
     FILE *fd = fopen(path, "r");
     size_t len = fd ? fread(buf, 1, st.st_size, fd) : 0;
     if (len != st.st_size) {
         TRYFREE(buf);
-    } else if (lim) {
-        *lim = len;
+    } else if (limit) {
+        *limit = len;
     }
     fclose(fd);
     return buf;

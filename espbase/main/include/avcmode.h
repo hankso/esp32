@@ -8,6 +8,11 @@
 
 #include "globals.h"
 
+#if defined(CONFIG_BASE_USE_CAM) && !__has_include("esp_camera.h")
+#   warning "Run `idf.py add-dependency esp32-camera`"
+#   undef CONFIG_BASE_USE_CAM
+#endif
+
 #define AUDIO_TARGET        (1 << 0)
 #define VIDEO_TARGET        (1 << 1)
 #define IMAGE_TARGET        (1 << 2)
@@ -66,7 +71,7 @@ typedef struct {
     void *data;
     void *task;
     audio_mode_t *mode;
-} PACKED audio_evt_t;
+} audio_evt_t;
 
 typedef struct {
     size_t id;
@@ -74,38 +79,39 @@ typedef struct {
     void *data;
     void *task;
     video_mode_t *mode;
-} PACKED video_evt_t;
+} video_evt_t;
 
 // esp_event_post keeps a copy of event_data instead of passing it (a pointer)
 // directly to the event handlers. To avoid copying whole xxx_evt_t structure,
 // (audio_evt_t **) and (video_evt_t **) are passed to event handlers.
 ESP_EVENT_DECLARE_BASE(AVC_EVENT);
 
-#define AVC_POST(evt, data, tout)                                           \
+#define AVC_POST(id, evt, tout)                                             \
     ({                                                                      \
-        void *ptr = &(data);                                                \
-        esp_event_post(AVC_EVENT, (evt), &ptr, sizeof(ptr), TIMEOUT(tout)); \
+        void *ptr = &(evt);                                                 \
+        esp_event_post(AVC_EVENT, (id), &ptr, sizeof(ptr), TIMEOUT(tout));  \
     })
 
 enum {
-    AUD_EVENT_START,    // evt.data is WAV header, evt.len = sizeof(wav_header_t)
-    AUD_EVENT_DATA,     // evt.data is audio data, evt.len > 0, evt.id >= 0
-    AUD_EVENT_STOP,     // evt.data is NULL,       evt.len = 0
-    VID_EVENT_START,    // evt.data is AVI header, evt.len = sizeof(avi_header_t)
-    VID_EVENT_DATA,     // evt.data is frame jpeg, evt.len > 0, evt.id >= 0
-    VID_EVENT_STOP,     // evt.data is AVI tailer, evt.len = 8 + evt.id * 16
+    AUD_EVENT_START,    // evt.data = WAV header, evt.len = sizeof(wav_header_t)
+    AUD_EVENT_DATA,     // evt.data = audio data, evt.len > 0, evt.id >= 0
+    AUD_EVENT_STOP,     // evt.data = NULL,       evt.len = 0
+    VID_EVENT_START,    // evt.data = AVI header, evt.len = sizeof(avi_header_t)
+    VID_EVENT_DATA,     // evt.data = frame jpeg, evt.len > 0, evt.id >= 0
+    VID_EVENT_STOP,     // evt.data = AVI tailer, evt.len = 8 + evt.id * 16
 };
 
-#define AUDIO_START(ms) avc_command("1", AUDIO_TARGET, (ms), NULL)
-#define VIDEO_START(ms) avc_command("1", VIDEO_TARGET, (ms), NULL)
-#define AUDIO_STOP()    avc_command("0", AUDIO_TARGET, 0, NULL)
-#define VIDEO_STOP()    avc_command("0", VIDEO_TARGET, 0, NULL)
-#define AUDIO_PRINT(s)  avc_command(NULL, AUDIO_TARGET, 0, (s))
-#define VIDEO_PRINT(s)  avc_command(NULL, VIDEO_TARGET, 0, (s))
-#define CAMERA_LOADS(v) avc_command((v), IMAGE_TARGET | ACTION_WRITE, 0, NULL)
-#define CAMERA_DUMPS(v) avc_command((v), IMAGE_TARGET | ACTION_READ, 0, NULL)
-#define CAMERA_PRINT(s) avc_command(NULL, IMAGE_TARGET | ACTION_READ, 0, (s))
-esp_err_t avc_command(const char *ctrl, int tgt, uint32_t tout_ms, FILE *out);
+#define AUDIO_START(ms) avc_async(AUDIO_TARGET, "1", (ms), NULL)
+#define VIDEO_START(ms) avc_async(VIDEO_TARGET, "1", (ms), NULL)
+#define AUDIO_STOP()    avc_async(AUDIO_TARGET, "0", 0, NULL)
+#define VIDEO_STOP()    avc_async(VIDEO_TARGET, "0", 0, NULL)
+#define AUDIO_PRINT(s)  avc_async(AUDIO_TARGET, NULL, 0, (s))
+#define VIDEO_PRINT(s)  avc_async(VIDEO_TARGET, NULL, 0, (s))
+#define CAMERA_LOADS(v) avc_async(IMAGE_TARGET | ACTION_WRITE, (v), 0, NULL)
+#define CAMERA_DUMPS(v) avc_async(IMAGE_TARGET | ACTION_READ, &(v), 0, NULL)
+#define CAMERA_PRINT(s) avc_async(IMAGE_TARGET | ACTION_READ, NULL, 0, (s))
+esp_err_t avc_async(int tgt, const void *ctrl, uint32_t tout_ms, FILE *out);
+esp_err_t avc_sync(int tgt, void **buf, size_t *len);
 
 typedef struct {
 #define WAV_HEADER_FMT_LEN 16

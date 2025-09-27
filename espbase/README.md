@@ -269,14 +269,14 @@ PIN Value Usage
 11    LOW SPI MOSI
 12    LOW SPI SCLK
 13    LOW SPI MISO
-14   HIGH Interrupt
+14   HIGH SPI CS3 (Ethernet)
 15    LOW Knob encoder A
 16    LOW Knob encoder B
 17    LOW Servo Pitch
 18    LOW Servo Yaw
 19    LOW USB DN
 20    LOW USB DP
-21    LOW
+21   HIGH Interrupt
 26   HIGH Flash SPICS1
 27   HIGH Flash SPIHD
 28   HIGH Flash SPIWP

@@ -38,8 +38,8 @@
 #define CASESTRV(v, x, l)   case x: (v) = #x + l; break
 #define SIZEOF(s, a)        sizeof(((s *)0)->a)
 #define LEN(arr)            ( sizeof(arr) / sizeof(*arr) )
-#define LOOP(x, l, h)       for (typeof(h) x = (l); x < (h); x++)
-#define LOOPD(x, h, l)      for (typeof(h) x = (h); x > (l); x--)
+#define LOOP(x, l, h)       for (typeof(h) x = (l), _h = (h); x < _h; x++)
+#define LOOPD(x, h, l)      for (typeof(h) x = (h), _l = (l); x > _l; x--)
 #define LOOPN(x, n)         LOOP(x, 0, (n))
 #define LOOPND(x, n)        LOOPD(x, (n) - 1, -1)
 #define LPCHR(c, n)         do { LOOPN(x, (n)) putchar(c); } while (0)
@@ -116,10 +116,6 @@
 #   define CONS(x, l, h)    MAX((l), MIN((x), (h)))
 #endif
 
-#ifndef STATIC_ASSERT
-#   define STATIC_ASSERT(c) extern char CONCAT(p, __LINE__)[(c) ? 1 : -1]
-#endif
-
 #ifndef bitread
 #   define bitsread(v, o, m)    ( ((v) >> (o)) & (m) )
 #   define bitnread(v, o, n)    bitsread((v), (o), BIT(n) - 1)
@@ -141,12 +137,15 @@ extern "C" {
 #endif
 
 // implemented in utils.c
+esp_err_t errval();
+const char *errstr();
+
 void msleep(uint32_t ms);
 uint64_t asleep(uint32_t ms, uint64_t state);
 
 int stridx(const char *str, const char *tpl);
-bool strbool(const char *str);
-size_t strcnt(const char *str, const char *wants, size_t slen);
+bool strtob(const char *str);
+size_t strncnt(const char *str, const char *wants, size_t slen);
 char * strtrim(char *str, const char *chars);
 
 char * b64encode(const char *src, char *dst, size_t slen);
@@ -203,7 +202,16 @@ bool notify_increase(void *task);
 bool notify_decrease(void *task);
 bool notify_wait_for(uint32_t value, uint32_t tout_ms, uint32_t wait_ms);
 
-void task_info(uint8_t sort);
+typedef enum {
+    TSORT_STATE,
+    TSORT_TID,
+    TSORT_CPU,
+    TSORT_PRI,
+    TSORT_NAME,
+    TSORT_STACK,
+    TSORT_USAGE,
+} tsort_t;
+void task_info(tsort_t);
 void memory_info();
 void version_info();
 void hardware_info();

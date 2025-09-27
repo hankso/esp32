@@ -19,7 +19,7 @@
 static const char * TAG = "BTMode";
 static int state = -ESP_ERR_BTMODE_NOT_INITED;
 
-/******************************************************************************
+/*
  * BTMode APIs
  */
 
@@ -62,7 +62,7 @@ static const char * btmode_str(btmode_t mode) {
     }
 }
 
-esp_err_t btmode_switch(btmode_t mode, bool restart) {
+esp_err_t btmode_switch(btmode_t mode, bool reboot) {
     esp_err_t err = ESP_OK;
     if (mode == state) return err;
     bool exited = state == -ESP_ERR_BTMODE_DISABLED || \
@@ -80,7 +80,7 @@ esp_err_t btmode_switch(btmode_t mode, bool restart) {
         }
         config_set("sys.bt.mode", btmode_str(mode));
         if (!exited) {
-            if (restart) esp_restart();
+            if (reboot) esp_restart();
             state = -ESP_ERR_BTMODE_PENDING_REBOOT;
             ESP_LOGI(TAG, "mode set to %s (pending)", btmode_str(mode));
             return err;

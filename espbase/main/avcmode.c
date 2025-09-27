@@ -10,7 +10,6 @@
 #include "timesync.h"           // for format_timestamp
 
 #include "cJSON.h"
-#include "esp_camera.h"
 
 ESP_EVENT_DEFINE_BASE(AVC_EVENT);
 
@@ -23,34 +22,7 @@ static UNUSED esp_event_handler_instance_t aud_shdl, vid_shdl;
 
 #ifdef CONFIG_BASE_USE_I2S
 
-#ifdef IDF_TARGET_V5
-static i2s_chan_handle_t i2s_handle;
-#   define I2S_ACQUIRE()    i2c_channel_enable(i2s_handle)
-#   define I2S_RELEASE()    i2c_channel_disable(i2s_handle)
-#   define I2S_READ(...)    i2c_channel_read(i2s_handle, __VA_ARGS__)
-#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
-#   define PDM_TYPE         int16_t
-#   ifdef CONFIG_BASE_PDM_STEREO
-#       define PDM_NCH      I2S_SLOT_MODE_STEREO
-#   else
-#       define PDM_NCH      I2S_SLOT_MODE_MONO
-#   endif
-
-static void i2s_initialize() {
-#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
-    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
-    i2s_pdm_rx_config_t pdm_conf = {
-        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
-        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
-        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
-    };
-#   undef DEFAULT
-    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
-    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
-    I2S_RELEASE();
-}
-#else // IDF_TARGET_V4
+#ifdef IDF_TARGET_V4
 #   define I2S_ACQUIRE()    i2s_start(NUM_I2S)
 #   define I2S_RELEASE()    i2s_stop(NUM_I2S)
 #   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
@@ -86,14 +58,42 @@ static void i2s_initialize() {
     ESP_ERROR_CHECK( i2s_driver_install(NUM_I2S, &i2s_conf, 0, NULL) );
     ESP_ERROR_CHECK( i2s_set_pin(NUM_I2S, &pin_conf) );
     ESP_ERROR_CHECK( i2s_stop(NUM_I2S) );
+    I2S_ACQUIRE();
     I2S_RELEASE();
 }
-#endif // IDF_TARGET_V5
+#else // IDF_TARGET_V5
+static i2s_chan_handle_t i2s_handle;
+#   define I2S_ACQUIRE()    i2s_channel_enable(i2s_handle)
+#   define I2S_RELEASE()    i2s_channel_disable(i2s_handle)
+#   define I2S_READ(...)    i2s_channel_read(i2s_handle, __VA_ARGS__)
+#   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
+#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
+#   define PDM_TYPE         int16_t
+#   ifdef CONFIG_BASE_PDM_STEREO
+#       define PDM_NCH      I2S_SLOT_MODE_STEREO
+#   else
+#       define PDM_NCH      I2S_SLOT_MODE_MONO
+#   endif
+
+static void i2s_initialize() {
+#   define DEFAULT(n, ...)  I2S_##n##_DEFAULT_CONFIG(__VA_ARGS__)
+    i2s_chan_config_t chan_conf = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
+    i2s_pdm_rx_config_t pdm_conf = {
+        .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
+        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
+        .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
+    };
+#   undef DEFAULT
+    ESP_ERROR_CHECK( i2s_new_channel(&chan_conf, NULL, &i2s_handle) );
+    ESP_ERROR_CHECK( i2s_channel_init_pdm_rx_mode(i2s_handle, &pdm_conf) );
+    I2S_ACQUIRE();
+    I2S_RELEASE();
+}
+#endif // IDF_TARGET_V4
 
 static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
     static char eqls[80 - 4 - 3 - 13];
     audio_evt_t *evt = *(audio_evt_t **)data;
-    uint32_t eid = evt->id;
     FILE *stream = arg;
     if (id == AUD_EVENT_START) {
         memset(eqls, '=', sizeof(eqls) - 1);
@@ -102,7 +102,7 @@ static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
         fputc('\n', stream);
         fflush(stream);
     }
-    if (id != AUD_EVENT_DATA || eid % 10 || !evt->mode->nch) return;
+    if (id != AUD_EVENT_DATA || evt->id % 10 || !evt->mode->nch) return;
     uint16_t nch = evt->mode->nch, tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
     uint64_t vmax = BIT(evt->mode->depth * 8 - 1);
     PDM_TYPE *buf = evt->data, vol[nch], len[nch];
@@ -140,9 +140,9 @@ static void audio_capture(void *arg) {
         "data", -1
     };
     uint32_t dlen = WAV.Bps * MIN(UINT32_MAX / WAV.Bps, (uint32_t)arg / 1000);
-    uint32_t rlen, blen = WAV.Bps / 50; // 20ms buffer
+    size_t rlen, blen = WAV.Bps / 50; // 20ms buffer
     void *data = malloc(2 * blen), *task = xTaskGetCurrentTaskHandle();
-    if (!data) return vTaskDelay(NULL);
+    if (!data) return vTaskDelete(NULL);
     WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;  // < U32_MAX
     audio_evt_t wav = { .task = task, .data = &WAV, .len = sizeof(WAV) };
     audio_evt_t evt = { .task = task, .data = data, .mode = &mode };
@@ -166,73 +166,111 @@ static void audio_capture(void *arg) {
     TRYFREE(evt.data);
     vTaskDelete(NULL);
 }
-#   undef I2S_ACQUIRE
-#   undef I2S_RELEASE
-#   undef I2S_READ
-#   undef PDM_TYPE
-#   undef PDM_SHZ
-#   undef PDM_NCH
-#   undef PDM_BPC
 #endif // CONFIG_BASE_USE_I2S
  
 // SCCB / SMBus Camera
 
 #ifdef CONFIG_BASE_USE_CAM
-static sensor_t *cam;
-#   define CAM_TMR          LEDC_TIMER_3
-#   define CAM_CH           LEDC_CHANNEL_4
-#   define CAM_ACQUIRE()    ( cam->set_reg(cam, 0x3008, 0x40, 0) ) // standby
-#   define CAM_RELEASE()    ( cam->set_reg(cam, 0x3008, 0x40, 0x40) )
-#   define CAM_WIDTH        ( resolution[cam->status.framesize].width )
-#   define CAM_HEIGHT       ( resolution[cam->status.framesize].height )
+#   define CAM_ACQUIRE(c)   ( (c)->set_reg((c), 0x3008, 0x40, 0) ) // standby
+#   define CAM_RELEASE(c)   ( (c)->set_reg((c), 0x3008, 0x40, 0x40) )
+#   define CAM_HORRES(c)    ( resolution[(c)->status.framesize].width )
+#   define CAM_VERRES(c)    ( resolution[(c)->status.framesize].height )
+#   include "esp_camera.h"
+#   ifdef CONFIG_PSRAM
+#       include "esp_psram.h"
+#   endif
+
+static camera_config_t cam_conf = {
+    .pin_sccb_sda = GPIO_NUM_NC,
+    .pin_sccb_scl = GPIO_NUM_NC,
+    .sccb_i2c_port = NUM_I2C,                   // see drivers.c
+    .xclk_freq_hz = 20e6,                       // 20MHz
+    .ledc_timer   = LEDC_TIMER_3,
+    .ledc_channel = LEDC_CHANNEL_4,             // see drivers.c
+    .pixel_format = PIXFORMAT_JPEG,
+    .frame_size   = FRAMESIZE_SVGA,             // 800 x 600 / 5 ~= 90KB
+    .jpeg_quality = 20,
+    .fb_count     = 1,
+    .fb_location  = CAMERA_FB_IN_DRAM,
+    .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
+};
 
 static void cam_initialize() {
     esp_err_t err = ESP_OK;
-    const char *names[14] = {
-        "CAM PWDN", "CAM RESET", "CAM XCLK",
-        "CAM VSYNC", "CAM HREF", "CAM PCLK",
+    const char *names[] = {
+        "CAM PWDN", "CAM RESET", "CAM VSYNC",
+        "CAM HREF", "CAM XCLK", "CAM PCLK",
         "CAM D7", "CAM D6", "CAM D5", "CAM D4",
         "CAM D3", "CAM D2", "CAM D1", "CAM D0",
     };
+    int pins[LEN(names)];
 #   ifdef CONFIG_BASE_CAM_CUSTOM_PINS
     const char *str = CONFIG_BASE_CAM_CUSTOM_PINS;
 #   else
     const char *str = CONFIG_BASE_CAM_PINS;
 #   endif
-    int pins[LEN(names)];
     if (parse_pin(str, pins, LEN(pins), names) != LEN(pins)) return;
-    camera_config_t conf = {
-        .pin_sccb_sda = -1,   .pin_sccb_scl = -1,   .sccb_i2c_port = NUM_I2C,
-        .pin_pwdn = pins[0],  .pin_reset = pins[1], .pin_xclk = pins[2],
-        .pin_vsync = pins[3], .pin_href = pins[4],  .pin_pclk = pins[5],
-        .pin_d7 = pins[6],    .pin_d6 = pins[7],    .pin_d5 = pins[8],
-        .pin_d4 = pins[9],    .pin_d3 = pins[10],   .pin_d2 = pins[11],
-        .pin_d1 = pins[12],   .pin_d0 = pins[13],
-        .xclk_freq_hz = 20e6,
-        .ledc_timer   = CAM_TMR,
-        .ledc_channel = CAM_CH,
-        .pixel_format = PIXFORMAT_JPEG,
-        .frame_size   = FRAMESIZE_QSXGA, // init as large buffer as possible
-        .jpeg_quality = 10,
-        .fb_count     = 2,
-        .fb_location  = CAMERA_FB_IN_PSRAM,
-        .grab_mode    = CAMERA_GRAB_WHEN_EMPTY,
-    };
-    if (( err = esp_camera_init(&conf) )) {
+    cam_conf.pin_pwdn = pins[0];    cam_conf.pin_reset = pins[1];
+    cam_conf.pin_vsync = pins[2];   cam_conf.pin_href = pins[3];
+    cam_conf.pin_xclk = pins[4];    cam_conf.pin_pclk = pins[5];
+    cam_conf.pin_d7 = pins[6];      cam_conf.pin_d6 = pins[7];
+    cam_conf.pin_d5 = pins[8];      cam_conf.pin_d4 = pins[9];
+    cam_conf.pin_d3 = pins[10];     cam_conf.pin_d2 = pins[11];
+    cam_conf.pin_d1 = pins[12];     cam_conf.pin_d0 = pins[13];
+#   ifdef CONFIG_PSRAM
+    if (esp_psram_is_initialized()) {
+        cam_conf.frame_size   = FRAMESIZE_INVALID - 1;  // as large as possible
+        cam_conf.jpeg_quality = 12;                     // ov: higher quality
+        cam_conf.fb_count     = 2;                      // double buffered
+        cam_conf.fb_location  = CAMERA_FB_IN_PSRAM;
+    }
+#   endif
+    if (( err = esp_camera_init(&cam_conf) )) {
         ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(err));
         return;
     }
-    cam = esp_camera_sensor_get();
+    sensor_t *cam = esp_camera_sensor_get();
     if (esp_camera_load_from_nvs("camera")) {
         camera_sensor_info_t *info = esp_camera_sensor_get_info(&cam->id);
         if (info->model == CAMERA_OV3660) {
             cam->set_brightness(cam, 1);
-            cam->set_saturation(cam, -2);
+        } else if (info->model == CAMERA_OV5640) {
+            cam->set_hmirror(cam, 1);
         }
-        cam->set_framesize(cam, info->max_size);
+        if (cam_conf.fb_location == CAMERA_FB_IN_PSRAM) {
+            cam->set_framesize(cam, info->max_size);
+        } else {
+            cam->set_framesize(cam, MIN(info->max_size, FRAMESIZE_HD));
+        }
         esp_camera_save_to_nvs("camera");
     }
-    CAM_RELEASE();
+    CAM_ACQUIRE(cam);
+    CAM_RELEASE(cam);
+}
+
+static void cam_flush() {
+    if (cam_conf.grab_mode != CAMERA_GRAB_WHEN_EMPTY) return;
+    LOOPN(i, cam_conf.fb_count) { esp_camera_fb_return(esp_camera_fb_get()); }
+}
+
+static camera_fb_t * cam_grab() {
+    static bool warned = false;
+    camera_fb_t *frame = NULL;
+    if (xTaskGetHandle("video")) {
+        frame = esp_camera_fb_get();
+        if (!warned) {
+            ESP_LOGW(TAG, "Mix used async and sync APIs!");
+            warned = true;
+        }
+    } else {
+        sensor_t *cam = esp_camera_sensor_get();
+        if (!cam) return NULL;
+        CAM_ACQUIRE(cam);
+        cam_flush();
+        frame = esp_camera_fb_get();
+        CAM_RELEASE(cam);
+    }
+    return frame;
 }
 
 static_assert(sizeof(sensor_t) <= UINT8_MAX, "offset overflow: use uint16_t");
@@ -258,7 +296,7 @@ static struct {
 #   undef Z
 };
 
-static int cam_get(uint8_t idx) {
+static int cam_get(sensor_t *cam, uint8_t idx) {
     if (!cam || idx >= LEN(cam_attrs)) return 0;
     void *ptr = (void *)cam + cam_attrs[idx].voff;
     switch (cam_attrs[idx].vsize) {
@@ -276,75 +314,82 @@ static int cam_get(uint8_t idx) {
     }
 }
 
-static esp_err_t cam_set(uint8_t idx, int val) {
+static esp_err_t cam_set(sensor_t *cam, uint8_t idx, int val) {
     if (!cam || idx >= LEN(cam_attrs)) return ESP_ERR_INVALID_ARG;
-    if (cam_get(idx) == val) return ESP_OK;
+    if (cam_get(cam, idx) == val) return ESP_OK;
     void **cptr = (void *)cam + cam_attrs[idx].coff;
     int (*cb)(sensor_t *, int) = *cptr;
     return cb(cam, val);
 }
 
-static float cam_fps(int *val) {
-    if (!cam) return val ? ESP_ERR_INVALID_STATE : 0;
+static float cam_fps(sensor_t *cam, int *val) {
     int hts = cam->get_reg(cam, 0x380C, 0xFFFF);
     int vts = cam->get_reg(cam, 0x380E, 0xFFFF);
     float clk = 1.25 * cam->xclk_freq_hz;
     if (!val) return clk / hts / vts;
-    int tgt = *val ? CONS(clk / hts / *val, CAM_HEIGHT, 0xFFFF) : vts;
+    int tgt = *val ? CONS(clk / hts / *val, CAM_VERRES(cam), 0xFFFF) : vts;
     return tgt == vts ? 0 : cam->set_reg(cam, 0x380E, tgt, 0xFFFF);
 }
 
-static esp_err_t cam_loads(const char *json) {
-    if (!cam) return ESP_ERR_INVALID_STATE;
+static esp_err_t cam_loads(sensor_t *cam, const char *json) {
     cJSON *obj = cJSON_Parse(json);
     if (!obj) {
         ESP_LOGE(TAG, "Failed to load config from `%s`", json);
         return ESP_ERR_INVALID_ARG;
     }
-    int32_t err = ESP_OK, value, stdby = !xTaskGetHandle("video");
-    if (stdby) CAM_ACQUIRE();
+    int err = ESP_OK, value, stdby = !xTaskGetHandle("video");
+    if (stdby) CAM_ACQUIRE(cam);
     for (cJSON *ptr = obj->child; ptr && !err; ptr = ptr->next) {
         if (!ptr->string) continue;
         if (cJSON_IsNumber(ptr)) {
             value = ptr->valuedouble;
-        } else if (!parse_s32(cJSON_GetStringValue(ptr), &value)) continue;
+        } else {
+            int32_t tmp;
+            if (!parse_s32(cJSON_GetStringValue(ptr), &tmp)) continue;
+            value = tmp;
+        }
         if (!strcmp(ptr->string, "xclk")) {
             if (value > 240) value /= 1e6;
             if (!value) continue;
-            err = cam->set_xclk(cam, CAM_TMR, value); // in MHz
+            err = cam->set_xclk(cam, cam_conf.ledc_timer, value); // in MHz
         } else if (!strcmp(ptr->string, "framerate")) {
-            err = cam_fps(&value);
+            err = cam_fps(cam, &value);
         } else LOOPN(i, LEN(cam_attrs)) {
             if (strcmp(ptr->string, cam_attrs[i].key)) continue;
-            err = cam_set(i, value);
+            err = cam_set(cam, i, value);
             break;
         }
     }
-    if (stdby) CAM_RELEASE();
+    if (stdby) CAM_RELEASE(cam);
     cJSON_Delete(obj);
     return err ?: esp_camera_save_to_nvs("camera");
 }
 
-static char * cam_dumps(FILE *stream) {
-    if (!cam) return NULL;
+static char * cam_dumps(sensor_t *cam, FILE *stream) {
     if (stream) {
         size_t klen = strlen("framerate");
 #   ifdef CONFIG_BASE_AUTO_ALIGN
         ITERP(attr, cam_attrs) { klen = MAX(klen, strlen(attr->key)); }
 #   endif
-        LOOPN(i, LEN(cam_attrs)) {
-            fprintf(stream, "%*s: %d\n", klen, cam_attrs[i].key, cam_get(i));
-        }
+        fprintf(stream, "%*s: %.3f\n", klen, "framerate", cam_fps(cam, NULL));
+        fprintf(stream, "%*s: %d\n", klen, "width", CAM_HORRES(cam));
+        fprintf(stream, "%*s: %d\n", klen, "height", CAM_VERRES(cam));
         fprintf(stream, "%*s: %d\n", klen, "xclk", cam->xclk_freq_hz);
-        fprintf(stream, "%*s: %d\n", klen, "width", CAM_WIDTH);
-        fprintf(stream, "%*s: %d\n", klen, "height", CAM_HEIGHT);
-        fprintf(stream, "%*s: %.3f\n", klen, "framerate", cam_fps(NULL));
+        LOOPN(i, LEN(cam_attrs)) {
+            fprintf(stream, "%*s: %d\n",
+                    klen, cam_attrs[i].key, cam_get(cam, i));
+        }
         fflush(stream);
         return NULL;
     }
     cJSON *obj = cJSON_CreateObject();
     LOOPN(i, LEN(cam_attrs)) {
-        cJSON_AddNumberToObject(obj, cam_attrs[i].key, cam_get(i));
+        cJSON_AddNumberToObject(obj, cam_attrs[i].key, cam_get(cam, i));
+    }
+    cJSON *sizes = cJSON_AddArrayToObject(obj, "framesizes");
+    LOOPN(i, FRAMESIZE_INVALID) {
+        int wh[2] = { resolution[i].width, resolution[i].height };
+        cJSON_AddItemToArray(sizes, cJSON_CreateIntArray(wh, LEN(wh)));
     }
     char *json = cJSON_PrintUnformatted(obj);
     cJSON_Delete(obj);
@@ -354,7 +399,7 @@ static char * cam_dumps(FILE *stream) {
 static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
     static TickType_t ts;
     video_evt_t *evt = *(video_evt_t **)data;
-    uint32_t eid = evt->id;
+    size_t eid = evt->id;
     notify_increase(evt->task);
     TickType_t dt = xTaskGetTickCount() - ts; ts += dt;
     if (id == VID_EVENT_STOP) {
@@ -373,9 +418,10 @@ static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
 }
 
 static void video_capture(void *arg) {
+    sensor_t *cam = esp_camera_sensor_get();
     if (!cam) return;
-    float fps = cam_fps(NULL);
-    video_mode_t mode = { (int)fps, CAM_WIDTH, CAM_HEIGHT, 3, "MJPG" };
+    float fps = cam_fps(cam, NULL);
+    video_mode_t mode = { fps, CAM_HORRES(cam), CAM_VERRES(cam), 3, "MJPG" };
     uint32_t BPF = mode.width * mode.height * mode.depth / 10; // BytePerFrame
     uint32_t nframe = fps * MIN(UINT32_MAX / fps, (uint32_t)arg / 1000.0);
     camera_fb_t *next = NULL, *prev = NULL;
@@ -400,7 +446,8 @@ static void video_capture(void *arg) {
     video_evt_t evt = { .task = task, .data = NULL, .mode = &mode };
     AVC_POST(VID_EVENT_START, avi, -1);
 
-    CAM_ACQUIRE();
+    CAM_ACQUIRE(cam);
+    cam_flush();
     for (evt.id = 0; video_run && evt.id < nframe; evt.id++) {
         if (!( next = esp_camera_fb_get() )) break;
         if (!notify_wait_for(0, 500, 0)) {
@@ -421,7 +468,7 @@ static void video_capture(void *arg) {
         TRYNULL(prev, esp_camera_fb_return);
         prev = next;
     }
-    CAM_RELEASE();
+    CAM_RELEASE(cam);
 
     notify_wait_for(0, 500, 5);
     avi.len = 0; avi.data = NULL;
@@ -432,18 +479,10 @@ static void video_capture(void *arg) {
     TRYNULL(prev, esp_camera_fb_return);
     vTaskDelete(NULL);
 }
-#   undef CAM_TMR
-#   undef CAM_CH
-#   undef CAM_ACQUIRE
-#   undef CAM_RELEASE
-#   undef CAM_WIDTH
-#   undef CAM_HEIGHT
 #endif // CONFIG_BASE_USE_CAM
 
-// Async API
-
-esp_err_t avc_command(
-    const char *ctrl, int targets, uint32_t tout_ms, FILE *stream
+esp_err_t avc_async(
+    int targets, const void *ctrl, uint32_t tout_ms, FILE *stream
 ) {
     if (!targets) targets = AUDIO_TARGET | VIDEO_TARGET;
     bool atgt = targets & AUDIO_TARGET, vtgt = targets & VIDEO_TARGET;
@@ -451,23 +490,24 @@ esp_err_t avc_command(
     TaskHandle_t vtask = xTaskGetHandle("video");
     if (targets & IMAGE_TARGET) {
 #ifdef CONFIG_BASE_USE_CAM
+        sensor_t *cam = esp_camera_sensor_get();
+        if (!cam) return ESP_ERR_INVALID_STATE;
         if (targets & ACTION_WRITE)
-            return ctrl ? cam_loads(ctrl) : ESP_ERR_INVALID_ARG;
+            return ctrl ? cam_loads(cam, ctrl) : ESP_ERR_INVALID_ARG;
         if (targets & ACTION_READ) {
-            if (ctrl) return !( *(char **)ctrl = cam_dumps(NULL) );
-            if (stream) {
-                cam_dumps(stream);
-                return ESP_OK;
-            }
+            if (stream) cam_dumps(cam, stream);
+            if (ctrl && !( *(char **)ctrl = cam_dumps(cam, NULL) ))
+                return ESP_ERR_NO_MEM;
         }
+        return ESP_OK;
 #else
         return ESP_ERR_NOT_SUPPORTED;
 #endif
     } else if (ctrl) {
-        if (!strbool(ctrl)) {
+        if (!strtob(ctrl)) {
             if (atgt) audio_run = false;
             if (vtgt) video_run = false;
-            for (int ms = 10; ms && (atgt || vtgt); ms--) {
+            for (int ms = 100; ms && (atgt || vtgt); ms -= 5) {
                 if (atgt && !xTaskGetHandle("audio")) atgt = false;
                 if (vtgt && !xTaskGetHandle("video")) vtgt = false;
                 msleep(ms);
@@ -489,21 +529,42 @@ esp_err_t avc_command(
             }
 #endif
         }
-    } else if (stream) {
+    }
+    if (stream) {
 #ifdef CONFIG_BASE_USE_I2S
         if (atgt && !aud_shdl) REGEVTS(AVC, aud_visual, stream, &aud_shdl);
 #endif
 #ifdef CONFIG_BASE_USE_CAM
         if (vtgt && !vid_shdl) REGEVTS(AVC, vid_visual, stream, &vid_shdl);
 #endif
-    } else {
-        if (atgt) printf("Audio Capture: %s\n", atask ? "on" : "off");
-        if (vtgt) printf("Video Capture: %s\n", vtask ? "on" : "off");
     }
+    if (atgt) printf("Audio Capture: %s\n", atask ? "on" : "off");
+    if (vtgt) printf("Video Capture: %s\n", vtask ? "on" : "off");
     return ESP_OK;
 }
 
-// Sync API
+esp_err_t avc_sync(int targets, void **buf, size_t *len) {
+    if (!len || !buf) return ESP_ERR_INVALID_ARG;
+    if (targets & IMAGE_TARGET) {
+#ifdef CONFIG_BASE_USE_CAM
+        static camera_fb_t *frame;
+        if (targets & ACTION_WRITE) {
+            if (!frame || frame->buf != *buf || frame->len != *len)
+                return ESP_ERR_INVALID_STATE;
+            TRYNULL(frame, esp_camera_fb_return);
+            *buf = NULL;
+            *len = 0;
+        } else if (targets & ACTION_READ) {
+            if (!frame && !( frame = cam_grab() )) return ESP_FAIL;
+            *buf = frame->buf;
+            *len = frame->len;
+        }
+#else
+        return ESP_ERR_NOT_SUPPORTED;
+#endif
+    }
+    return ESP_OK;
+}
 
 void avc_initialize() {
 #ifdef CONFIG_BASE_USE_I2S

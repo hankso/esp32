@@ -14,10 +14,17 @@
 #include "esp_http_client.h"
 #include "esp_image_format.h"
 
+#if __has_include("esp_delta_ota.h")
+#   include "esp_delta_ota.h"
+#   define WITH_DELTA
+#endif
+
 static const char *TAG = "Update";
 
 static UNUSED void ota_fetch_task(void *arg) {
+#ifdef CONFIG_BASE_USE_WIFI
     if (wifi_sta_wait(arg ? *(uint16_t *)arg : 30000) == ESP_OK)
+#endif
         ota_updation_url(NULL, false);
     vTaskDelete(NULL);
 }
@@ -66,7 +73,7 @@ void update_initialize() {
     }
 #endif
 #ifdef CONFIG_BASE_OTA_FETCH
-    if (strbool(Config.app.OTA_AUTO))
+    if (strtob(Config.app.OTA_AUTO))
         xTaskCreate(ota_fetch_task, "ota_fetch", 4096, NULL, 1, NULL);
 #endif
 }
@@ -154,19 +161,19 @@ bool ota_updation_url(const char *url, bool force) {
 #else
     if (!ctx.target || ctx.handle) return false;
     if (!url) url = Config.app.OTA_URL;
+    if (!force) force = endswith(url, "?force");
     if (!strlen(url)) {
         ctx.error = ESP_ERR_INVALID_ARG;
         return false;
     }
     ESP_LOGI(TAG, "OTA Updation from URL `%s`", url);
-    esp_app_desc_t new_info, ota_info, run_info;
-    size_t
-        hsize = sizeof(esp_image_header_t),
-        ssize = sizeof(esp_image_segment_header_t),
-        asize = sizeof(esp_app_desc_t),
-        vsize = sizeof(new_info.version),
-        tsize = sizeof(new_info.time);
-    char buf[hsize + ssize + asize + 128], *cert = NULL;
+    struct {
+        esp_image_header_t hdr;
+        esp_image_segment_header_t seg;
+        esp_app_desc_t app;
+    } *ndesc = NULL;
+    esp_app_desc_t tdesc, rdesc;
+    char buf[CDIV(sizeof(*ndesc), 256)], *cert = NULL;
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 2000,
@@ -189,45 +196,48 @@ bool ota_updation_url(const char *url, bool force) {
     if (( ctx.error = esp_http_client_open(client, 0) )) goto http_clean;
     esp_http_client_fetch_headers(client);
     while (1) {
-        int rsize = esp_http_client_read(client, buf, sizeof(buf));
-        if (rsize < 0) {
-            ESP_LOGE(TAG, "SSL data read error");
+        int ret = esp_http_client_read(client, buf, sizeof(buf));
+        if (ret < 0) {
+            ESP_LOGE(TAG, "Firmware download error: %s", esp_err_to_name(-ret));
             goto ota_error;
-        }
-        if (rsize == 0) {
+        } else if (ret == 0) {
+            int err = esp_http_client_get_errno(client);
             if (esp_http_client_is_complete_data_received(client)) {
                 if (ctx.handle) ESP_LOGD(TAG, "Firmware downloaded");
-            } else if (errno) {
-                ESP_LOGE(TAG, "Firmware downloading error: %d", errno);
+            } else if (err && err != -1) {
+                ESP_LOGE(TAG, "Firmware download error: %d", err);
                 goto ota_error;
             }
             break;
         }
         if (!ctx.handle) {
-            if (rsize < (hsize + ssize + asize)) {
-                ESP_LOGE(TAG, "Received header does not fit length: %d", rsize);
+            if (ret < sizeof(*ndesc)) {
+                ESP_LOGE(TAG, "Received header does not fit length: %d", ret);
                 ctx.error = ESP_ERR_INVALID_SIZE;
                 goto http_clean;
             }
-            memcpy(&new_info, buf + hsize + ssize, asize);
+            ndesc = (typeof(ndesc) *)buf;
+            if (ndesc->hdr.chip_id != CONFIG_IDF_FIRMWARE_CHIP_ID) {
+                ESP_LOGE(TAG, "Received chip ID does not match: 0x%04X",
+                         ndesc->hdr.chip_id);
+                ctx.error = ESP_ERR_NOT_SUPPORTED;
+                goto http_clean;
+            }
             ESP_LOGI(TAG, "New app version: %s %s %s",
-                     new_info.version, new_info.date, new_info.time);
-            if (!esp_ota_get_partition_description(ctx.running, &run_info))
+                     ndesc->app.version, ndesc->app.date, ndesc->app.time);
+            if (!esp_ota_get_partition_description(ctx.running, &rdesc))
                 ESP_LOGI(TAG, "Running version: %s %s %s",
-                         run_info.version, run_info.date, run_info.time);
-            if (!esp_ota_get_partition_description(ctx.target, &ota_info))
-                ESP_LOGI(TAG, "Another version: %s %s %s",
-                         ota_info.version, ota_info.date, ota_info.time);
-            if (!force && !endswith(url, "?force") && (
-                (
-                    !memcmp(new_info.version, ota_info.version, vsize) &&
-                    !memcmp(new_info.time, ota_info.time, tsize)
-                ) || (
-                    !memcmp(new_info.version, run_info.version, vsize) &&
-                    !memcmp(new_info.time, run_info.time, tsize)
-                )
+                         rdesc.version, rdesc.date, rdesc.time);
+            if (!esp_ota_get_partition_description(ctx.target, &tdesc))
+                ESP_LOGI(TAG, "Old app version: %s %s %s",
+                         tdesc.version, tdesc.date, tdesc.time);
+            if (!force && (
+                (!strcmp(ndesc->app.version, tdesc.version) &&
+                 !strcmp(ndesc->app.time,    tdesc.time) ) ||
+                (!strcmp(ndesc->app.version, rdesc.version) &&
+                 !strcmp(ndesc->app.time,    rdesc.time))
             )) {
-                ESP_LOGW(TAG, "New version app is already downloaded. Skip");
+                ESP_LOGW(TAG, "New version is already downloaded. Skip");
                 ctx.error = ESP_ERR_INVALID_STATE;
                 goto http_clean;
             }
@@ -275,7 +285,7 @@ void ota_updation_info() {
         part = esp_partition_get(iter);
         iter = esp_partition_next(iter);
         if (( err = esp_ota_get_partition_description(part, &desc) )) {
-            printf("%-8.7s" "%-8.7s" "%s\n",
+            printf("%-7s %-7.7s %s\n",
                    ota_img_states[3], part->label, esp_err_to_name(err));
             continue;
         }
@@ -290,7 +300,7 @@ void ota_updation_info() {
         } else {
             dstr = ota_img_states[state];
         }
-        printf("%-8.7s" "%-8.7s" "0x%06X 0x%06X " "%-6.6s "
+        printf("%-7s %-7.7s 0x%06" PRIX32 " 0x%06" PRIX32 " %-6.6s "
                "%-8.8s.. %7.7s %s %s\n",
                dstr, part->label, part->address, part->size,
                desc.idf_ver, format_sha256(desc.app_elf_sha256, 8),

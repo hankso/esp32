@@ -206,7 +206,8 @@ typedef struct {
 #define KEYBD_MOD_ADD_SHIFT(mod)            ( (mod) | (BIT1 | BIT5) )
 #define KEYBD_MOD_DEL_SHIFT(mod)            ( (mod) & ~(BIT1 | BIT5) )
     uint8_t reserved;
-    uint8_t keycode[6];                             // array of HID_KEY_XXX
+#define KEYBD_NUM_KEYS                      6   // see HID_REPORT_DESC_KEYBD
+    uint8_t keycodes[KEYBD_NUM_KEYS];
 } PACKED hid_keybd_report_t;
 
 typedef struct {
@@ -342,8 +343,8 @@ void hidtool_initialize();  // calculate HIDTool from Config.app.HID_MODE
 
 typedef enum {
     HID_TARGET_USB = 0x01,  // USB Device | USB Host
-    HID_TARGET_BLE = 0x02,  // BT Device | BT Host
-    HID_TARGET_UDP = 0x04,  // UDP sendto host | broadcast
+    HID_TARGET_BLE = 0x02,  // BT/BLE Device | BLE Host
+    HID_TARGET_NET = 0x04,  // UDP sendto host | broadcast
     HID_TARGET_SCN = 0x08,  // Screen input device
     HID_TARGET_ALL = 0xFF,
 } hid_target_t;         // interface the HID report is sent to or received from
@@ -370,10 +371,10 @@ bool hid_report_send(hid_target_t, hid_report_t *);
  * Keyboard
  */
 
-const char * hid_keycode_str(uint8_t keycode, uint8_t modifier);
-const char * hid_keycodes_str(const uint8_t keycodes[6], uint8_t modifier);
+const char * hid_keycode_str(uint8_t code, uint8_t modifier);
+const char * hid_keycodes_str(uint8_t codes[KEYBD_NUM_KEYS], uint8_t modifier);
 const char * hid_modifier_str(uint8_t modifier);
-bool hid_report_keybd(hid_target_t, uint8_t m, const uint8_t *kc, size_t l);
+bool hid_report_keybd(hid_target_t, uint8_t mod, uint8_t *codes, size_t num);
 bool hid_report_keybd_press(hid_target_t, const char *str, uint32_t ms);
 
 /*

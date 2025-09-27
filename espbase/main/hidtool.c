@@ -17,7 +17,7 @@
 
 static const char *TAG = "HIDTool";
 
-#ifdef CONFIG_BASE_USE_WIFI
+#ifdef CONFIG_BASE_USE_NET
 static struct {
     int sock;
     struct sockaddr_storage addr;
@@ -49,11 +49,7 @@ void hidtool_initialize() {
     int vals[2], blen = sizeof(HIDTool.dstr);
     if (parse_all(Config.info.VER, vals, 2) == 2)
         HIDTool.ver = ((vals[0] & 0xFF) << 8) | (vals[1] & 0xFF);
-#ifdef CONFIG_TINYUSB_DESC_MANUFACTURER_STRING
-    HIDTool.vendor = CONFIG_TINYUSB_DESC_MANUFACTURER_STRING;
-#else
     HIDTool.vendor = Config.info.NAME;
-#endif
     HIDTool.serial = Config.info.UID;
 
     const char *hidfile = NULL;
@@ -85,7 +81,7 @@ void hidtool_initialize() {
         HIDTool.pad = GMPAD_XINPUT;
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, xinput);
         hidfile = "xinput.hid";                                     // 283 Bytes
-        strncpy(HIDTool.dstr, "Microsoft XInput compatible gamepad", blen);
+        snprintf(HIDTool.dstr, blen, "Microsoft XInput compatible gamepad");
     } else if (!strcasecmp(Config.app.HID_MODE, "SWITCH")) {
         HIDTool.vid = 0x057E;
         HIDTool.pid = 0x2009;
@@ -93,7 +89,7 @@ void hidtool_initialize() {
         HIDTool.pad = GMPAD_SWITCH;
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, nswitch);
         hidfile = "switch.hid";                                     // 170 Bytes
-        strncpy(HIDTool.dstr, "Mintendo wireless gamepad", blen);
+        snprintf(HIDTool.dstr, blen, "Mintendo wireless gamepad");
     } else if (!strcasecmp(Config.app.HID_MODE, "DSENSE")) {
         HIDTool.vid = 0x054C;
         HIDTool.pid = 0x0CE6;
@@ -101,7 +97,7 @@ void hidtool_initialize() {
         HIDTool.pad = GMPAD_DSENSE;
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, dsense);
         hidfile = "dsense.hid";                                     // 279 Bytes
-        strncpy(HIDTool.dstr, "PlayStation DualSense gamepad", blen);
+        snprintf(HIDTool.dstr, blen, "PlayStation DualSense gamepad");
     } else {
         ESP_LOGE(TAG, "Unknown HID MODE: %s", Config.app.HID_MODE);
         return;
@@ -116,7 +112,7 @@ void hidtool_initialize() {
         if (desc) memcpy(HIDTool.desc, desc, HIDTool.dlen = dlen);
         TRYFREE(desc);
     }
-#ifdef CONFIG_BASE_USE_WIFI
+#ifdef CONFIG_BASE_USE_NET
     if (!network_parse_addr(Config.app.HID_HOST, 4950, &uctx.addr)) {
         if (uctx.addr.ss_family == AF_INET) {
             uctx.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
@@ -145,8 +141,8 @@ bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
 #ifdef CONFIG_BASE_USE_BT
     if (to | HID_TARGET_BLE) sent |= hidb_send_report(rpt);
 #endif
-#ifdef CONFIG_BASE_USE_WIFI
-    if (to | HID_TARGET_UDP)
+#ifdef CONFIG_BASE_USE_NET
+    if (to | HID_TARGET_NET)
         sent |= uctx.sock && sendto(
             uctx.sock, (void *)rpt, rpt->size, 0,
             (struct sockaddr *)&uctx.addr, sizeof(uctx.addr)
@@ -160,7 +156,7 @@ bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
     case REPORT_ID_KEYBD:
         ESP_LOGI(TAG, "KEYBD MOD 0x%02X KEY %s",
                 rpt->keybd.modifier,
-                hid_keycodes_str(rpt->keybd.keycode, rpt->keybd.modifier));
+                hid_keycodes_str(rpt->keybd.keycodes, rpt->keybd.modifier));
         break;
     case REPORT_ID_MOUSE:
         ESP_LOGI(TAG, "MOUSE X %4d Y %4d V %3d H %3d BTN %s",
@@ -195,7 +191,7 @@ bool hid_report_send(hid_target_t to, hid_report_t *rpt) {
     return sent;
 }
 
-/******************************************************************************
+/*
  * HID type: Surface Dial
  */
 
@@ -216,7 +212,7 @@ bool hid_report_sdial_click(hid_target_t to, uint32_t ms) {
     return sent;
 }
 
-/******************************************************************************
+/*
  * HID type: System Control
  */
 
@@ -231,7 +227,7 @@ bool hid_report_sctrl(hid_target_t to, hid_sctrl_keycode_t k) {
     return sent;
 }
 
-/******************************************************************************
+/*
  * HID type: Game Pad
  */
 
@@ -394,7 +390,7 @@ bool hid_report_gmpad_button(hid_target_t to, uint16_t btn, uint8_t action) {
     return hid_report_send(to, gmpad_dump_data(&report));
 }
 
-/******************************************************************************
+/*
  * HID type: Mouse move / click / scroll
  */
 
@@ -415,7 +411,7 @@ const char * hid_btncode_str(uint8_t btns) {
     LOOPN(i, LEN(BUTTON_STR)) {
         if (btns & (1 << i)) {
             size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", BUTTON_STR[i]);
+                             i ? " | " : "", BUTTON_STR[i]);
         } else {
             buf[size] = '\0';
         }
@@ -501,13 +497,13 @@ void hid_handle_abmse(
              btns[idx] & MOUSE_BUTTON_RIGHT  ? 'R' : ' ');
 }
 
-/******************************************************************************
+/*
  * HID type: Keyboard press / release
  */
 
 // HID_ASCII_TO_KEYCODE & KEYCODE_TO_ASCII (defined in tinyusb/class/hid/hid.h)
 // occupies 512 bytes and does not provide info of keycodes above 0x7F.
-// Here is our minimal implementation of conversion between ASCII and KEYCODE.
+// Here is my minimal implementation of conversion between ASCII and KEYCODE.
 
 static const struct {
     uint8_t code;
@@ -586,51 +582,53 @@ static uint8_t str2modifier(const char *str) {
     return mod;
 }
 
-static const uint8_t * str2keycodes(const char *str, uint8_t *mod) {
-    static uint8_t buf[6];
-    size_t len = strlen(str ?: ""), klen = 0, blen = sizeof(buf);
-    if (!len) goto exit;
+static uint8_t * str2keycodes(const char *str, uint8_t *mod, uint8_t *num) {
+    static uint8_t codes[KEYBD_NUM_KEYS];
+    size_t idx = 0;
+    if (!strlen(str ?: "")) goto exit;
     if (str[0] == '|') {
-        buf[klen++] = HID_KEY_BACKSLASH;
+        codes[idx++] = HID_KEY_BACKSLASH;
         if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
     }
-    char *dup = strdup(str);
-    for (str = strtok(dup, "|"); str && klen < blen; str = strtok(NULL, "|")) {
-        if (str2modifier(str)) continue;
+    char *dup = strdup(str), *save = NULL;
+    for (str = strtok_r(dup, "|", &save); str; str = strtok_r(0, "|", &save)) {
+        if (idx >= KEYBD_NUM_KEYS || str2modifier(str)) continue;
         uint8_t fkey;
         bool has_fkey = parse_u8(str + 1, &fkey) && fkey < 13;
         if (has_fkey && (str[0] == 'F' || str[0] == 'f')) {
-            buf[klen++] = fkey - 1 + HID_KEY_F1;
+            codes[idx++] = fkey - 1 + HID_KEY_F1;
             continue;
         }
         bool has_spec = false;
         LOOPN(i, LEN(keycodes_special)) {
-            if (klen < blen && !strcasecmp(keycodes_special[i].name, str)) {
-                buf[klen++] = keycodes_special[i].code;
+            if (!strcasecmp(keycodes_special[i].name, str)) {
+                codes[idx++] = keycodes_special[i].code;
                 has_spec = true;
                 break;
             }
         }
         if (has_spec) continue;
         LOOPN(i, LEN(keycodes_normal)) {
-            if (klen < blen && str[0] == keycodes_normal[i][1])
-                buf[klen++] = keycodes_normal[i][0];
-            if (klen < blen && str[0] == keycodes_normal[i][2]) {
-                buf[klen++] = keycodes_normal[i][0];
+            if (str[0] == keycodes_normal[i][1])
+                codes[idx++] = keycodes_normal[i][0];
+            if (str[0] == keycodes_normal[i][2]) {
+                codes[idx++] = keycodes_normal[i][0];
                 if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
             }
         }
+        if (idx >= KEYBD_NUM_KEYS) continue;
         if ('a' <= str[0] && str[0] <= 'z')
-            buf[klen++] = str[0] - 'a' + HID_KEY_A;
+            codes[idx++] = str[0] - 'a' + HID_KEY_A;
         if ('A' <= str[0] && str[0] <= 'Z') {
-            buf[klen++] = str[0] - 'A' + HID_KEY_A;
+            codes[idx++] = str[0] - 'A' + HID_KEY_A;
             if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);
         }
     }
     TRYFREE(dup);
 exit:
-    if (klen < 6) buf[klen] = HID_KEY_NONE;
-    return buf;
+    LOOP(i, idx, KEYBD_NUM_KEYS) { codes[i] = HID_KEY_NONE; }
+    if (num) *num = idx;
+    return codes;
 }
 
 const char * hid_keycode_str(uint8_t code, uint8_t modifier) {
@@ -658,16 +656,16 @@ const char * hid_keycode_str(uint8_t code, uint8_t modifier) {
     return buf;
 }
 
-const char * hid_keycodes_str(const uint8_t keycode[6], uint8_t modifier) {
+const char * hid_keycodes_str(uint8_t codes[KEYBD_NUM_KEYS], uint8_t mod) {
     static char buf[64];
     size_t blen = sizeof(buf), size = 0;
-    LOOPN(i, 6) {
-        if (keycode[i] == HID_KEY_NONE) {
+    LOOPN(i, KEYBD_NUM_KEYS) {
+        if (codes[i] == HID_KEY_NONE) {
             buf[size] = '\0';
             break;
         }
         size += snprintf(buf + size, blen - size, "%s%s",
-            i ? " | " : "", hid_keycode_str(keycode[i], modifier));
+                         i ? " | " : "", hid_keycode_str(codes[i], mod));
     }
     return buf;
 }
@@ -678,7 +676,7 @@ const char * hid_modifier_str(uint8_t modifier) {
     LOOPN(i, 8) {
         if (modifier & (1 << i)) {
             size += snprintf(buf + size, blen - size, "%s%s",
-                i ? " | " : "", modifier_names[i]);
+                             i ? " | " : "", modifier_names[i]);
         } else {
             buf[size] = '\0';
         }
@@ -686,23 +684,19 @@ const char * hid_modifier_str(uint8_t modifier) {
     return buf;
 }
 
-bool hid_report_keybd(
-    hid_target_t to, uint8_t mod, const uint8_t *keycode, size_t len
-) {
+bool hid_report_keybd(hid_target_t to, uint8_t m, uint8_t *codes, size_t num) {
     hid_report_t report = {
         .id = REPORT_ID_KEYBD,
-        .keybd = { .modifier = mod, .keycode = { 0 } }
+        .keybd = { .modifier = m, .keycodes = { HID_KEY_NONE } }
     };
-    memcpy(report.keybd.keycode, keycode, MIN(len, 6));
+    memcpy(report.keybd.keycodes, codes, MIN(num, KEYBD_NUM_KEYS));
     return hid_report_send(to, &report);
 }
 
 bool hid_report_keybd_press(hid_target_t to, const char *str, uint32_t ms) {
-    uint8_t modifier = str2modifier(str), klen = 0;
-    const uint8_t *keycode = str2keycodes(str, &modifier);
-    while (klen < 6) { if (keycode[klen] == HID_KEY_NONE) break; klen++; }
-    bool sent = hid_report_keybd(to, modifier, keycode, klen);
-    if (sent && (modifier || klen) && ms != UINT32_MAX) {
+    uint8_t mod, num, *codes = str2keycodes(str, &mod, &num);
+    bool sent = hid_report_keybd(to, mod, codes, num);
+    if (sent && (mod || num) && ms != UINT32_MAX) {
         msleep(ms);
         sent = hid_report_keybd(to, 0, NULL, 0);
     }
@@ -715,11 +709,11 @@ void hid_handle_keybd(
     int idx = -1;
     LOOPN(i, 8) { if (from & BIT(i)) idx = idx == -1 ? i : -2; }
     if (idx < 0 || !rpt) return;
-    static uint8_t pmods[8], prevs[8][LEN(rpt->keycode)];
-    uint8_t *next = rpt->keycode, *prev = prevs[idx];
-    LOOPN(i, LEN(rpt->keycode)) {
+    static uint8_t pmods[8], prevs[8][KEYBD_NUM_KEYS];
+    uint8_t *next = rpt->keycodes, *prev = prevs[idx];
+    LOOPN(i, KEYBD_NUM_KEYS) {
         bool prev_found = false, next_found = false;
-        LOOPN(j, LEN(rpt->keycode)) {
+        LOOPN(j, KEYBD_NUM_KEYS) {
             if (prev[i] == next[j]) next_found = true;
             if (next[i] == prev[j]) prev_found = true;
         }
@@ -734,6 +728,6 @@ void hid_handle_keybd(
                      hid_modifier_str(rpt->modifier));
         }
     }
-    memcpy(prev, next, LEN(rpt->keycode));
+    memcpy(prev, next, KEYBD_NUM_KEYS);
     pmods[idx] = rpt->modifier;
 }

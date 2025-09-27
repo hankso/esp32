@@ -170,7 +170,7 @@ typedef struct {
     int fd;         // client's file descriptor
     double offset;  // average value: sum(offsets) / count
     double rtript;  // round-trip transfer time
-    uint32_t count; // synchronization times counter
+    uint16_t count; // synchronization times counter
     char addr[ADDRSTRLEN];          // socket remote address
     timesync_result_t results[3];   // latest three results
 } timesync_client_t;
@@ -190,18 +190,18 @@ void timesync_server_status() {
     LOOPN(i, TIMESYNC_CLIENTS_NUM) {
         if (clients[i].fd < 0) continue;
         if (!header) {
-            printf("FD Counts %18s %18s %13s\n",
+            printf("FD Count %18s %18s %13s\n",
                    "AvrTimeOffset(s)", "SyncTime(s)", "RoundTrip(ms)");
             header = true;
         }
-        printf("%2d %06u %18.6f %18.6f %13.3f\n",
+        printf("%2d %05u %18.6f %18.6f %13.3f\n",
                clients[i].fd, clients[i].count, clients[i].offset,
                clients[i].results[(clients[i].count - 1) % 3].sync,
                clients[i].rtript * TIMESTAMP_MS);
         LOOPND(j, MIN(clients[i].count, 3)) {
-            uint32_t cnt = clients[i].count - j - 1;
+            uint16_t cnt = clients[i].count - j - 1;
             timesync_result_t *rst = &clients[i].results[cnt % 3];
-            printf(" > %06u %18.6f %18.6f\n", cnt + 1, rst->offset, rst->sync);
+            printf(" > %05u %18.6f %18.6f\n", cnt + 1, rst->offset, rst->sync);
         }
     }
 }
@@ -435,7 +435,7 @@ int timesync_client_init(const char *host, uint16_t port) {
         log_error(TSC, client.fd, "inet_pton");
         return -1;
     }
-    if (!inet_ntop(AF_INET, &(raddr.sin_addr), address, sizeof(address))) {
+    if (!inet_ntop(AF_INET, &raddr.sin_addr, address, sizeof(address))) {
         log_error(TSC, client.fd, "inet_ntop");
         return -1;
     }

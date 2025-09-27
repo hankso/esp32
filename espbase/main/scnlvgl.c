@@ -5,7 +5,7 @@
  * Desc: We are using https://docs.lvgl.io/9.2/
  */
 
-/******************************************************************************
+/*
  * Compatibility
  */
 
@@ -52,7 +52,7 @@
 #ifdef WITH_LVGL
 #include "lvgl.h"
 
-/******************************************************************************
+/*
  * Context and utilities
  */
 
@@ -120,8 +120,10 @@ struct screen {
 static UNUSED int screen_menu_init(screen_t *);
 static UNUSED int screen_label_init(screen_t *);
 static UNUSED int screen_anim_init(screen_t *);
+#ifdef CONFIG_BASE_BOARD_S3NL191
 static UNUSED int screen_tscn_init(screen_t *);
 static UNUSED int screen_tscn_exit(screen_t *);
+#endif
 
 static const screen_cb_t inits[] = {
 #ifdef CONFIG_BASE_BOARD_S3NL191
@@ -344,7 +346,7 @@ static void cb_indev_read(lv_indev_drv_t *indev_drv, lv_indev_data_t *data) {
     RELEASE(ctx.mutex);
 }
 
-/******************************************************************************
+/*
  * Screen Menu
  */
 
@@ -370,7 +372,7 @@ static int screen_menu_init(screen_t *scr) {
     return (lbl && btn && txt) ? ERR_NO_ERR : ERR_NO_MEM;
 }
 
-/******************************************************************************
+/*
  * Screen Test Label
  */
 
@@ -452,12 +454,12 @@ static int screen_label_init(screen_t *scr) {
     return bar ? ERR_NO_ERR : ERR_NO_MEM;
 }
 
-/******************************************************************************
+/*
  * Screen Test Anim
  */
 
 static void screen_anim_exec(void * var, int32_t val) {
-    lv_label_set_text_fmt(lv_obj_get_child(var, -1), "%4d", val);
+    lv_label_set_text_fmt(lv_obj_get_child(var, -1), "%4" PRId32, val);
     lv_coord_t arc_start = val > 0 ? (1 - cosf(RAD(val))) * 270 : 0;
     lv_coord_t arc_len = (sinf(RAD(val)) + 1) * 135;
     LOOPN(i, lv_obj_get_child_cnt(var) - 2) {
@@ -521,7 +523,7 @@ static int screen_anim_init(screen_t *scr) {
     return (sw && lbl) ? ERR_NO_ERR : ERR_NO_MEM;
 }
 
-/******************************************************************************
+/*
  * Screen Touchscreen
  */
 
@@ -571,7 +573,7 @@ void cb_tscn_update(lv_timer_t *timer) {
 static int screen_tscn_init(screen_t *scr) {
     if (!( scr->root = screen_active(ctx.disp) )) return ERR_NO_MEM;
     scr->name = "Viz Tscn";
-    probed = tscn_command(NULL) != ERR_NOT_SUPPORTED;
+    probed = tscn_command(NULL) == ERR_NO_ERR;
     int lht = 8;
     for (const lv_font_t *font = ctx.font; font; font = font->fallback) {
         lht = MAX(lht, font->line_height + 6);
@@ -598,7 +600,7 @@ static int screen_tscn_exit(screen_t *scr) {
 }
 #endif
 
-/******************************************************************************
+/*
  * UI Entry point and event handler
  */
 
@@ -734,9 +736,9 @@ static void cb_screen_event(lv_event_t *e) {
             config_set("app.tscn.mode", modes[MOD(mode, LEN(modes))]);
         } else if (evt == BUTTON_LONG_PRESS_START) {
             snprintf(last, sizeof(last), Config.app.TSCN_MODE);
-            if (!config_set("app.tscn.mode", "REC")) last[0] = '\0';
+            if (config_set("app.tscn.mode", "REC")) last[0] = '\0';
         } else if (evt == BUTTON_LONG_PRESS_UP) {
-            if (config_set("app.tscn.mode", last)) last[0] = '\0';
+            if (!config_set("app.tscn.mode", last)) last[0] = '\0';
         }
     } else if (0 <= btn && btn < LEN(ctx.scr)) {
         if (btn != idx) {
@@ -845,8 +847,8 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
     case SCN_INP: return lvgl_ui_input((hid_report_t *)data);
     case SCN_STAT: {
         uint32_t period = lv_timer_get_period(lv_anim_get_timer());
-        uint32_t fps = period ? 1000 / period : 0;
-        printf("LVGL: %ux%u %d anim @ %d FPS\n",
+        uint16_t fps = period ? 1000 / period : 0;
+        printf("LVGL: %ux%u %d anim @ %u FPS\n",
                ctx.hres, ctx.vres, lv_anim_count_running(), fps);
         dump_font(ctx.font);
         ITERP(scr, ctx.scr) {
@@ -879,16 +881,16 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
     }   break;
     case SCN_FPS: {
         static uint32_t backup[3];
-        int fps = CONS(*(int *)data, 0, 100);
+        uint16_t fps = CONS(*(int *)data, 0, 1000);
         lv_timer_t *timer[2] = { lv_anim_get_timer(), refresh_timer(ctx.disp) };
         LOOPN(i, LEN(timer)) {
             if (!timer[i]) continue;
             if (fps) {
                 if (!backup[2]) backup[i] = lv_timer_get_period(timer[i]);
                 lv_timer_set_period(timer[i], 1000 / fps);
-                LOGI("set timer#%d period to %d", i, 1000 / fps);
+                LOGI("set timer#%d period to %u", i, 1000 / fps);
             } else if (backup[2]) {
-                LOGI("set timer#%d period to %d", i, backup[i]);
+                LOGI("set timer#%d period to %" PRIu32, i, backup[i]);
                 lv_timer_set_period(timer[i], backup[i]);
             }
         }

@@ -1,4 +1,4 @@
-menu "ESP Base Configuration"
+menu "Project Config"
 
     choice
         prompt "Select Target ESP32 Board"
@@ -20,6 +20,8 @@ menu "ESP Base Configuration"
             bool "ESP32 CAM WROVER by Freenove" if IDF_TARGET_ESP32
         config BASE_BOARD_USBOTG
             bool "ESP32S3 USB OTG by Espressif" if IDF_TARGET_ESP32S3
+        config BASE_BOARD_S3ECAM
+            bool "ESP32S3 CAM ETH by Waveshare" if IDF_TARGET_ESP32S3
         config BASE_BOARD_S3WRCAM
             bool "ESP32S3 CAM WROOM by Freenove" if IDF_TARGET_ESP32S3
         config BASE_BOARD_S3LUAT
@@ -39,7 +41,7 @@ menu "ESP Base Configuration"
         select FREERTOS_PLACE_FUNCTIONS_INTO_FLASH
         default y
         help
-            Minimize IRAM usage when WiFi & BT are both enabled
+            Minimize IRAM usage when WiFi and BT are both enabled
 
     config BASE_PSRAM
         bool "Enable PSRAM support"
@@ -48,6 +50,7 @@ menu "ESP Base Configuration"
         select BT_ALLOCATION_FROM_SPIRAM_FIRST if BASE_USE_BT
         select SPIRAM_TRY_ALLOCATE_WIFI_LWIP if BASE_USE_WIFI
         select SPIRAM_IGNORE_NOTFOUND
+        select SPIRAM # for ESP-IDF v5.0+
         default n
 
     config BASE_DEBUG
@@ -89,10 +92,6 @@ menu "ESP Base Configuration"
             config BASE_LED_MODE_RMT
                 bool "RMT addressable LED (e.g. ws2812)"
         endchoice
-
-        config BASE_LED_INDICATOR
-            bool "Enable IOT component led indicator"
-            default y
     endif
 
     menuconfig BASE_USE_ADC
@@ -157,6 +156,7 @@ menu "ESP Base Configuration"
             default 18 if BASE_BOARD_ESPEYE
             default 22 if BASE_BOARD_M5WIDE
             default 25 if BASE_BOARD_M5PSRAM
+            default 48 if BASE_BOARD_S3ECAM
             default 4  if BASE_BOARD_S3WRCAM
             default 18 if BASE_BOARD_S3NL191
             help
@@ -169,6 +169,7 @@ menu "ESP Base Configuration"
             default 23 if BASE_BOARD_ESPEYE
             default 23 if BASE_BOARD_M5WIDE
             default 23 if BASE_BOARD_M5PSRAM
+            default 47 if BASE_BOARD_S3ECAM
             default 5  if BASE_BOARD_S3WRCAM
             default 17 if BASE_BOARD_S3NL191
             help
@@ -201,7 +202,7 @@ menu "ESP Base Configuration"
     if BASE_USE_SPI
         config BASE_SPI_NUM
             int "SPI Host number"
-            range 1 3
+            range 2 3
             default 2
     endif
 
@@ -245,10 +246,11 @@ menu "ESP Base Configuration"
             default 44100
     endif
 
-    menuconfig BASE_USE_CAM
+    config BASE_USE_CAM
         bool "Enable Camera"
         select BASE_USE_I2C
         imply BASE_SCN_I2C_ALT
+        imply BASE_PSRAM
         default n
         help
             Enable avc_command -> video_xxx functions (~40KB)
@@ -364,7 +366,7 @@ menu "ESP Base Configuration"
         default n
 
     menuconfig BASE_USE_BT
-        bool "Enable BT, BLE & Bluedroid host"
+        bool "Enable BT, BLE and Bluedroid host"
         depends on !BASE_BOARD_ATCAM
         select BT_ENABLED
         select BT_BLE_DYNAMIC_ENV_MEMORY
@@ -394,7 +396,7 @@ menu "ESP Base Configuration"
     endif
 
     menuconfig BASE_USE_WIFI
-        bool "Enable WiFi STA & AP"
+        bool "Enable WiFi STA and AP"
         select ESP_WIFI_FTM_ENABLE if IDF_TARGET_ESP32S3
         default y
         help
@@ -420,9 +422,28 @@ menu "ESP Base Configuration"
                 Enable ota_updation_url function (~110KB)
     endif
 
+    menuconfig BASE_USE_ETH
+        bool "Enable Ethernet"
+        default y if BASE_BOARD_S3ECAM
+        help
+            Enable network_eth_xxx functions (~27KB)
+    if BASE_USE_ETH
+        choice
+            prompt "Select Ethernet interface"
+            config BASE_ETH_SPI
+                bool "External (SPI)"
+                select ETH_USE_SPI_ETHERNET
+                select ETH_SPI_ETHERNET_W5500
+            config BASE_ETH_EMAC
+                bool "Internal"
+                depends on SOC_EMAC_SUPPORTED
+                select ETH_USE_ESP32_EMAC if IDF_TARGET_ESP32
+        endchoice
+    endif
+
     menuconfig BASE_USE_USB
-        bool "Enable USB"
-        depends on IDF_TARGET_ESP32S3
+        bool "Enable USB host and device"
+        depends on IDF_TARGET_ESP32S3 && !ESP_CONSOLE_USB_CDC
         default y
         select TINYUSB
         help
@@ -635,25 +656,25 @@ menu "ESP Base Configuration"
             default 12 if IDF_TARGET_ESP32S3
             default 14
 
-        config BASE_GPIO_SPI_CS0
-            int "SPI CS0 (for SDCard)"
+        config BASE_GPIO_SPI_SDFS
+            int "SPI CS for SDCard"
             depends on BASE_SDFS_SPI
             range 0 48
-            default 8 if IDF_TARGET_ESP32S3
+            default 10 if IDF_TARGET_ESP32S3
             default 15
 
-        config BASE_GPIO_SPI_CS1
-            int "SPI CS1 (for Screen)"
+        config BASE_GPIO_SPI_SCN
+            int "SPI CS for Screen"
             depends on BASE_SCN_SPI
             range 0 48
-            default 9 if IDF_TARGET_ESP32S3
+            default 8 if IDF_TARGET_ESP32S3
             default 18
 
-        config BASE_GPIO_SPI_CS2
-            int "SPI CS2 (for GPIOExp)"
+        config BASE_GPIO_SPI_GEXP
+            int "SPI CS for GPIOExp"
             depends on BASE_GEXP_SPI
             range 0 48
-            default 10 if IDF_TARGET_ESP32S3
+            default 9 if IDF_TARGET_ESP32S3
             default 19
     endif
 
@@ -680,7 +701,7 @@ menu "ESP Base Configuration"
             int "MMC D0"
             default 37
 
-        if BASE_SDFS_MMC_4LINE
+        if BASE_SDFS_MMC > 1
             config BASE_GPIO_MMC_D1
                 int "MMC D1"
                 default 38
@@ -714,7 +735,7 @@ menu "ESP Base Configuration"
         int "INT pin"
         depends on BASE_GEXP_INT || BASE_USE_TSCN
         range 0 48
-        default 14 if IDF_TARGET_ESP32S3
+        default 21 if IDF_TARGET_ESP32S3
         default 34
 
     config BASE_GPIO_TPAD
@@ -774,19 +795,20 @@ menu "ESP Base Configuration"
 
     config BASE_CAM_PINS
         string
-        default "32,-1,0,25,23,22,35,34,39,36,21,19,18,5" if BASE_BOARD_ATCAM
-        default "-1,-1,21,25,23,22,35,34,39,36,19,18,5,4" if BASE_BOARD_WRCAM
-        default "-1,-1,4,5,27,25,36,37,38,39,35,14,13,34" if BASE_BOARD_ESPEYE
-        default "-1,15,27,25,26,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5WIDE
-        default "-1,25,27,22,26,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5PSRAM
-        default "38,-1,15,6,7,13,16,17,18,12,10,8,9,11" if BASE_BOARD_S3WRCAM
+        default "32,-1,25,23,0,22,35,34,39,36,21,19,18,5" if BASE_BOARD_ATCAM
+        default "-1,-1,25,23,21,22,35,34,39,36,19,18,5,4" if BASE_BOARD_WRCAM
+        default "-1,-1,5,27,4,25,36,37,38,39,35,14,13,34" if BASE_BOARD_ESPEYE
+        default "-1,15,25,26,27,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5WIDE
+        default "-1,25,22,26,27,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5PSRAM
+        default "-1,-1,1,2,3,39,18,15,38,40,42,46,45,41" if BASE_BOARD_S3ECAM
+        default "38,-1,6,7,15,13,16,17,18,12,10,8,9,11" if BASE_BOARD_S3WRCAM
         help
-            Camera PINs in order PWDN,RST,XCLK,VSYNC,HREF,PCLK,D7...D0
+            Camera PINs in order PWDN,RST,VSYNC,HREF,XCLK,PCLK,D7...D0
 
     config BASE_CAM_CUSTOM_PINS
         string "Camera pins" if BASE_USE_CAM && BASE_CAM_PINS=""
         help
-            Camera PINs in order PWDN,RST,XCLK,VSYNC,HREF,PCLK,D7...D0
+            Camera PINs in order PWDN,RST,VSYNC,HREF,XCLK,PCLK,D7...D0
 
     config BASE_SCN_PINS
         string
@@ -798,5 +820,16 @@ menu "ESP Base Configuration"
         string "Screen pins" if BASE_SCN_I80 && BASE_SCN_PINS=""
         help
             Screen PINs in order BL,RST,CS,DC,WR,RD,D0...SOC_LCD_I80_BUS_WIDTH
+
+    config BASE_ETH_PINS
+        string
+        default "9,10,11,12,13,14" if BASE_BOARD_S3ECAM
+        help
+            Ethernet PINs in order RST,INT,MOSI,MISO,SCLK/MDC,CS/MDIO
+
+    config BASE_ETH_CUSTOM_PINS
+        string "Ethernet pins" if BASE_USE_ETH && BASE_ETH_PINS=""
+        help
+            Ethernet PINs in order RST,INT,MOSI,MISO,SCLK/MDC,CS/MDIO
 
 endmenu

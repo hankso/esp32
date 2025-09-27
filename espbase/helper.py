@@ -176,7 +176,7 @@ def process_nvs(args):
         except ImportError:
             from nvs_partition_gen import main as gen
         from esptool import _main as flash
-        if op.isdir(op.dirname(args.pack)):
+        if op.isdir(op.dirname(op.abspath(args.pack))):
             dist = args.pack
         else:
             dist = tempfile.mktemp() + '.bin'
@@ -195,20 +195,26 @@ def process_nvs(args):
 
 
 def gencfg(args):
-    if not op.isfile(args.tpl):
-        return
     name = project_name()
     addr = (socket.gethostbyname(socket.gethostname()), PORT)
-    with open(args.tpl, encoding='utf8') as f:
-        data = f.read().format(**{
-            'NAME': name,
-            'UID': uuid.uuid4().hex[:args.len].upper(),
-            'URL': urljoin('https://%s:%d' % addr, name + '.bin'),
-        }).replace('\n\n', '\n').replace(' ', '')
+    data = ''
+    env = {
+        'NAME': name,
+        'UID': uuid.uuid4().hex[:args.len].upper(),
+        'URL': 'http://%s:%d' % addr,
+        'OTA': name + '.bin',
+        'HBT': 'board',
+    }
+    for path in filter(op.isfile, [args.tpl, fromroot('nvs_flash.local')]):
+        with open(path, encoding='utf8') as f:
+            data += f.read().format(**env)
+    data = data.replace('\n\n', '\n').replace(' ', '')
+    if not data:
+        return print('Empty content for NVS flash')
     if args.output is sys.stdout and IDF_PATH:
         args.output = tempfile.mktemp()
-    filename = getattr(args.output, 'name', str(args.output))
     if not args.quiet:
+        filename = getattr(args.output, 'name', str(args.output))
         print('Writing NVS information to `%s`' % filename)
     if hasattr(args.output, 'write'):
         args.output.write(data)
@@ -338,10 +344,10 @@ def genfont(args):
 # see ESP-IDF docs -> API Guides -> Build system -> common requirements
 ESP_IDF_COMMON = '''
     app_trace bootloader bt cxx driver esp_app_format esp_bootloader_format
-    esp_common esp_eth esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif
-    esp_phy esp_pm esp_ringbuf esp_rom esp_system esp_timer esp_wifi
-    espcoredump esptool_py freertos hal heap log lwip main mbedtls newlib
-    partition_table soc efuse tcpip_adapter vfs wpa_supplicant xtensa
+    esp_common esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif esp_pm
+    esp_ringbuf esp_rom esp_system esp_timer esp_wifi espcoredump esptool_py
+    freertos hal heap log lwip main mbedtls newlib partition_table soc efuse
+    tcpip_adapter vfs wpa_supplicant xtensa
 '''.split()
 
 ESP_IDF_SKIP = 'arduino linux'.split()
@@ -536,7 +542,7 @@ def sdkconfig(args):
     }
     mapping.setdefault('local', fromroot('sdkconfig.local'))
     try:
-        with open(mapping['local'], 'a', encoding='utf8') as f:
+        with open(mapping['local'], 'a+', encoding='utf8') as f:
             f.seek(0)
             local = f.read()
     except Exception:
@@ -702,32 +708,15 @@ def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
 
 
 def search(args):
-    if zeroconf:
-        chunks = re.findall(
-            r'_?([a-zA-Z0-9\-]+)', args.service.replace('local', '')
-        ) + ['tcp']
-        services = {'.'.join(['_' + i for i in chunks][:2]) + '.local.'}
-        if args.all:
-            services.update(zeroconf.ZeroconfServiceTypes.find(timeout=1))
-        return bonjour_browser(services, project_name(), **vars(args))
-    return print('TODO: send mDNS query packet and parse response')
-    addr = ('224.0.0.251', 5353)
-    opt = socket.inet_aton(addr[0]) + struct.pack('l', socket.INADDR_ANY)
-    udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    udp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    udp.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_LOOP, 0)
-    udp.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, opt)
-    udp.bind(('0.0.0.0', addr[1]))
-    udp.settimeout(1)
-    timeout = time.time() + args.timeout
-    while time.time() < timeout:
-        try:
-            msg, addr = udp.recvfrom(1024)
-            print('Received from %s:%d' % addr, msg)
-        except socket.timeout:
-            pass
-        except KeyboardInterrupt:
-            break
+    if not zeroconf:
+        return
+    chunks = re.findall(
+        r'_?([a-zA-Z0-9\-]+)', args.service.replace('local', '')
+    ) + ['tcp']
+    services = {'.'.join(['_' + i for i in chunks][:2]) + '.local.'}
+    if args.all:
+        services.update(zeroconf.ZeroconfServiceTypes.find(timeout=1))
+    return bonjour_browser(services, project_name(), **vars(args))
 
 
 def relpath(p, maxlen=True, ref='.'):
@@ -756,9 +745,9 @@ def print_method(prefix=''):
 
 
 def print_request(prefix='Request', attr='headers', environ=False):
-    dct = getattr(bottle.request, attr)
-    klen = max(map(len, dct.keys())) if dct else 0
+    dct = getattr(bottle.request, attr) or {}
     prefix += (' ' if prefix else '') + attr
+    klen = max(len(prefix), max(map(len, dct.keys())) if dct else 0)
     print_method('\n' + prefix.ljust(klen))
     for k, v in dct.items():
         print('%-*s: %s' % (klen, k, v))
@@ -808,7 +797,7 @@ def on_edit_extra():
 
 
 def load_config():
-    configs = [('app.ota.auto', '1'), ('sys.int.edge', 'NEG')]
+    configs = []
     try:
         args = make_parser().parse_args(['--quiet', 'gencfg'])
         args.output = StringIO()
@@ -906,7 +895,7 @@ def video_stream(bdary='FRAME', **kwargs):
     kwargs.setdefault('height', 720)
     bottle.response.set_header('Cache-Control', 'no-store')
     bottle.response.set_header(
-        'Content-Type', 'multipart/x-mixed-replace; boundary=--' + bdary
+        'Content-Type', 'multipart/x-mixed-replace; boundary=' + bdary
     )
     remote = bottle.request.environ.get('REMOTE_HOST')
     print('video streaming to %s started' % remote)
@@ -1001,6 +990,22 @@ def on_websocket():
         pass
     except Exception as e:
         print('WebSocket recv error:', e)
+
+
+def on_board():
+    if 'data' not in bottle.request.query:
+        print_request(attr='json')
+        return {
+            'hbtime': 10, 'intval': 10,
+            'iurl': urljoin(bottle.request.url, 'board?data')
+        }
+    print_request(attr='forms')
+    for name, fobj in bottle.request.files.items():
+        if name != 'image':
+            print(name + ':', fobj.file.read())
+            continue
+        with suppress(Exception):
+            fobj.save(fromroot('build', 'snapshot.jpg'), overwrite=True)
 
 
 def static_factory(_root):
@@ -1385,6 +1390,7 @@ def webserver(args):
         app.mount('/api/', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
     app.route('/auth', ['GET', 'POST'], bottle.auth_basic(check)(lambda: ''))
+    app.route('/board', 'POST', on_board)
     app.route('/<filename:path>', 'ANY', static_factory(args.root))
     app.error(404)(error_factory(args.root))
     app.add_hook('before_request', lambda: bottle.response.set_header(
@@ -1411,7 +1417,7 @@ def make_parser():
         ] if op.isdir(p) and os.listdir(p)
     ][0]
     sparser = subparsers.add_parser(
-        'serve', help='Python implemented WebServer to debug (see server.h)')
+        'serve', help='Python implemented fake server for HTML debugging')
     sparser.add_argument(
         '-H', '--host', default='0.0.0.0',
         help='host to listen on [default 0.0.0.0]')
@@ -1457,10 +1463,10 @@ def make_parser():
     nvsfile = fromroot('nvs_flash.csv')
     nvsdist = fromroot('build', 'nvs.bin')
     sparser = subparsers.add_parser(
-        'gencfg', help='Generate unique ID with NVS flash template')
+        'gencfg', help='Generate configuration from NVS partition template')
     sparser.add_argument(
-        '-l', '--len', type=int, default=6,
-        help='length of generated UID [default 6]')
+        '-l', '--len', type=int, default=8,
+        help='length of generated UID [default 8]')
     sparser.add_argument(
         '--tpl', default=nvsfile,
         help='render nvs text from template [default %s]' % relpath(nvsfile))
@@ -1479,7 +1485,7 @@ def make_parser():
     sparser.set_defaults(func=gencfg)
 
     sparser = subparsers.add_parser(
-        'genfont', help='Scan .c files and tree-shake fonts for LVGL')
+        'genfont', help='Scan source files and tree-shake chinese LVGL font')
     sparser.add_argument('font', help='input font file (TTF/WOFF)')
     sparser.add_argument('--bin', action='store_true', help='output as binary')
     sparser.add_argument(
@@ -1492,15 +1498,15 @@ def make_parser():
     sparser.set_defaults(func=genfont)
 
     sparser = subparsers.add_parser(
-        'gendeps', help='Scan source files to resolve dependencies')
+        'gendeps', help='Scan source files to resolve components dependency')
     sparser.set_defaults(func=gendeps)
 
     sparser = subparsers.add_parser(
-        'prebuild', help='Automatically called by CMakeLists.txt')
+        'prebuild', help='Generate GBK and deps and build HTML pages')
     sparser.set_defaults(func=prebuild)
 
     sparser = subparsers.add_parser(
-        'sdkconfig', help='Fix sdkconfig related files')
+        'sdkconfig', help='Generate or modify sdkconfig related files')
     sparser.add_argument(
         'targets', nargs='*', metavar='[+|-]TARGET',
         help='append/delete/toggle config to sdkconfig.local')

@@ -10,46 +10,6 @@
 
 #define ESP_ERR_CONSOLE_ARGPARSE 0xABCD
 
-#define CONSOLE_SYS_RESTART         //  102 Bytes
-#define CONSOLE_SYS_UPDATE          // 3196 Bytes
-#define CONSOLE_SYS_SLEEP           //12292 Bytes
-#define CONSOLE_SYS_EXEC            // 7684 Bytes
-
-#define CONSOLE_UTIL_DATETIME       //  176 Bytes
-#define CONSOLE_UTIL_VERSION        //  272 Bytes
-#define CONSOLE_UTIL_LSHW           // 1988 Bytes
-#define CONSOLE_UTIL_LSPART         //  808 Bytes
-#define CONSOLE_UTIL_LSTASK         //  300 Bytes
-#define CONSOLE_UTIL_LSMEM          // 1308 Bytes
-#define CONSOLE_UTIL_LSFS           //  512 Bytes
-#define CONSOLE_UTIL_CONFIG         // 2852 Bytes
-#define CONSOLE_UTIL_LOGGING        //  596 Bytes
-#define CONSOLE_UTIL_HISTORY        //  806 Bytes
-
-#define CONSOLE_DRV_GPIO            //  700 Bytes
-#define CONSOLE_DRV_USB             //  430 Bytes
-#define CONSOLE_DRV_LED             //  700 Bytes
-#define CONSOLE_DRV_I2C             // 1436 Bytes
-#define CONSOLE_DRV_ADC             // 1424 Bytes
-#define CONSOLE_DRV_DAC             // 1244 Bytes
-#define CONSOLE_DRV_PWM             // 1668 Bytes
-
-#define CONSOLE_NET_BT              //  368 Bytes
-#define CONSOLE_NET_STA             //  428 Bytes
-#define CONSOLE_NET_AP              // 3884 Bytes
-#define CONSOLE_NET_FTM             // 1860 Bytes
-#define CONSOLE_NET_MDNS            //  520 Bytes
-#define CONSOLE_NET_SNTP            //  482 Bytes
-#define CONSOLE_NET_PING            // 5132 Bytes
-#define CONSOLE_NET_IPERF           // 7432 Bytes
-#define CONSOLE_NET_TSYNC           // 7888 Bytes
-
-#define CONSOLE_APP_HID             // 1584 Bytes
-#define CONSOLE_APP_SCN             //  200 Bytes
-#define CONSOLE_APP_ALS             // 1408 Bytes
-#define CONSOLE_APP_AVC             //  800 Bytes
-#define CONSOLE_APP_SEN             // 1872 Bytes
-
 #ifdef __cplusplus
 extern "C" {
 #endif

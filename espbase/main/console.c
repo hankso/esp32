@@ -14,19 +14,28 @@
 #include <sys/fcntl.h>
 #include "cJSON.h"
 #include "esp_console.h"
-#include "esp_vfs_dev.h"
 #include "esp_task_wdt.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "linenoise/linenoise.h"
 
+#ifdef IDF_TARGET_V4
+#   include "esp_vfs_dev.h"
+#else
+#   include "driver/uart_vfs.h"
+#endif
+
 #ifdef CONFIG_ESP_CONSOLE_USB_CDC
 #   include "esp_vfs_cdcacm.h"
 #endif
 #ifdef CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG
-#   include "esp_vfs_usb_serial_jtag.h"
 #   include "driver/usb_serial_jtag.h"
+#   ifdef IDF_TARGET_V4
+#       include "esp_vfs_usb_serial_jtag.h"
+#   else
+#       include "driver/usb_serial_jtag_vfs.h"
+#   endif
 #endif
 
 static const char *TAG = "Console";
@@ -66,24 +75,35 @@ void console_initialize() {
      *  - /dev/usbserjtag
      *  - /dev/cdcacm
      *  - /dev/secondary
+     * and then point /dev/console to the device configured by CONFIG_ESP_CONSOLE_XXX
      */
+#ifdef IDF_TARGET_V4
+#   define uart_vfs_dev_port_set_rx_line_endings esp_vfs_dev_uart_port_set_rx_line_endings
+#   define uart_vfs_dev_port_set_tx_line_endings esp_vfs_dev_uart_port_set_tx_line_endings
+#   define uart_vfs_dev_use_driver               esp_vfs_dev_uart_use_driver
+#   define usb_serial_jtag_vfs_set_rx_line_endings esp_vfs_dev_usb_serial_jtag_set_rx_line_endings
+#   define usb_serial_jtag_vfs_set_tx_line_endings esp_vfs_dev_usb_serial_jtag_set_tx_line_endings
+#   define usb_serial_jtag_vfs_use_driver          esp_vfs_usb_serial_jtag_use_driver
+#endif
 #if defined(CONFIG_ESP_CONSOLE_UART_DEFAULT)
-    esp_vfs_dev_uart_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
-    esp_vfs_dev_uart_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
-    esp_vfs_dev_uart_use_driver(UART_NUM_0);
+    uart_vfs_dev_port_set_rx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CR);
+    uart_vfs_dev_port_set_tx_line_endings(UART_NUM_0, ESP_LINE_ENDINGS_CRLF);
+    uart_vfs_dev_use_driver(UART_NUM_0);
 #elif defined(CONFIG_ESP_CONSOLE_UART_CUSTOM) && defined(CONFIG_BASE_USE_UART)
-    esp_vfs_dev_uart_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
-    esp_vfs_dev_uart_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
-    esp_vfs_dev_uart_use_driver(NUM_UART);
+    uart_vfs_dev_port_set_rx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CR);
+    uart_vfs_dev_port_set_tx_line_endings(NUM_UART, ESP_LINE_ENDINGS_CRLF);
+    uart_vfs_dev_use_driver(NUM_UART);
 #elif defined(CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG)
-    esp_vfs_dev_usb_serial_jtag_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
-    esp_vfs_dev_usb_serial_jtag_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
+    usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
     fcntl(fileno(stdout), F_SETFL, 0);              // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
-    usb_serial_jtag_driver_config_t conf = \
-        USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    usb_serial_jtag_driver_install(&conf);
-    esp_vfs_usb_serial_jtag_use_driver();
+    usb_serial_jtag_driver_config_t conf = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+#   ifndef IDF_TARGET_V4
+    if (!usb_serial_jtag_is_driver_installed())
+#   endif
+        usb_serial_jtag_driver_install(&conf);
+    usb_serial_jtag_vfs_use_driver();
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
     esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
     esp_vfs_dev_cdcacm_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
@@ -103,7 +123,7 @@ void console_initialize() {
         linenoiseSetDumbMode(1);
         ESP_LOGW(TAG, "Your terminal does not support escape sequences.");
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
-        ESP_LOGW(TAG, "Try using Miniterm.py / PuTTY / SecureCRT.");
+        ESP_LOGW(TAG, "Try using IDF-Monitor / PuTTY / SecureCRT.");
     }
     esp_console_config_t console_config = {
         .max_cmdline_length = 256,
@@ -114,7 +134,7 @@ void console_initialize() {
 #endif
     };
     ESP_ERROR_CHECK( esp_console_init(&console_config) );
-    console_register_prompt(Config.app.PROMPT, "");
+    console_register_prompt(Config.sys.PROMPT, "");
     console_register_commands();
 
     if (( mutex = MUTEX() )) {
@@ -135,8 +155,8 @@ void console_initialize() {
  *      char *buf = (char *)calloc(1024, sizeof(char));
  *      setvbuf(stdout, buf, _IOFBF, 1024);
  *      printf("test string\n");
- *      setvbuf(stdout, NULL, _IONBF, 1024);
- *      printf("Get string from STDOUT %lu: `%s`", strlen(buf), buf);
+ *      setvbuf(stdout, NULL, _IONBF, 0);
+ *      printf("Got string from STDOUT %lu: `%s`", strlen(buf), buf);
  *      free(buf);
  *
  * Method 2. <stdio.h> memstream - open memory as stream
@@ -153,7 +173,7 @@ void console_initialize() {
  *      stdout = open_memstream(&buf, &size);
  *      printf("hello\n");
  *      fclose(stdout); stdout = stdout_bak;
- *      printf("Get string from STDOUT %lu: `%s`", size, buf);
+ *      printf("Got string from STDOUT %lu: `%s`", size, buf);
  *      free(buf);
  *
  * Method 3. <unistd.h> pipe & dup: this is not what we want
@@ -233,7 +253,7 @@ void console_handle_one() {
 void console_handle_loop(void *argv) {
     for (;;) {
         console_handle_one();
-#ifdef CONFIG_TASK_WDT
+#if defined(CONFIG_TASK_WDT) && defined(IDF_TARGET_V4)
         esp_task_wdt_reset();
 #endif
     }
@@ -246,7 +266,9 @@ void console_loop_begin(int xCoreID) {
             console_handle_loop, "console", 8192, NULL, 1, NULL, xCoreID);
     } else
 #endif
-    xTaskCreate(console_handle_loop, "console", 8192, NULL, 1, NULL);
+    {
+        xTaskCreate(console_handle_loop, "console", 8192, NULL, 1, NULL);
+    }
 }
 
 static char * rpc_error(double code, const char *errstr) {

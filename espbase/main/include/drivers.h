@@ -8,11 +8,16 @@
 
 #include "globals.h"
 
-#include "driver/i2c.h"         // for I2C_NUM_XXX
-#include "driver/i2s.h"         // for I2S_NUM_XXX
 #include "driver/uart.h"        // for UART_NUM_XXX
 #include "driver/gpio.h"        // for GPIO_NUM_XXX
 #include "driver/spi_master.h"  // for SPIXXX_HOST
+#ifdef IDF_TARGET_V4
+#   include "driver/i2c.h"      // for I2C_NUM_XXX
+#   include "driver/i2s.h"      // for I2S_NUM_XXX
+#else
+#   include "driver/i2c_master.h"
+#   include "driver/i2s_pdm.h"
+#endif
 
 #if defined(CONFIG_BASE_USE_BTN) && !__has_include("iot_button.h")
 #   warning "Run `idf.py add-dependency espressif/button`"
@@ -48,11 +53,10 @@
 #       define PIN_LED  GPIO_NUMBER(15)
 #   elif defined(CONFIG_BASE_BOARD_S3LUAT)
 #       define PIN_LED  GPIO_NUMBER(10)
+#   elif defined(CONFIG_BASE_BOARD_S3ECAM)
+#       define PIN_LED  GPIO_NUMBER(21)
 #   elif defined(CONFIG_BASE_BOARD_S3XMINI)
 #       define PIN_LED  GPIO_NUMBER(48)
-#       undef CONFIG_BASE_LED_MODE_GPIO
-#       undef CONFIG_BASE_LED_MODE_LEDC
-#       define CONFIG_BASE_LED_MODE_RMT
 #   else
 #       define PIN_LED  GPIO_NUMBER(CONFIG_BASE_GPIO_LED)
 #   endif
@@ -68,12 +72,16 @@
 
 #ifdef CONFIG_BASE_USE_I2S
 #   define NUM_I2S      I2S_NUMBER(CONFIG_BASE_I2S_NUM)
-#   define PIN_CLK      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_CLK)
-#   define PIN_DAT      GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_DAT)
+#   ifdef CONFIG_BASE_BOARD_S3ECAM
+#       define PIN_CLK  GPIO_NUMBER(16)
+#       define PIN_DAT  GPIO_NUMBER(17)
+#   else
+#       define PIN_CLK  GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_CLK)
+#       define PIN_DAT  GPIO_NUMBER(CONFIG_BASE_GPIO_I2S_DAT)
+#   endif
 #endif
 
 #ifdef CONFIG_BASE_USE_I2C
-#   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
 #   if defined(CONFIG_BASE_BOARD_SDA) && CONFIG_BASE_I2C_NUM == 0
 #       define PIN_SDA0 GPIO_NUMBER(CONFIG_BASE_BOARD_SDA)
 #       define PIN_SCL0 GPIO_NUMBER(CONFIG_BASE_BOARD_SCL)
@@ -88,6 +96,7 @@
 #       define PIN_SDA1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SDA1)
 #       define PIN_SCL1 GPIO_NUMBER(CONFIG_BASE_GPIO_I2C_SCL1)
 #   endif
+#   define NUM_I2C      I2C_NUMBER(CONFIG_BASE_I2C_NUM)
 #   if CONFIG_BASE_I2C_NUM == 0
 #       define PIN_SDA  PIN_SDA0
 #       define PIN_SCL  PIN_SCL0
@@ -99,25 +108,14 @@
 
 #ifdef CONFIG_BASE_USE_SPI
 #   define NUM_SPI      SPI_NUMBER(CONFIG_BASE_SPI_NUM)
-#   define PIN_MISO     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MISO)
-#   define PIN_MOSI     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MOSI)
-#   define PIN_SCLK     GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SCLK)
-#endif
-#ifdef CONFIG_BASE_SDFS_SPI
-#   define PIN_CS0      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS0)
-#endif
-#ifdef CONFIG_BASE_SCN_SPI
-#   define PIN_CS1      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS1)
-#endif
-#ifdef CONFIG_BASE_GEXP_SPI
-#   define PIN_CS2      GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_CS2)
-#endif
-
-#ifdef CONFIG_BASE_GPIO_INT
-#   ifdef CONFIG_BASE_BOARD_S3NL191
-#       define PIN_INT  GPIO_NUMBER(16)
+#   ifdef CONFIG_BASE_BOARD_S3ECAM
+#       define PIN_MISO GPIO_NUMBER(5)
+#       define PIN_MOSI GPIO_NUMBER(6)
+#       define PIN_SCLK GPIO_NUMBER(7)
 #   else
-#       define PIN_INT  GPIO_NUMBER(CONFIG_BASE_GPIO_INT)
+#       define PIN_MISO GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MISO)
+#       define PIN_MOSI GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_MOSI)
+#       define PIN_SCLK GPIO_NUMBER(CONFIG_BASE_GPIO_SPI_SCLK)
 #   endif
 #endif
 
@@ -131,18 +129,7 @@
 #   define PIN_ADC0     GPIO_NUMBER(CONFIG_BASE_GPIO_ADC0)
 #endif
 #if defined(CONFIG_BASE_BOARD_S3NL191)
-#   ifndef CONFIG_BASE_USE_ADC
-#       define CONFIG_BASE_USE_ADC
-#   endif
 #   define PIN_ADC2     GPIO_NUMBER(4)
-#endif
-
-#ifdef CONFIG_BASE_USE_DAC
-#   define PIN_DAC      GPIO_NUMBER(CONFIG_BASE_GPIO_DAC)
-#endif
-
-#ifdef CONFIG_BASE_USE_TPAD
-#   define PIN_TPAD     GPIO_NUMBER(CONFIG_BASE_GPIO_TPAD)
 #endif
 
 #ifdef CONFIG_BASE_BTN_INPUT
@@ -163,22 +150,29 @@
 #   define PIN_SVOV     GPIO_NUMBER(CONFIG_BASE_GPIO_SERVOV)
 #endif
 
-#ifdef CONFIG_BASE_USE_BUZZER
-#   define PIN_BUZZ     GPIO_NUMBER(CONFIG_BASE_GPIO_BUZZER)
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
 void driver_initialize();
 
-int adc_hall(); // return 0 if error
-int adc_read(uint8_t idx); // return -1 if error, else measured 0-3300 mV
+int adc_hall();             // return -1 if error, else positive number of a.u.
+int adc_read(uint8_t idx);  // return -1 if error, else measured 0-3300 mV
 int adc_joystick(int *dx, int *dy); // return -1 if error, else x << 16 | y
 
-esp_err_t dac_write(uint8_t val);
-esp_err_t dac_cwave(uint32_t freq_scale_offset);
+typedef union {
+    struct {
+        uint8_t offset;     // 0 ~ 255 => -128 ~ 127
+        uint8_t phase : 4;  // DAC_CW_PHASE_0 (0x02) or DAC_CW_PHASE_180 (0x03)
+        uint8_t scale : 4;  // 0 ~ 3: 1/1, 1/2, 1/4, 1/8 of VDD3P3_RTC
+        uint16_t freq;      // 130(130Hz) ~ 55000(100KHz)
+    } PACKED;
+    uint32_t fspo;          // little endian
+} dac_output_t;
+esp_err_t dac_write(uint8_t idx, uint8_t val);
+esp_err_t dac_cwave(uint8_t idx, uint32_t fspo);
+
+int tpad_read(uint8_t idx); // return -1 if error, else positive number of a.u.
 
 esp_err_t pwm_set_degree(int hdeg, int vdeg);
 esp_err_t pwm_get_degree(int *hdeg, int *vdeg);
@@ -189,18 +183,19 @@ esp_err_t pwm_get_tone(int *freq, int *pcent);
 #define SMBUS_IS_WORD(reg)  ( (reg) & 0x8000 || (reg) > 0xFF )
 #define SMBUS_HI_WORD(reg)  (( (reg) >> 8 ) & ~0x80 )
 #define SMBUS_LO_WORD(reg)  ( (reg) & 0xFF )
-void i2c_detect(int bus);
-esp_err_t smbus_probe(int bus, uint8_t addr);
-esp_err_t smbus_wregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
-esp_err_t smbus_rregs(int bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
-esp_err_t smbus_write_byte(int bus, uint8_t addr, uint16_t reg, uint8_t val);
-esp_err_t smbus_write_word(int bus, uint8_t addr, uint16_t reg, uint16_t val);
-esp_err_t smbus_read_byte(int bus, uint8_t addr, uint16_t reg, uint8_t *val);
-esp_err_t smbus_read_word(int bus, uint8_t addr, uint16_t reg, uint16_t *val);
-esp_err_t smbus_clearbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask);
-esp_err_t smbus_setbits(int bus, uint8_t addr, uint16_t reg, uint8_t mask);
-esp_err_t smbus_toggle(int bus, uint8_t addr, uint16_t reg, uint8_t bit);
-esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
+esp_err_t smbus_rregs(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
+esp_err_t smbus_wregs(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t *, size_t);
+esp_err_t smbus_write_byte(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t val);
+esp_err_t smbus_write_word(uint8_t bus, uint8_t addr, uint16_t reg, uint16_t val);
+esp_err_t smbus_read_byte(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t *val);
+esp_err_t smbus_read_word(uint8_t bus, uint8_t addr, uint16_t reg, uint16_t *val);
+esp_err_t smbus_clearbits(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t mask);
+esp_err_t smbus_setbits(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t mask);
+esp_err_t smbus_toggle(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t bit);
+esp_err_t smbus_dump(uint8_t bus, uint8_t addr, uint16_t reg, size_t num);
+esp_err_t i2c_wtrd(uint8_t bus, uint8_t addr, void *, size_t, void *, size_t);
+esp_err_t i2c_probe(uint8_t bus, uint8_t addr);
+uint8_t i2c_detect(uint8_t bus);
 
 #define RT_WBYTE(r, v)      { (0 << 16) | (r), (v) }
 #define RT_WWORD(r, v)      { (1 << 16) | (r), (v) }
@@ -209,16 +204,23 @@ esp_err_t smbus_dump(int bus, uint8_t addr, uint16_t reg, size_t num);
 #define RT_CBITS(r, m)      { (4 << 16) | (r), (m) }
 #define RT_SBITS(r, m)      { (5 << 16) | (r), (m) }
 #define RT_TOGGLE(r, b)     { (6 << 16) | (r), (b) }
-#define RT_WAIT0(r, m, ms)  { (7 << 16) | (r), (m) | ((ms) << 16) } // wait none
-#define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) } // wait any
-#define RT_WAIT2(r, m, ms)  { (9 << 16) | (r), (m) | ((ms) << 16) } // wait all
+#define RT_WAIT0(r, m, ms)  { (7 << 16) | (r), (m) | ((ms) << 16) } // none
+#define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) } // any
+#define RT_WAIT2(r, m, ms)  { (9 << 16) | (r), (m) | ((ms) << 16) } // all
 #define RT_SLEEP(ms)        { 0xFF << 16, (ms) }
 #define RT_FIND_OPT(arr, o) ({ smbus_regval_t *p = (arr);                     \
                                while (p && (p->reg >> 16) != (o)) p++; p; })
 #define RT_FIND_REG(arr, r) ({ smbus_regval_t *p = (arr);                     \
                                while (p && (p->reg & 0xFFFF) != (r)) p++; p; })
-typedef struct { uint32_t reg, val; } smbus_regval_t;
-esp_err_t smbus_regtable(int bus, uint8_t addr, smbus_regval_t *, size_t);
+typedef struct {
+    uint32_t reg, val;
+} smbus_regval_t;
+typedef struct {
+    uint8_t addr;
+    esp_err_t (*init)(uint8_t bus, uint8_t addr);
+} smbus_device_t;
+esp_err_t smbus_regtable(uint8_t bus, uint8_t addr, smbus_regval_t *, size_t);
+uint8_t smbus_detect(uint8_t bus, smbus_device_t *, size_t);
 
 typedef enum {
     // GPIO Expander by PCF8574: Endstops | Temprature | Valves
@@ -260,8 +262,14 @@ typedef enum {
 
 esp_err_t gexp_set_level(int pin, bool level);
 esp_err_t gexp_get_level(int pin, bool *level, bool sync);
-void gpio_table(bool i2c, bool spi);
+void gexp_table(bool i2c, bool spi);
+
+/* puts(gpio_usage(PIN, NULL) ?: "")    // get usage
+ * gpio_usage(PIN, "LED") == "LED"      // set usage
+ * gpio_usage(PIN, "LED") != "LED"      // already in use
+ */
 const char * gpio_usage(gpio_num_t pin, const char *usage);
+esp_err_t gpio_reconfig(gpio_num_t pin, const char *desc);
 
 #ifdef __cplusplus
 }

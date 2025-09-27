@@ -110,17 +110,12 @@ watchPostEffect(() => {
 </script>
 
 <template>
-    <div class="d-flex flex-lg-column ga-4">
-        <v-scale-transition>
-            <TabFileman
-                v-show="config.treeView"
-                :use-link="false"
-                min-width="30%"
-                height="40vh"
-            />
-        </v-scale-transition>
-
-        <v-sheet border rounded="lg" class="flex-grow-1 overflow-hidden">
+    <div class="d-flex ga-4 h-100">
+        <v-sheet
+            border
+            rounded="lg"
+            class="flex-grow-1 overflow-hidden d-flex flex-column"
+        >
             <v-toolbar height="36" class="border-b">
                 <v-breadcrumbs density="compact" :items="links"></v-breadcrumbs>
                 <v-spacer></v-spacer>
@@ -163,18 +158,30 @@ watchPostEffect(() => {
                 </v-btn>
             </v-toolbar>
 
-            <CodeJar v-model="code" v-bind="config" />
+            <CodeJar v-model="code" v-bind="config" class="flex-grow-1" />
         </v-sheet>
+        <v-scale-transition>
+            <TabFileman
+                v-show="config.treeView"
+                :use-link="false"
+                width="30%"
+            />
+        </v-scale-transition>
     </div>
 </template>
 
 <style scoped>
-.v-btn {
-    width: 36px;
+:deep(.v-btn) {
+    width: 38px;
     height: inherit;
     border-radius: 0;
     margin-inline-end: 0 !important;
     border-inline-start: thin solid
         rgba(var(--v-border-color), var(--v-border-opacity)) !important;
+}
+
+:deep(.tree-view) {
+    /* FIXME: Fileman height no larger than Editor */
+    max-height: calc(100vh - 126px);
 }
 </style>
