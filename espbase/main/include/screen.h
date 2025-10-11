@@ -29,17 +29,18 @@ typedef enum {  // Usage                    Argument
     SCN_EXIT,   // deinitialize             NULL
     SCN_STAT,   // print statistics         NULL
     SCN_INP,    // handle input             hid_report_t *
-    SCN_FONT,   // load font from disk      char *  (under DIR_DATA)
+    SCN_FONT,   // load font from disk      char *  (path under DIR_DATA)
     SCN_DPI,    // mouse sensitivity        float * (> 0)
     SCN_ROT,    // change screen rotation   int *   (LV_DISPLAY_ROTATION_XXX)
     SCN_GAP,    // change screen gap pixel  int *   (x = HIGH8, y = LOW8)
-    SCN_FPS,    // change refresh rate      int *   (0-100)
+    SCN_FPS,    // change refresh rate      int *   (0-1000)
     SCN_BTN,    // virtual button click     int *   (0-6)
-    SCN_PBAR,   // draw progress bar        int *   (0-100)
+    SCN_PBAR,   // draw progress bar pcent  int *   (0-100)
 } scn_cmd_t;
 
-void scn_initialize();
 esp_err_t scn_command(scn_cmd_t, const void *arg);
+
+void scn_initialize(); // called in drivers.c
 
 #ifdef __cplusplus
 }

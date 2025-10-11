@@ -19,6 +19,7 @@ import uuid
 import zlib
 import base64
 import select
+import shutil
 import socket
 import struct
 import fnmatch
@@ -27,7 +28,7 @@ import argparse
 import tempfile
 import threading
 import subprocess
-from io import StringIO
+from io import BytesIO, StringIO
 from os import path as op, environ as ENV
 from datetime import datetime
 from contextlib import suppress
@@ -35,12 +36,16 @@ from urllib.parse import urljoin
 from socketserver import ThreadingMixIn
 from wsgiref.simple_server import WSGIServer
 
-# requirements.txt: bottle, requests, zeroconf
+# requirements.txt: bottle, detools, requests, zeroconf
 # requirements.txt: numpy, pyturbojpeg, turbojpeg, opencv-python
 try:
     import bottle
 except Exception:
     bottle = None
+try:
+    import detools
+except Exception:
+    detools = None
 try:
     import requests
 except Exception:
@@ -80,7 +85,26 @@ def findone(tpl, string, default='', pos=0, endpos=sys.maxsize):
     return m.group() if not gs else (gs[0] if len(gs) == 1 else gs)
 
 
+def project():
+    cmake = fromroot('CMakeLists.txt')
+    if not op.isfile(cmake):
+        import warnings
+        warnings.warn('Project CMakeLists.txt not found!')
+        return 'unknown'
+    with open(cmake, encoding='utf8') as f:
+        return findone(r'project\((\w+)[ \)]', f.read(), 'unknown')
+
+
+def suffix(path, append, sext=None):
+    base, ext = op.splitext(path)
+    ext = (ext if sext is None else str(sext)).strip('.')
+    if ext:
+        ext = '.' + ext
+    return f'{base}-{append}{ext}'.replace('--', '-')
+
+
 def execute(cmd, **kwargs):
+    '''Run command with subprocess and get result'''
     kwargs.setdefault('bufsize', 1)
     kwargs.setdefault('encoding', 'utf8')
     kwargs.setdefault('stdout', subprocess.PIPE)
@@ -90,7 +114,7 @@ def execute(cmd, **kwargs):
     check = kwargs.pop('check', False)
     timeout = kwargs.pop('timeout', 10)
     if not kwargs.pop('quiet', False):
-        print('Executing command `%s`' % cmd)
+        print(f'Executing command `{cmd}`')
     with subprocess.Popen(cmd, **kwargs) as proc:
         try:
             output = proc.communicate(None, timeout)[0]
@@ -102,7 +126,26 @@ def execute(cmd, **kwargs):
         return output.strip()
 
 
+def load_csv(iterable):
+    '''Skip comments, empty lines and tabs/spaces'''
+    if isinstance(iterable, str):
+        with open(iterable, encoding='utf8') as f:
+            iterable = f.readlines()
+    yield from csv.reader(filter(
+        lambda r: not r.startswith('#') and r.strip(), iterable
+    ), skipinitialspace=True)
+
+
+def load_chip():
+    with open(fromroot('build/sdkconfig'), encoding='utf8') as f:
+        for line in f:
+            chip = findone(r'CONFIG_IDF_TARGET="(\w+)"', line)
+            if chip:
+                return chip
+
+
 def load_gitignore(start=ROOT_DIR):
+    '''Search from start dir and read .gitignore file'''
     path, parent = start, op.dirname(start)
     while path != parent:
         ignore = op.join(path, '.gitignore')
@@ -117,6 +160,7 @@ def load_gitignore(start=ROOT_DIR):
 
 
 def walk_exclude(root, include_exts=[], excludes=None):
+    '''os.walk with optional includes and excludes'''
     matches = list(map(
         fnmatch._compile_pattern,  # lru enabled
         set(map(str, excludes)) if excludes else load_gitignore()
@@ -142,25 +186,16 @@ def walk_exclude(root, include_exts=[], excludes=None):
         yield root, dirs, files
 
 
-def project_name():
-    with open(fromroot('CMakeLists.txt'), encoding='utf8') as f:
-        return findone(r'project\((\w+)[ \)]', f.read(), 'unknown')
-
-
 def process_nvs(args):
     partcsv = fromroot('partitions.csv')
     try:
         assert not args.offset or not args.size
         args.offset, args.size = '0xB000', '0x4000'
-        with open(partcsv, encoding='utf8') as f:
-            for line in f.readlines():
-                if line.startswith('#') or not line.strip():
-                    continue
-                if 'data' not in line or 'nvs' not in line:
-                    continue
-                chunks = [a.strip(',') for a in line.split()]
-                args.offset, args.size = chunks[3:5]
-                break
+        for row in load_csv(partcsv):
+            if row[1] != 'data' or row[2] != 'nvs':
+                continue
+            args.offset, args.size = row[3:5]
+            break
     except AssertionError:
         pass
     except Exception as e:
@@ -172,19 +207,19 @@ def process_nvs(args):
         for c in ('nvs_flash/nvs_partition_generator', 'esptool_py/esptool'):
             sys.path.append(op.join(IDF_PATH, 'components', c))
         try:
-            from esp_idf_nvs_partition_gen.nvs_partition_gen import main as gen
+            import esp_idf_nvs_partition_gen.nvs_partition_gen as generate
         except ImportError:
-            from nvs_partition_gen import main as gen
-        from esptool import _main as flash
+            import nvs_partition_gen as generate
+        import esptool
         if op.isdir(op.dirname(op.abspath(args.pack))):
             dist = args.pack
         else:
             dist = tempfile.mktemp() + '.bin'
         sys.argv[1:] = ['generate', args.output, dist, args.size]
-        gen()
+        generate.main()
         if args.flash:
             sys.argv[1:] = ['-p', args.flash, 'write_flash', args.offset, dist]
-            flash()
+            esptool.main()
     except (SystemExit, Exception) as e:
         return print('Generate NVS binary failed:', e, file=sys.stderr)
     finally:
@@ -195,32 +230,30 @@ def process_nvs(args):
 
 
 def gencfg(args):
-    name = project_name()
-    addr = (socket.gethostbyname(socket.gethostname()), PORT)
-    data = ''
-    env = {
+    data = {}
+    name = project()
+    for path in filter(op.isfile, [args.tpl, fromroot('nvs_flash.local')]):
+        for row in load_csv(path):
+            data[row[0]] = row  # merge multiple csv files
+    data = '\n'.join(','.join(line) for line in data.values()).format(**{
         'NAME': name,
         'UID': uuid.uuid4().hex[:args.len].upper(),
-        'URL': 'http://%s:%d' % addr,
+        'URL': f'http://{socket.gethostbyname(socket.gethostname())}:{PORT}',
         'OTA': name + '.bin',
         'HBT': 'board',
-    }
-    for path in filter(op.isfile, [args.tpl, fromroot('nvs_flash.local')]):
-        with open(path, encoding='utf8') as f:
-            data += f.read().format(**env)
-    data = data.replace('\n\n', '\n').replace(' ', '')
+    })
     if not data:
         return print('Empty content for NVS flash')
     if args.output is sys.stdout and IDF_PATH:
         args.output = tempfile.mktemp()
     if not args.quiet:
         filename = getattr(args.output, 'name', str(args.output))
-        print('Writing NVS information to `%s`' % filename)
+        print(f'Writing NVS information to `{filename}`')
     if hasattr(args.output, 'write'):
         args.output.write(data)
         args.output.flush()
     elif isinstance(args.output, str):
-        with open(args.output, 'w', encoding='utf8') as f:
+        with open(args.output, 'w') as f:
             f.write(data)
         if args.pack and IDF_PATH:
             process_nvs(args)
@@ -271,31 +304,31 @@ def font_icon(args):
     if not op.exists(lvgldir):
         return ''
     fontdir = op.join(lvgldir, 'scripts', 'built_in_font')
+    fontnum = op.join(fontdir, 'unscii-8.ttf')
+    fontsym = op.join(fontdir, 'FontAwesome5-Solid+Brands+Regular.woff'),
+    lvgl_tricks = ','.join(map(str, [
+        61441, 61448, 61451, 61452, 61453, 61457,
+        61459, 61461, 61465, 61468, 61473, 61478,
+        61479, 61480, 61502, 61507, 61512, 61515,
+        61516, 61517, 61521, 61522, 61523, 61524,
+        61543, 61544, 61550, 61552, 61553, 61556,
+        61559, 61560, 61561, 61563, 61587, 61589,
+        61636, 61637, 61639, 61641, 61664, 61671,
+        61674, 61683, 61724, 61732, 61787, 61931,
+        62016, 62017, 62018, 62019, 62020, 62087,
+        62099, 62189, 62212, 62810, 63426, 63650,
+    ]))
+    unicode_tricks = (
+        ' -r 0x2580-0x25FF'         # block elements + geometric shapes
+        ' -r 0x2600-0x26FF'         # miscellaneous symbols
+        ' -r 0x2800-0x28FF'         # braille patterns
+    )
     if args.size % 8:
         print('Skip UNSCII-8 because size is not multiple of 8')
-        cmd = '-r 0x20-0x7F --font "%s"' % op.join(fontdir, 'unscii-8.ttf')
+        cmd = f'-r 0x20-0x7F --font "{fontnum}"'
     else:
-        cmd = '--font "%s" -r 0x20-0x7F' % op.join(fontdir, 'unscii-8.ttf')
-    return cmd + (
-        ' -r 0x2580-0x25FF'             # block elements + geometric shapes
-        ' -r 0x2600-0x26FF'             # miscellaneous symbols
-        ' -r 0x2800-0x28FF'             # braille patterns
-        ' --font "%s" -r "%s"'
-    ) % (
-        op.join(fontdir, 'FontAwesome5-Solid+Brands+Regular.woff'),
-        ','.join(map(str, [                             # LVGL symbols
-            61441, 61448, 61451, 61452, 61453, 61457,
-            61459, 61461, 61465, 61468, 61473, 61478,
-            61479, 61480, 61502, 61507, 61512, 61515,
-            61516, 61517, 61521, 61522, 61523, 61524,
-            61543, 61544, 61550, 61552, 61553, 61556,
-            61559, 61560, 61561, 61563, 61587, 61589,
-            61636, 61637, 61639, 61641, 61664, 61671,
-            61674, 61683, 61724, 61732, 61787, 61931,
-            62016, 62017, 62018, 62019, 62020, 62087,
-            62099, 62189, 62212, 62810, 63426, 63650,
-        ]))
-    )
+        cmd = f'--font "{fontnum}" -r 0x20-0x7F'
+    return cmd + unicode_tricks + f' --font "{fontsym}" -r "{lvgl_tricks}"'
 
 
 def font_postproc(fn):
@@ -324,17 +357,15 @@ def genfont(args):
     if not symbols:
         return print('No chinese characters found. Skip')
     if not op.exists(args.font):
-        return print('Font file `%s` not found' % args.font)
+        return print(f'Font file `{args.font}` not found')
     args.output = font_output(args)
-    cmd = (
-        'lv_font_conv --bpp %d --size %d --no-kerning --format %s -o "%s"'
-        ' --font "%s" --symbols "%s" -r 0x3000-0x301F %s'
-    ) % (
-        args.bpp, args.size, 'bin' if args.bin else 'lvgl', args.output,
-        args.font, ''.join(sorted(symbols)), font_icon(args)
-    )
     try:
-        print(execute(cmd, quiet=args.quiet))
+        print(execute((
+            f'lv_font_conv --bpp {args.bpp} --size {args.size} --no-kerning '
+            f'--format {"bin" if args.bin else "lvgl"} -o "{args.output}" '
+            f'--font "{args.font}" --symbols "{"".join(sorted(symbols))}" '
+            f'-r 0x3000-0x301F {font_icon(args)}'
+        ), quiet=args.quiet))
         if not args.bin and op.isfile(args.output):
             font_postproc(args.output)
     except Exception as e:
@@ -350,11 +381,11 @@ ESP_IDF_COMMON = '''
     tcpip_adapter vfs wpa_supplicant xtensa
 '''.split()
 
-ESP_IDF_SKIP = 'arduino linux'.split()
+ESP_IDF_SKIP = 'arduino arduino-esp32 linux'.split()
 
 
 def glob_headers(dirname):
-    '''find .h files and return relative posix path'''
+    '''Search .h files and return relative posix path'''
     try:
         dirname = op.normpath(dirname)
         return [
@@ -407,11 +438,17 @@ def find_includes(components, headers):
 
 
 def update_dependencies(comps):
-    '''overwrite main/CMakeLists.txt REQUIRES field'''
+    '''Overwrite main/CMakeLists.txt REQUIRES field'''
     compcmk = fromroot('main', 'CMakeLists.txt')
     if not op.isfile(compcmk):
         return
-    tpl = re.compile(r'( *)REQUIRES([a-z0-9\s\-_]+)')
+    try:
+        with open(op.join(IDF_PATH, 'tools/cmake/version.cmake')) as f:
+            verinfo = re.findall(r'IDF_VERSION_(\w+)\s*(\d+)', f.read())
+        require = 'REQUIRES' + '_V' + dict(verinfo)['MAJOR']
+    except Exception:
+        require = 'REQUIRES'
+    tpl = re.compile(r'( *)' + require + r'([a-z0-9\s\-_]+)')
     with open(compcmk, encoding='utf8') as f:
         old_content = f.read()
     prefix, old_comps = findone(tpl, old_content)
@@ -420,14 +457,24 @@ def update_dependencies(comps):
     if indent:
         sub = ' ' * indent + (
             '\n' + ' ' * (indent + 4)
-        ).join(['REQUIRES'] + new_comps)
+        ).join([require] + new_comps) + '\n'
     else:
-        sub = prefix + 'REQUIRES ' + ' '.join(new_comps)
-    new_content = tpl.sub(sub + '\n', old_content)
+        sub = prefix + ' '.join([require] + new_comps)
+    new_content = tpl.sub(sub, old_content)
     if new_content != old_content:
         with open(compcmk, 'w', encoding='utf8') as f:
             f.write(new_content)
     return True
+
+
+def skip_libc(headers):
+    headers.difference_update(glob_headers(op.join(
+        ENV['IDF_TOOLS_PATH'], 'tools/xtensa-esp-elf',
+        '*/xtensa-esp-elf/xtensa-esp-elf/include/'
+    )))
+    for header in list(headers):
+        if header.startswith('driver/') or header.startswith('soc/'):
+            headers.remove(header)
 
 
 def gendeps(args):
@@ -446,19 +493,14 @@ def gendeps(args):
             print('\n'.join(sorted(headers)))
         return
     try:
-        headers.difference_update(glob_headers(op.join(
-            ENV['IDF_TOOLS_PATH'], 'tools/xtensa-esp-elf',
-            '*/xtensa-esp-elf/xtensa-esp-elf/include/'
-        )))
-        for header in list(headers):
-            if header.startswith('driver/') or header.startswith('soc/'):
-                headers.remove(header)
+        skip_libc(headers)
     except Exception as e:
         print('Skip libc headers failed:', e)
     find_includes(fromroot('managed_components'), headers)  # skip
-    comps = find_includes(op.join(IDF_PATH, 'components'), headers)
-    comps.update(find_includes(op.join(IDF_PATH, '..', 'components'), headers))
-    comps = sorted(comps, key=lambda v: len(v))
+    comps = sorted({
+        **find_includes(op.join(IDF_PATH, 'components'), headers),
+        **find_includes(op.join(IDF_PATH, '..', 'components'), headers)
+    }, key=lambda v: len(v))
     if not args.quiet:
         print(' '.join(comps))
     try:
@@ -469,7 +511,7 @@ def gendeps(args):
 
 
 def prebuild(args):
-    print('-- Running prebuild scripts (%s) ...' % __file__)
+    print(f'-- Running prebuild scripts ({__file__}) ...')
     with suppress(Exception):
         assert '4.4' in IDF_PATH
         lst = glob.glob(fromroot('managed_components', '*', '.component_hash'))
@@ -478,7 +520,7 @@ def prebuild(args):
     try:
         srcdir = fromroot('webpage')
         dstdir = fromroot('files', 'www')
-        rebuild = 'pnpm run -C "%s" build' % srcdir
+        rebuild = f'pnpm run -C "{srcdir}" build'
         last_build = op.getmtime(dstdir) + 10
         for root, dirs, files in walk_exclude(srcdir):
             for fn in files:
@@ -493,6 +535,62 @@ def prebuild(args):
     args.quiet = True
     gengbk(args)
     gendeps(args)
+
+
+def postbuild(args):
+    try:
+        sys.path.append(op.join(IDF_PATH, 'components/esptool_py/esptool'))
+        import esptool
+    except Exception:
+        return print('`esptool` not found. Run esp-idf/export first')
+    chip = load_chip()
+    if not chip:
+        return print('Chip target not set. Run idf.py set-target first')
+    if not detools:
+        return print('`detools` not installed. Run pip install detools>=0.49')
+    if not op.isfile(args.new):
+        return print(op.basename(args.new) + ' not found. Run idf.py build')
+    if not op.isfile(args.old):
+        shutil.copy(args.new, args.old)
+        return print('Firmware not updated. Skip')
+    with open(args.new, 'rb') as fnew, open(args.old, 'rb') as fold:
+        hashnew = hashlib.sha256(fnew.read()).hexdigest()[:8]
+        hashold = hashlib.sha256(fold.read()).hexdigest()[:8]
+        if hashnew == hashold:
+            return print('Firmware not updated. Skip')
+    print(f'-- Running postbuild scripts ({__file__}) ...')
+    argv_backup, stdout_backup = sys.argv[:], sys.stdout
+    buf, sys.stdout = BytesIO(), StringIO()
+    try:
+        sys.argv[1:] = ['--chip', chip, 'image_info', args.new]
+        esptool.main()
+        sys.stdout.seek(0)
+        hashimg = findone(r'Hash: (\w+) \(valid\)', sys.stdout.read())
+        if len(hashimg) != 64:
+            raise RuntimeError('Invalid sha256 from esptool: {len(hashimg)}')
+        with open(args.new, 'rb') as fnew, open(args.old, 'rb') as fold:
+            detools.create_patch(fold, fnew, buf, compression='heatshrink')
+            buf.seek(0)
+            patch = buf.read()
+        pthfile = suffix(
+            args.new.replace(hashnew, ''), f'{hashold}-{hashnew}', 'bin')
+        with open(pthfile, 'wb') as f:
+            f.write(struct.pack(
+                '<4s 32s I 24s',
+                hashlib.sha256(b'esp_delta_ota').digest()[3::-1],
+                bytes.fromhex(hashimg), len(patch), b''
+            ) + patch)
+        if not args.patch and hashold not in args.old:
+            shutil.copy(args.old, suffix(args.old, hashold, 'bin'))
+            shutil.copy(args.new, args.old)
+        if not args.patch and hashnew not in args.new:
+            shutil.copy(args.new, suffix(args.new, hashnew, 'bin'))
+            shutil.copy(pthfile, suffix(args.new, 'patched', 'bin'))
+    except (SystemExit, Exception) as e:
+        return print('Calculate image info failed:', e, file=sys.stderr)
+    finally:
+        sys.argv = argv_backup
+        sys.stdout = stdout_backup
 
 
 def sdkconfig_modify(text, targets, mapping):
@@ -553,7 +651,7 @@ def sdkconfig(args):
             with open(mapping['local'], 'w', encoding='utf8') as f:
                 f.write(modified)
         return
-    print('Found %d files:\n-' % len(mapping),
+    print(f'Found {len(mapping)} files:\n-',
           '\n- '.join(map(relpath, mapping.values())))
     if '' not in mapping:
         return print('`sdkconfig` not found! Run idf.py menuconfig first')
@@ -573,11 +671,11 @@ def sdkconfig(args):
 
 def size_components(quiet=False, files=False, **k):
     idfsize = op.join(IDF_PATH, 'tools', 'idf_size.py')
-    mapfile = fromroot('build', project_name() + '.map')
+    mapfile = fromroot('build', project() + '.map')
     if not op.isfile(idfsize):
-        return print('idf_size.py not found. Did you run esp-idf/export?')
+        return print('idf_size.py not found. Run esp-idf/export first')
     if not op.isfile(mapfile):
-        return print(op.basename(mapfile) + ' not found. Did you build?')
+        return print(op.basename(mapfile) + ' not found. Run idf.py build')
     tpl = [re.compile(i) for i in (r'lib(.*)\.a', r'lib_a-(.*)', r'(.*)\.obj')]
     try:
         comps = json.loads(execute(' '.join([
@@ -654,16 +752,14 @@ def blame(args):
         assert len(comps)
     except Exception:
         return
-    nlen = max(map(len, comps))
-    print('%-*.*s ' % (nlen, nlen, 'Archive') + ' '.join(
-        '%*s' % (vlen, printable) for f, printable, v, vlen in order))
-    print('%-*.*s ' % (nlen, nlen, 'Total') + ' '.join(
-        '%*d' % (vlen, vsum) for f, p, vsum, vlen in order))
-    for comp in comps:
-        print('%-*s ' % (nlen, comp) + ' '.join(
-            '%*d' % (vlen, comps[comp].get(field, 0))
-            for field, p, v, vlen in order
-        ))
+    nlen = max(len('Archive'), max(map(len, comps)))
+    print(f'{"Archive":{nlen}} ' + ' '.join(
+          f'{printable:{vlen}}' for f, printable, v, vlen in order))
+    print(f'{"Total":{nlen}} ' + ' '.join(
+          f'{vsum:{vlen}}' for f, p, vsum, vlen in order))
+    for name, sizes in comps.items():
+        print(f'{name:{nlen}} ' + ' '.join(
+              f'{sizes.get(field, 0):{vlen}}' for field, p, v, vlen in order))
 
 
 def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
@@ -672,12 +768,12 @@ def bonjour_browser(services, devname=None, oneshot=False, timeout=3, **k):
 
     class Listener(zeroconf.ServiceListener):
         def log_info(self, info):
-            print('%d:' % len(devices), 'TTL', info.host_ttl,
-                  'WEIGHT', info.weight, 'PRIORITY', info.priority)
-            print('  PTR :', info.name)
-            print('  SRV : %s:%d' % (info.server.rstrip('.'), info.port))
+            print(f'{len(devices)}: TTL {info.host_ttl} '
+                  f'WEIGHT {info.weight} PRIORITY {info.priority}\n'
+                  f'  PTR : {info.name}\n'
+                  f'  SRV : {info.server}:{info.port}')
             txt = [
-                '[%d] %s=%s (%d)' % (i + 1, k, v, len(v))
+                f'[{i + 1}] {k}={v} ({len(v)})'
                 for i, (k, v) in enumerate(info.decoded_properties.items())
                 if len(k) and v is not None
             ]
@@ -716,7 +812,7 @@ def search(args):
     services = {'.'.join(['_' + i for i in chunks][:2]) + '.local.'}
     if args.all:
         services.update(zeroconf.ZeroconfServiceTypes.find(timeout=1))
-    return bonjour_browser(services, project_name(), **vars(args))
+    return bonjour_browser(services, project(), **vars(args))
 
 
 def relpath(p, maxlen=True, ref='.'):
@@ -750,7 +846,7 @@ def print_request(prefix='Request', attr='headers', environ=False):
     klen = max(len(prefix), max(map(len, dct.keys())) if dct else 0)
     print_method('\n' + prefix.ljust(klen))
     for k, v in dct.items():
-        print('%-*s: %s' % (klen, k, v))
+        print(f'{k:{klen}}: {v}')
     if attr == 'environ' or not environ:
         return
     keys = sorted([k for k in bottle.request.environ if k not in ENV])
@@ -758,7 +854,7 @@ def print_request(prefix='Request', attr='headers', environ=False):
     if keys:
         print('\n' + 'Environments'.ljust(klen))
     for k in keys:
-        print('%-*s: %s' % (klen, k, bottle.request.environ[k]))
+        print(f'{k:{klen}}: {bottle.request.environ[k]}')
 
 
 def on_edit(root):
@@ -853,7 +949,7 @@ def audio_stream(**kwargs):
     Bps = BpS * fs
     bpC = BpC * 8
     dts = kwargs.get('dt', (2 ** 32 - 36 - 1) / Bps)
-    print('audio streaming to %s started' % remote)
+    print(f'audio streaming to {remote} started')
     yield struct.pack(
         '= 4s I 4s 4s I H H I I H H 4s I',
         b'RIFF', 36 + int(dts * Bps), b'WAVE', b'fmt ', 0x10, 0x01,
@@ -866,7 +962,7 @@ def audio_stream(**kwargs):
             break
         except Exception as e:
             raise bottle.HTTPResponse(str(e), 500)
-    print('audio streaming to %s stopped' % remote)
+    print(f'audio streaming to {remote} stopped')
 
 
 def video_random(fs, width, height, qual=1, depth=1, **k):
@@ -898,14 +994,14 @@ def video_stream(bdary='FRAME', **kwargs):
         'Content-Type', 'multipart/x-mixed-replace; boundary=' + bdary
     )
     remote = bottle.request.environ.get('REMOTE_HOST')
-    print('video streaming to %s started' % remote)
+    print(f'video streaming to {remote} started')
     while True:
         try:
             frame = video_random(**kwargs)
             yield '\r\n'.join([
-                '--' + bdary,
+                f'--{bdary}',
                 'Content-Type: image/jpeg',
-                'Content-Length: %d' % len(frame),
+                f'Content-Length: {len(frame)}',
                 '\r\n'
             ]).encode() + frame
             if 'still' in bottle.request.params:
@@ -914,7 +1010,7 @@ def video_stream(bdary='FRAME', **kwargs):
             break
         except Exception as e:
             raise bottle.HTTPResponse(str(e), 500)
-    print('video streaming to %s stopped' % remote)
+    print(f'video streaming to {remote} stopped')
 
 
 def on_media(**k):
@@ -956,7 +1052,8 @@ def rpc_hid(*args):
     except SystemExit:
         return parser.format_help()
     if args['ts'] is not None:
-        args = {'dt': '%dms' % (1e3 * time.time() - args.pop('ts')), **args}
+        dt = 1e3 * time.time() - args.pop('ts')
+        args = {'dt': f'{dt}ms', **args}  # fix order
     print(datetime.now().strftime('%T.%f')[:-3],
           *[f'{k}={v}' for k, v in args.items() if v is not None])
 
@@ -1115,7 +1212,7 @@ class WebSocket(object):
         else:
             compressed = False
         if rsv123:
-            raise WebSocketError('Invalid RSV value: %s' % rsv123)
+            raise WebSocketError(f'Invalid RSV value: {rsv123}')
         payload = self._read_unpack(length)
         if ismask:
             payload = bytes(mask[i % 4] ^ c for i, c in enumerate(payload))
@@ -1139,18 +1236,18 @@ class WebSocket(object):
             if not payload:
                 return self.close()
             if len(payload) < 2:
-                raise WebSocketError('Invalid close frame: %s' % payload)
-            code, msg = struct.unpack('>H%ds' % (len(payload) - 2), payload)
+                raise WebSocketError(f'Invalid close frame: {payload}')
+            code, msg = struct.unpack(f'>H{len(payload) - 2}s', payload)
             if (code < 1000 or 1004 <= code <= 1006 or 1012 <= code <= 1016 or
                code == 1100 or 2000 <= code <= 2999):
-                raise WebSocketError('Invalid close code %d' % code)
+                raise WebSocketError(f'Invalid close code {code}')
             return self.close(code, msg)
         elif opcode == 0x09:                            # OPCODE_PING
             return self._send_frame(0x0A, payload)      # OPCODE_PONG
         elif opcode == 0x0A:                            # OPCODE_PONG
             return
         else:
-            raise WebSocketError('Unexpected opcode = %d' % opcode)
+            raise WebSocketError(f'Unexpected opcode {opcode}')
         self._msg += payload
         if not fin:
             return
@@ -1168,7 +1265,7 @@ class WebSocket(object):
         if len(mask) == 4:
             payload = bytes(mask[i % 4] ^ c for i, c in enumerate(payload))
         elif mask:
-            raise WebSocketError('Invalid mask to use: %s' % mask)
+            raise WebSocketError(f'Invalid mask {mask}')
         length = len(payload)
         if length <= 125:
             extra = b''
@@ -1179,7 +1276,7 @@ class WebSocket(object):
             extra = struct.pack('>Q', length)
             length = 127
         else:
-            raise WebSocketError('Frame too large: %d Bytes' % length)
+            raise WebSocketError(f'Frame too large: {length} Bytes')
         try:
             self._write(bytes([
                 (0x80 if fin else 0) | (rsv123 & 0x70) | (opcode & 0x0F),
@@ -1195,7 +1292,7 @@ class WebSocket(object):
             return
         if not isinstance(msg, (bytes, bytearray)):
             msg = str(msg).encode('utf8')
-        payload = struct.pack('>H%ds' % len(msg), code, msg)
+        payload = struct.pack(f'>H{len(msg)}s', code, msg)
         self._send_frame(0x08, payload)  # OPCODE_CLOSE
         self._closed = True
 
@@ -1251,7 +1348,7 @@ class Server(ThreadingMixIn, WSGIServer):
         client, addr = self.socket.accept()
         self.base_environ['REQUEST_START'] = time.time()
         self.base_environ['REMOTE_PORT'] = addr[1]
-        self.base_environ['REMOTE_HOST'] = '%s:%d' % addr
+        self.base_environ['REMOTE_HOST'] = f'{addr[0]}:{addr[1]}'
         if client.recv(1, socket.MSG_PEEK) == b'\x16':  # TLS client hello
             app = self.get_app()
             if hasattr(app, 'ssl_opt'):
@@ -1352,10 +1449,10 @@ def webserver(args):
 
     args.root = op.abspath(args.root)
     if not op.exists(args.root):
-        return print('Could not serve at `%s`: no such directory' % args.root)
+        return print(f'Could not serve at `{args.root}`: no such directory')
 
     def check(username, password):
-        print('checking username `%s` password `%s`' % (username, password))
+        print(f'checking username `{username}` password `{password}`')
         return True
 
     api = bottle.Bottle()
@@ -1423,10 +1520,10 @@ def make_parser():
         help='host to listen on [default 0.0.0.0]')
     sparser.add_argument(
         '-P', '--port', type=int, default=PORT,
-        help='port to listen on [default %d]' % PORT)
+        help=f'port to listen on [default {PORT}]')
     sparser.add_argument(
         '--certfile', default=certpem,
-        help='cert file for HTTPS server [default %s]' % relpath(certpem))
+        help=f'cert file for HTTPS server [default {relpath(certpem)}]')
     sparser.add_argument(
         '--esphost', type=str, help='IP address of alive ESP board')
     sparser.add_argument(
@@ -1435,7 +1532,7 @@ def make_parser():
         '--test', action='store_true', help='run API compatible test')
     sparser.add_argument(
         'root', nargs='?', default=distdir,
-        help='path to static files [default %s]' % relpath(distdir))
+        help=f'path to static files [default {relpath(distdir)}]')
     sparser.set_defaults(func=webserver)
 
     sparser = subparsers.add_parser(
@@ -1469,10 +1566,10 @@ def make_parser():
         help='length of generated UID [default 8]')
     sparser.add_argument(
         '--tpl', default=nvsfile,
-        help='render nvs text from template [default %s]' % relpath(nvsfile))
+        help=f'render nvs text from template [default {relpath(nvsfile)}]')
     sparser.add_argument(
         '--pack', default=nvsdist,
-        help='encode nvs text into binary [default %s]' % relpath(nvsdist))
+        help=f'encode nvs text into binary [default {relpath(nvsdist)}]')
     sparser.add_argument(
         '--size', type=str, help='nvs partition size [auto]')
     sparser.add_argument(
@@ -1504,6 +1601,22 @@ def make_parser():
     sparser = subparsers.add_parser(
         'prebuild', help='Generate GBK and deps and build HTML pages')
     sparser.set_defaults(func=prebuild)
+
+    name = project()
+    binfile = fromroot('build', name + '.bin')
+    bakfile = fromroot('build', name + '.bak')
+    sparser = subparsers.add_parser(
+        'postbuild', help='Generate delta firmware for OTA updation')
+    sparser.add_argument(
+        '--new', default=binfile,
+        help=f'firmware to upgrade to [default {relpath(binfile)}]')
+    sparser.add_argument(
+        '--old', default=bakfile,
+        help=f'firmware to upgrade from [default {relpath(bakfile)}]')
+    sparser.add_argument(
+        '--patch', action='store_true',
+        help='only generate patch and skip firmware backup etc.')
+    sparser.set_defaults(func=postbuild)
 
     sparser = subparsers.add_parser(
         'sdkconfig', help='Generate or modify sdkconfig related files')

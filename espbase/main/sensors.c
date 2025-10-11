@@ -358,10 +358,10 @@ static esp_err_t tscn_sync() {
 static void tscn_oncfg(void *a, esp_event_base_t base, int32_t id, void *data) {
     const char *key = data;
     if (base != CFG_EVENT || id != CFG_UPDATE || !strlen(key ?: "")) return;
-    if (strcasestr(key, "app.tscn.mode")) tscn_sync();
+    if (!strcasecmp(key, "app.tscn.mode")) tscn_sync();
 }
 
-static esp_err_t tscn_initialize(int bus, int addr) {
+static esp_err_t tscn_initialize(uint8_t bus, uint8_t addr) {
     if (tscn.addr) return ESP_ERR_INVALID_STATE;
     smbus_regval_t regs[] = {
         RT_RBYTE(TP_CHIP_ID),
@@ -432,13 +432,7 @@ esp_err_t tscn_command(const char *ctrl) {
     if (!tscn.addr) return ESP_ERR_INVALID_STATE;
     if (ctrl) {
         tscn.stop = !strtob(ctrl);
-        if (!tscn.stop && tscn.task) {
-            if (xPortInIsrContext()) {
-                vTaskNotifyGiveFromISR(tscn.task, NULL);
-            } else {
-                xTaskNotifyGive(tscn.task);
-            }
-        }
+        if (!tscn.stop && tscn.task) notify_increase(tscn.task);
         return tscn.task ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
     }
 #   ifdef CONFIG_BASE_AUTO_ALIGN
@@ -601,7 +595,7 @@ static esp_err_t ist3931_read_frame(uint8_t bus, uint8_t addr, bool verbose) {
     return err;
 }
 
-const uint8_t cmds[] = {
+const uint8_t icmds[] = {
     MS_RESET,               // soft reset
     MS_DELAY | 0xF,         // delay 50ms
     MS_DELAY | 0xF,
@@ -628,7 +622,7 @@ const uint8_t cmds[] = {
     MS_DELAY | 0xA,         // delay 10ms
 };
 
-const uint8_t test_dats[] = {
+const uint8_t idats[] = {
     0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
     0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
     0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA, 0xAA,
@@ -778,7 +772,7 @@ static esp_err_t vlx_sync_timing(
     uint16_t final_mclks = vlx_us2mclks(final_us, ctx->final_pclks);
     if (ctx->pre) final_mclks += ctx->pre_mclks;
     uint16_t final_val = vlx_tout2val(final_mclks);
-    return smbus_write_word(ctx->bus, ctx->addr, 0x71, final_val);
+    return smbus_write_word(bus, addr, 0x71, final_val);
 }
 
 // VL53L0X_StartMeasurement

@@ -7,7 +7,8 @@
 #include "network.h"
 #include "config.h"
 #include "server.h"             // for CTYPE_XXX
-#include "avcmode.h"            // for avc_sync
+#include "update.h"             // for ota_updation_url
+#include "avitool.h"            // for CAMERA_XXX
 #include "drivers.h"            // for SPI && GPIO
 #include "filesys.h"            // for filesys_xxx
 #include "timesync.h"           // for timesync_xxx
@@ -27,25 +28,27 @@ esp_err_t network_parse_addr(const char *h, uint16_t p, void *d) {
 
 #include "esp_mac.h"
 #include "esp_event.h"
-#include "lwip/inet.h"
+#include "esp_netif.h"
 #include "lwip/netdb.h"
-#include "lwip/sockets.h"
+#include "lwip/stats.h"
+#include "lwip/lwip_napt.h"
 #include "esp_http_client.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/event_groups.h"
+#include "dhcpserver/dhcpserver.h"
 
 #include "cJSON.h"
 #include "esp_sntp.h"           // for sntp command
 #include "ping/ping_sock.h"     // for ping command
 #ifdef WITH_PCAP
-#   include "pcap.h"            // for pcap command
+#   include "pcap.h"            // for pcap command (~4KB)
 #endif
 #ifdef WITH_MDNS
-#   include "mdns.h"            // for mdns command
+#   include "mdns.h"            // for mdns command (~34KB)
 #   include "lwip/apps/netbiosns.h"
 #endif
 #ifdef WITH_IPERF
-#   include "iperf.h"           // for iperf command
+#   include "iperf.h"           // for iperf command (~5KB)
 #endif
 
 #define WIFI_CONNECTED_BIT  BIT0
@@ -68,6 +71,8 @@ static const char *TAG = "Network";
 /*
  * Network utilities
  */
+
+static esp_netif_t *if_sta = NULL, *if_ap = NULL, *if_eth = NULL;
 
 static EventGroupHandle_t evtgrp = NULL;
 
@@ -102,6 +107,25 @@ static bool str_like_ipaddr(const char *s) {
     if (!dot && con && (con + num + hex) == len) return true;
     return false;
 }
+
+static uint32_t network_local_ip(esp_netif_t *);
+
+#ifdef IDF_TARGET_V4 // backport from IDF v5
+static esp_netif_t * esp_netif_get_default_netif() { return NULL; }
+static esp_err_t esp_netif_set_default_netif(esp_netif_t *ifp) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(ifp);
+}
+static esp_err_t esp_netif_napt_enable(esp_netif_t *ifp) {
+#   ifndef WITH_NAPT
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(ifp);
+#   else
+    uint32_t addr = network_local_ip(ifp);
+    if (!esp_netif_is_netif_up(ifp) || !addr) return ESP_ERR_INVALID_STATE;
+    ip_napt_enable(addr, true);
+    return ESP_OK;
+#   endif
+}
+#endif
 
 static esp_err_t network_ctrl_dhcp(
     esp_netif_t *ifp, esp_netif_dhcp_status_t *st, int enable
@@ -169,8 +193,8 @@ static esp_err_t network_ctrl_static(
     }
     if (ilen) {                 // store netmask with ipaddr
         ilen = snprintf(
-            (char *)(ip = tmp), sizeof(tmp), IPSTR "/%u",
-            IP2STR(&info.ip), NETMASK2BITS(info.netmask.addr));
+            (char *)(ip = tmp), sizeof(tmp), "%s/%u",
+            inet_ntoa(info.ip.addr), NETMASK2BITS(info.netmask.addr));
     }
     if (!err) err = network_ctrl_dhcp(ifp, NULL, false);
     if (!err) err = esp_netif_set_ip_info(ifp, &info);
@@ -310,8 +334,6 @@ static esp_err_t network_print_detail(const char *iface) {
 #ifdef CONFIG_BASE_USE_ETH
 #   include "esp_eth.h"
 
-static esp_netif_t *if_eth = NULL;
-
 static struct {
     esp_eth_handle_t hdl;
     spi_host_device_t bus;
@@ -332,8 +354,10 @@ static esp_err_t network_eth_init() {
 #else
     const char *str = CONFIG_BASE_ETH_PINS;
 #endif
-    if (parse_pin(str, pins, LEN(pins), names) != LEN(pins))
+    if (parse_pin(str, pins, LEN(pins), names) != LEN(pins)) {
+        ESP_LOGE(TAG, "Invalid pins `%s` for Ethernet", str);
         return ESP_ERR_INVALID_ARG;
+    }
 
     esp_err_t err = ESP_OK;
     esp_eth_mac_t *mac = NULL;
@@ -414,8 +438,6 @@ static esp_err_t network_eth_init() {
 #   ifndef IDF_TARGET_V4
 #       include "esp_wifi_ap_get_sta_list.h"
 #   endif
-
-static esp_netif_t *if_sta = NULL, *if_ap = NULL;
 
 static wifi_config_t
     config_ap = {
@@ -535,19 +557,18 @@ static void wifi_print_apinfo(wifi_ap_record_t *aps, int num) {
 }
 
 static esp_err_t wifi_update_napt(esp_netif_t *if_src) {
-    uint8_t val = true;
+    dhcps_offer_t opt = OFFER_DNS;
     esp_netif_dns_info_t info;
     esp_netif_dhcp_option_mode_t op = ESP_NETIF_OP_SET;
     esp_netif_dhcp_option_id_t id = ESP_NETIF_DOMAIN_NAME_SERVER;
     esp_err_t err = esp_netif_is_netif_up(if_ap) ? ESP_OK : ESP_ERR_INVALID_STATE;
     if (!err) err = esp_netif_get_dns_info(if_src, ESP_NETIF_DNS_MAIN, &info);
     if (!err) err = network_ctrl_dhcp(if_ap, NULL, false);
-    if (!err) err = esp_netif_dhcps_option(if_ap, op, id, &val, sizeof(val));
+    if (!err) err = esp_netif_dhcps_option(if_ap, op, id, &opt, sizeof(opt));
     if (!err) err = esp_netif_set_dns_info(if_ap, ESP_NETIF_DNS_MAIN, &info);
     if (!err) err = network_ctrl_dhcp(if_ap, NULL, true);
-#   ifdef CONFIG_LWIP_IPV4_NAPT
     if (!err) err = esp_netif_napt_enable(if_ap);
-#   endif
+    if (!err) err = pmap_control("on");
     return err;
 }
 
@@ -719,8 +740,13 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     } else {
         snprintf((char *)ap->ssid, sizeof(ap->ssid), ssid);
     }
-    snprintf((char *)ap->password, sizeof(ap->password), pass);
-    ap->authmode = strlen(pass) ? WIFI_AUTH_WPA_WPA2_PSK : WIFI_AUTH_OPEN;
+    if (strlen(pass) < 8) {
+        ap->authmode = WIFI_AUTH_OPEN;
+        ap->password[0] = 0;
+    } else {
+        ap->authmode = WIFI_AUTH_WPA2_PSK;
+        snprintf((char *)ap->password, sizeof(ap->password), pass);
+    }
     ap->ssid_len = strlen((char *)ap->ssid);
     ap->ssid_hidden = strtob(Config.net.AP_HIDE);
     if (!( err = esp_wifi_set_config(WIFI_IF_AP, &config_ap) ))
@@ -835,14 +861,37 @@ esp_err_t ftm_request(const char *ssid, uint8_t count) {
 }
 #endif // CONFIG_BASE_USE_WIFI
 
+static void update_control(void *force) {
+#ifdef CONFIG_BASE_OTA_FETCH
+    TaskHandle_t task = xTaskGetHandle("ota_fetch");
+    if (xTaskGetCurrentTaskHandle() != task) {
+        static bool once;
+        if (!force && ( once = true )) return;
+        TRYNULL(task, vTaskDelete);
+        xTaskCreate(update_control, "ota_fetch", 4096, NULL, 1, &task);
+        if (task) return;
+        ESP_LOGE(TAG, "Failed to fetch OTA: %s", esp_err_to_name(ESP_ERR_NO_MEM));
+    } else {
+        ota_updation_url(NULL);
+    }
+#else
+    return; NOTUSED(force);
+#endif
+}
+
 static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
     if (base == IP_EVENT) {
-        if (id == IP_EVENT_STA_GOT_IP || id == IP_EVENT_ETH_GOT_IP) {
+        if (id == IP_EVENT_STA_LOST_IP) {
+            if (esp_netif_is_netif_up(if_eth)) esp_netif_set_default_netif(if_eth);
+        } else if (id == IP_EVENT_ETH_LOST_IP) {
+            if (esp_netif_is_netif_up(if_sta)) esp_netif_set_default_netif(if_sta);
+        } else if (id == IP_EVENT_STA_GOT_IP || id == IP_EVENT_ETH_GOT_IP) {
             ip_event_got_ip_t *evt = data;
             esp_netif_set_default_netif(evt->esp_netif);
             if (evt->ip_changed) network_print_ipinfo(evt->esp_netif, NULL);
             if (strtob(Config.app.SNTP_RUN)) sntp_control("sync");
             if (strtob(Config.app.HBT_AUTO)) hbeat_control("on");
+            if (strtob(Config.app.OTA_AUTO)) update_control(NULL);
 #ifdef CONFIG_BASE_USE_WIFI
             if (strtob(Config.net.AP_AUTO)) wifi_ap_stop();
             if (strtob(Config.net.AP_NAPT)) wifi_update_napt(evt->esp_netif);
@@ -856,7 +905,7 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             network_print_ipinfo(evt->esp_netif, NULL);
         } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
             ip_event_ap_staipassigned_t *evt = data;
-            ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
+            ESP_LOGI(TAG, "AP client %s assigned", inet_ntoa(evt->ip.addr));
         }
         return;
 #ifdef CONFIG_BASE_USE_SMARTCONFIG
@@ -880,10 +929,8 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             if (strtob(Config.net.AP_NAPT)) {
                 if (esp_netif_is_netif_up(if_sta)) {
                     wifi_update_napt(if_sta);
-#   ifdef CONFIG_BASE_USE_ETH
                 } else if (esp_netif_is_netif_up(if_eth)) {
                     wifi_update_napt(if_eth);
-#   endif
                 }
             }
         } else if (id == WIFI_EVENT_AP_STADISCONNECTED) {
@@ -1058,9 +1105,13 @@ esp_err_t network_command(
     if (!ifp) return ESP_ERR_INVALID_ARG;
     esp_netif_ip_info_t ip;
     if (( err = esp_netif_get_ip_info(ifp, &ip) )) return err;
-    if (strcasestr(cmd, "dft")) {
+    if (!strcasecmp(cmd, "dft")) {
+#ifdef IDF_TARGET_V4
+        err = ESP_ERR_NOT_SUPPORTED;
+#else
         err = esp_netif_set_default_netif(ifp);
-    } else if (strcasestr(cmd, "on")) {
+#endif
+    } else if (!strcasecmp(cmd, "on")) {
 #ifdef CONFIG_BASE_USE_WIFI
         if (ifp == if_sta) {
             err = wifi_sta_start(ssid, pass, ipv4);
@@ -1070,7 +1121,7 @@ esp_err_t network_command(
         } else
 #endif
         err = ESP_ERR_NOT_SUPPORTED;
-    } else if (strcasestr(cmd, "off")) {
+    } else if (!strcasecmp(cmd, "off")) {
 #ifdef CONFIG_BASE_USE_WIFI
         if (ifp == if_sta) {
             err = wifi_sta_stop();
@@ -1081,35 +1132,37 @@ esp_err_t network_command(
         } else
 #endif
         err = ESP_ERR_NOT_SUPPORTED;
-    } else if (strcasestr(cmd, "list")) {
+    } else if (!strcasecmp(cmd, "list")) {
 #ifdef CONFIG_BASE_USE_WIFI
         if (ifp == if_sta) return wifi_sta_list_ap();
         if (ifp == if_ap)  return wifi_ap_list_sta();
 #endif
         err = ESP_ERR_NOT_SUPPORTED;
-    } else if (strcasestr(cmd, "scan")) {
+    } else if (!strcasecmp(cmd, "scan")) {
 #ifdef CONFIG_BASE_USE_WIFI
         if (ifp == if_sta) return wifi_sta_scan(ssid, 0, tout_ms, true);
 #endif
         err = ESP_ERR_NOT_SUPPORTED;
-    } else if (strcasestr(cmd, "ip")) {
+    } else if (!strcasecmp(cmd, "ip")) {
         if (!ipv4) {
-            printf(IPSTR "\n", IP2STR(&ip.ip));
+            puts(inet_ntoa(ip.ip.addr));
             return ESP_OK;
         }
         err = network_ctrl_static(ifp, ipv4, NULL, NULL);
-    } else if (strcasestr(cmd, "gw")) {
+    } else if (!strcasecmp(cmd, "gw")) {
         if (!ipv4) {
-            printf(IPSTR "\n", IP2STR(&ip.gw));
+            puts(inet_ntoa(ip.gw.addr));
             return ESP_OK;
         }
         err = network_ctrl_static(ifp, NULL, ipv4, NULL);
-    } else if (strcasestr(cmd, "nm")) {
+    } else if (!strcasecmp(cmd, "nm")) {
         if (!ipv4) {
-            printf(IPSTR "\n", IP2STR(&ip.netmask));
+            puts(inet_ntoa(ip.netmask.addr));
             return ESP_OK;
         }
         err = network_ctrl_static(ifp, NULL, NULL, ipv4);
+    } else {
+        err = ESP_ERR_INVALID_ARG;
     }
     if (err) return err;
 exit:
@@ -1163,32 +1216,114 @@ esp_err_t network_parse_addr(const char *host, uint16_t port, void *sockaddr) {
 
 static uint32_t network_local_ip(esp_netif_t *ifp) {
     esp_netif_ip_info_t ip = { 0 };
-#   ifdef CONFIG_BASE_USE_ETH
-    if (!ifp && esp_netif_is_netif_up(if_eth)) ifp = if_eth;
-#   endif
-#   ifdef CONFIG_BASE_USE_WIFI
-    if (!ifp) {
-        wifi_mode_t mode = WIFI_MODE_NULL;
-        esp_wifi_get_mode(&mode);
-        if (HAS_STA(mode) && getBits(WIFI_CONNECTED_BIT)) {
-            ifp = if_sta;
-        } else if (HAS_AP(mode)) {
-            ifp = if_ap;
-        } else {
-            return 0;
-        }
-    }
-#   endif
-#ifndef IDF_TARGET_V4
     if (!ifp) ifp = esp_netif_get_default_netif();
-#endif
-    esp_netif_get_ip_info(ifp, &ip);
+    if (!ifp && esp_netif_is_netif_up(if_eth)) ifp = if_eth;
+    if (!ifp && esp_netif_is_netif_up(if_sta)
+             && getBits(WIFI_CONNECTED_BIT)) ifp = if_sta;
+    if (ifp) esp_netif_get_ip_info(ifp, &ip);
     return ip.ip.addr;
 }
 
 /*
  * Network applications
  */
+
+#ifdef WITH_NAPT
+static struct {
+    struct {
+        uint8_t proto;
+        uint16_t sport;
+        uint32_t daddr;
+        uint16_t dport;
+    } PACKED ents[IP_PORTMAP_MAX];
+#   define PMAP_CTX_SIZE sizeof(pmap.ents)
+    void *nvs;
+} pmap;
+
+esp_err_t pmap_command(
+    const char *ctrl, const char *protocol,
+    uint16_t sport, const char *dipv4, uint16_t dport
+) {
+    if (!pmap.nvs) {
+        esp_err_t err = config_nvs_open(&pmap.nvs, "pmap", false);
+        if (err) return err;
+        if (pmap_control("load")) pmap_control("dump");
+    }
+    if (ctrl) {
+        uint32_t saddr = network_local_ip(NULL), daddr;
+        uint8_t proto = IPPROTO_TCP;
+        if (!protocol) {
+            proto = IPPROTO_TCP;
+        } else if (!strcasecmp(protocol, "udp")) {
+            proto = IPPROTO_UDP;
+        } else if (!strcasecmp(protocol, "both")) {
+            proto |= IPPROTO_UDP;
+        }
+        if (!strcasecmp(ctrl, "add")) {
+            if (!sport || !dport || !inet_aton(dipv4 ?: "", &daddr))
+                return ESP_ERR_INVALID_ARG;
+            ITERP(ent, pmap.ents) {
+                if (ent->proto & proto && ent->sport == sport) {
+                    ent->daddr = daddr;
+                    ent->dport = dport;
+                    if (!( proto &= ~ent->proto )) return pmap_control("sync");
+                }
+            }
+            ITERP(ent, pmap.ents) {
+                if (ent->proto) continue;
+                ent->proto = proto & IPPROTO_TCP ?: IPPROTO_UDP;
+                ent->sport = sport;
+                ent->daddr = daddr;
+                ent->dport = dport;
+                if (!( proto &= ~ent->proto )) return pmap_control("sync");
+            }
+            return ESP_ERR_NO_MEM;
+        } else if (!strcasecmp(ctrl, "del")) {
+            ITERP(ent, pmap.ents) {
+                if (ent->proto & proto && ent->sport == sport) {
+                    ip_portmap_remove(ent->proto, ent->sport);
+                    ent->proto = 0;
+                }
+            }
+            return pmap_control("sync");
+        } else if (!strcasecmp(ctrl, "load")) {
+            return config_nvs_read(pmap.nvs, "ents", &pmap, PMAP_CTX_SIZE) < 0;
+        } else if (!strcasecmp(ctrl, "dump")) {
+            return config_nvs_write(pmap.nvs, "ents", &pmap, PMAP_CTX_SIZE) < 0;
+        } else if (!strcasecmp(ctrl, "sync")) {
+            return pmap_control("on") ?: pmap_control("dump");
+        } else if (strtob(ctrl)) {
+            ITERP(ent, pmap.ents) {
+                if (!ent->proto) continue;
+                ip_portmap_add(ent->proto, saddr, ent->sport, ent->daddr, ent->dport);
+            }
+        } else {
+            ITERP(ent, pmap.ents) {
+                if (!ent->proto) continue;
+                ip_portmap_remove(ent->proto, ent->sport);
+            }
+        }
+    } else {
+        printf("PMap SPort DPort DAddr\n");
+        ITERP(ent, pmap.ents) {
+            if (!ent->proto) continue;
+            uint32_t daddr = ent->daddr; // suppress -Waddress-of-packed-member
+            printf("%4s %5u %5u %s\n",
+                   ent->proto == IPPROTO_TCP ? "TCP" : "UDP",
+                   ent->sport, ent->dport, inet_ntoa(daddr));
+        }
+
+    }
+    return ESP_OK;
+}
+#else // WITH_NAPT
+esp_err_t pmap_command(
+    const char *c, const char *p, uint16_t s, const char *a, uint16_t d
+) {
+    return ESP_ERR_NOT_SUPPORTED;
+    NOTUSED(c); NOTUSED(p); NOTUSED(s); NOTUSED(a); NOTUSED(d);
+}
+#endif // WITH_NAPT
 
 #ifdef WITH_PCAP
 typedef struct {
@@ -1207,6 +1342,7 @@ static struct {
     filesys_path_t filename;
 } pcap;
 
+#   ifdef CONFIG_BASE_USE_WIFI
 static void pcap_wifi_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
     if (type == WIFI_PKT_MISC || pkt->rx_ctrl.rx_state) return;
@@ -1219,7 +1355,9 @@ static void pcap_wifi_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
     memcpy(record.buffer, pkt->payload, record.length);
     if (!xQueueSend(pcap.queue, &record, pcap.tout)) free(record.buffer);
 }
+#   endif
 
+#   ifdef CONFIG_BASE_USE_ETH
 static esp_err_t pcap_eth_cb(
     esp_eth_handle_t hdl, uint8_t *buf, uint32_t len, void *arg
 ) {
@@ -1229,6 +1367,7 @@ static esp_err_t pcap_eth_cb(
         free(record.buffer);
     return ESP_OK;
 }
+#   endif
 
 static void pcap_task(void *arg) {
     esp_err_t err = ESP_OK;
@@ -1237,6 +1376,10 @@ static void pcap_task(void *arg) {
         .minor_version = PCAP_DEFAULT_VERSION_MINOR,
         .time_zone = 0x08,  // CST-8
     };
+    if (!( cfg.fp = fopen(pcap.filename, "wb+") )) goto exit;
+    if (( err = pcap_new_session(&cfg, &pcap.hdl) )) fclose(cfg.fp);
+    if (!err) err = pcap_write_header(pcap.hdl, pcap.type);
+    if (err) goto exit;
     if (!( pcap.queue = xQueueCreate(10, sizeof(pcap_pkt_t)) )) {
         err = ESP_ERR_NO_MEM;
 #   ifdef CONFIG_BASE_USE_WIFI
@@ -1247,15 +1390,13 @@ static void pcap_task(void *arg) {
 #   ifdef CONFIG_BASE_USE_ETH
     } else if (pcap.type == PCAP_LINK_TYPE_ETHERNET) {
         bool enable = true;
-        if (!err) err = esp_eth_ioctl(eth.hdl, ETH_CMD_S_PROMISCUOUS, &enable);
         if (!err) err = esp_eth_update_input_path(eth.hdl, pcap_eth_cb, NULL);
+        if (!err) err = esp_eth_ioctl(eth.hdl, ETH_CMD_S_PROMISCUOUS, &enable);
 #   endif
     } else {
         err = ESP_ERR_NOT_SUPPORTED;
     }
-    if (!err && !( cfg.fp = fopen(pcap.filename, "wb+") )) err = ESP_FAIL;
-    if (!err && ( err = pcap_new_session(&cfg, &pcap.hdl) )) fclose(cfg.fp);
-    if (err) goto exit;
+    if (err) goto clean;
     pcap_pkt_t pkt;
     uint32_t cnt = 0;
     clearBits(PCAP_STOP_BIT);
@@ -1266,9 +1407,7 @@ static void pcap_task(void *arg) {
         TRYFREE(pkt.buffer);
         if (pcap.npkt && cnt++ > pcap.npkt) break;
     }
-#   ifdef CONFIG_BASE_USE_WIFI
-    if (pcap.type == PCAP_LINK_TYPE_802_11) esp_wifi_set_promiscuous(false);
-#   endif
+clean:
 #   ifdef CONFIG_BASE_USE_ETH
     if (pcap.type == PCAP_LINK_TYPE_ETHERNET) {
         bool disable = false;
@@ -1276,7 +1415,10 @@ static void pcap_task(void *arg) {
         esp_eth_update_input_path(eth.hdl, NULL, NULL);
     }
 #   endif
-    LOOPN(i, uxQueueMessagesWaiting(pcap.queue)) {
+#   ifdef CONFIG_BASE_USE_WIFI
+    if (pcap.type == PCAP_LINK_TYPE_802_11) esp_wifi_set_promiscuous(false);
+#   endif
+    LOOPN(i, pcap.queue ? uxQueueMessagesWaiting(pcap.queue) : 0) {
         xQueueReceive(pcap.queue, &pkt, pcap.tout);
         TRYFREE(pkt.buffer);
     }
@@ -1512,7 +1654,7 @@ esp_err_t sntp_command(
 #endif
     bool enabled = esp_sntp_enabled();
     if (ctrl) {
-        if (strcasestr(ctrl, "reset") || strcasestr(ctrl, "sync")) {
+        if (!strcasecmp(ctrl, "reset") || !strcasecmp(ctrl, "sync")) {
             esp_sntp_restart();
         } else if (strtob(ctrl) && !enabled) {
             esp_sntp_set_time_sync_notification_cb(sntp_notification_cb);
@@ -1529,7 +1671,7 @@ esp_err_t sntp_command(
         }
         sntp_setserverhost(idx, host);
     } else if (mode) {
-        if (strcasestr(mode, "smooth")) {
+        if (!strcasecmp(mode, "smooth")) {
             esp_sntp_set_sync_mode(SNTP_SYNC_MODE_SMOOTH);
         } else {
             esp_sntp_set_sync_mode(SNTP_SYNC_MODE_IMMED);
@@ -1571,7 +1713,7 @@ esp_err_t sntp_command(
 #define GET_PING_PROF(name, var) \
     esp_ping_get_profile(hdl, ESP_PING_PROF_ ## name, &(var), sizeof(var))
 
-static void ping_command_success(esp_ping_handle_t hdl, void *args) {
+static void ping_command_success(esp_ping_handle_t hdl, void *arg) {
     uint8_t ttl;
     uint16_t seqno;
     uint32_t dtms, size;
@@ -1585,7 +1727,7 @@ static void ping_command_success(esp_ping_handle_t hdl, void *args) {
            size, ipaddr_ntoa(&target), seqno, ttl, dtms);
 }
 
-static void ping_command_timeout(esp_ping_handle_t hdl, void *args) {
+static void ping_command_timeout(esp_ping_handle_t hdl, void *arg) {
     uint16_t seqno;
     ip_addr_t target;
     GET_PING_PROF(SEQNO, seqno);
@@ -1794,7 +1936,7 @@ static struct {
     char location[256];
     char deviceid[256];
 #   define HBEAT_CTX_SIZE sizeof(hbeat) - sizeof(void *)
-    void * nvs;
+    void *nvs;
 } hbeat;
 
 static void hbeat_update(cJSON *obj) {
@@ -1836,6 +1978,11 @@ static void hbeat_update(cJSON *obj) {
 }
 
 static void hbeat_task(void *arg) {
+#ifdef IDF_TARGET_V4
+#   define CLEN_FORMAT PRId32
+#else
+#   define CLEN_FORMAT PRId64
+#endif
     esp_err_t err = ESP_OK;
     esp_http_client_handle_t client = NULL;
     uint32_t addr = 0, blen = 256, rlen = 2048;
@@ -1844,13 +1991,6 @@ static void hbeat_task(void *arg) {
     if (( err = EMALLOC(body, blen) )
      || ( err = EMALLOC(resp, rlen) )
      || ( err = esp_base_mac_addr_get((uint8_t *)mac) )
-#ifdef CONFIG_BASE_USE_ETH
-     || ( err = esp_read_mac((uint8_t *)mac, ESP_MAC_ETH) )
-#endif
-#ifdef CONFIG_BASE_USE_WIFI
-     || ( err = esp_read_mac((uint8_t *)mac, ESP_MAC_WIFI_STA) )
-#endif
-     || ( err = config_nvs_open(&hbeat.nvs, "hbeat", false) )
     ) goto error;
     snprintf(macstr, sizeof(macstr), MACSTR, MAC2STR(mac));
     cJSON_AddStringToObject(info, "sn", Config.info.UID);
@@ -1860,11 +2000,6 @@ static void hbeat_task(void *arg) {
     if (!info || !ts || !ip) {
         err = ESP_ERR_NO_MEM;
         goto error;
-    }
-    if (config_nvs_read(hbeat.nvs, "ctx", &hbeat, HBEAT_CTX_SIZE) < 0) {
-        memset(&hbeat, 0, HBEAT_CTX_SIZE);
-        hbeat.hbtime = 30;
-        hbeat.intval = 5;
     }
     if (!strlen(hbeat.hbturl)) {
         if (!strlen(Config.app.HBT_URL)) {
@@ -1915,7 +2050,7 @@ static void hbeat_task(void *arg) {
             } else if (!( rst = cJSON_Parse(resp) )) {
                 ESP_LOGE(TAG, "HBT parse reponse: %s", cJSON_GetErrorPtr());
             } else {
-                ESP_LOGI(TAG, "HBT %s status %d, resp %" PRId64,
+                ESP_LOGI(TAG, "HBT %s status %d, resp %" CLEN_FORMAT,
                         hbeat.hbturl, esp_http_client_get_status_code(client),
                         esp_http_client_get_content_length(client));
                 hbeat_update(rst);
@@ -1928,9 +2063,8 @@ static void hbeat_task(void *arg) {
         if (!strlen(hbeat.imgurl) || hbeat.intval <= 0) continue;
         if (!last[1] || (curr - last[1]) >= ditv) {
             last[1] = curr;
-            void * data;
-            size_t dlen;
-            if (avc_sync(IMAGE_TARGET | ACTION_READ, &data, &dlen)) {
+            video_data_t frame;
+            if (CAMERA_FETCH(frame)) {
                 ESP_LOGE(TAG, "HBT generate data failed");
                 continue;
             }
@@ -1943,23 +2077,24 @@ static void hbeat_task(void *arg) {
                 "--FRAME\r\nContent-Disposition:form-data;"
                     "name=\"image\"; filename=\"image\"\r\n\r\n",
                 inet_ntoa(addr), macstr);
+            size_t blen = strlen(body) + frame.len + 13;
             esp_http_client_set_url(client, hbeat.imgurl);
             esp_http_client_set_header(client, "Content-Type", CTYPE_BDRY(FRAME));
             esp_http_client_set_timeout_ms(client, 10000);
-            if (( err = esp_http_client_open(client, strlen(body) + dlen + 13) )) {
+            if (( err = esp_http_client_open(client, blen) )) {
                 ESP_LOGE(TAG, "HBT post request: %s", esp_err_to_name(err));
             } else if (
                    esp_http_client_write(client, body, strlen(body)) < 0
-                || esp_http_client_write(client, data, dlen) < 0
+                || esp_http_client_write(client, frame.data, frame.len) < 0
                 || esp_http_client_write(client, "\r\n--FRAME--\r\n", 13) < 0
                 || esp_http_client_fetch_headers(client) < 0
                 || esp_http_client_read_response(client, resp, rlen - 1) < 0
             ) {
                 ESP_LOGE(TAG, "HBT fetch response failed");
             } else {
-                ESP_LOGI(TAG, "HBT %s status %d, dlen %u resp %" PRId64,
+                ESP_LOGI(TAG, "HBT %s status %d, dlen %u resp %" CLEN_FORMAT,
                         hbeat.imgurl, esp_http_client_get_status_code(client),
-                        dlen, esp_http_client_get_content_length(client));
+                        frame.len, esp_http_client_get_content_length(client));
                 if (strlen(resp)) {
                     char *buf = resp, *utf8 = NULL;
                     LOOPN(i, strlen(buf)) {
@@ -1972,7 +2107,7 @@ static void hbeat_task(void *arg) {
                 }
             }
             esp_http_client_close(client);
-            avc_sync(IMAGE_TARGET | ACTION_WRITE, &data, &dlen);
+            CAMERA_YIELD(frame);
         }
     }
     goto exit;
@@ -1983,7 +2118,6 @@ exit:
     TRYNULL(info, cJSON_Delete);
     TRYNULL(rst, cJSON_Delete);
     TRYFREE(resp); TRYFREE(body);
-    config_nvs_close(&hbeat.nvs);
     setBits(HBT_STOP_BIT);
     vTaskDelete(NULL);
 }
@@ -1991,6 +2125,16 @@ exit:
 esp_err_t hbeat_command(
     const char *ctrl, const char *hurl, const char *iurl, float hbtime, float intval
 ) {
+    if (!hbeat.nvs) {
+        esp_err_t err = config_nvs_open(&hbeat.nvs, "hbeat", false);
+        if (err) return err;
+        if (config_nvs_read(hbeat.nvs, "ctx", &hbeat, HBEAT_CTX_SIZE) < 0) {
+            memset(&hbeat, 0, HBEAT_CTX_SIZE);
+            snprintf(hbeat.hbturl, sizeof(hbeat.hbturl), Config.app.HBT_URL);
+            hbeat.hbtime = 30;
+            hbeat.intval = 5;
+        }
+    }
     TaskHandle_t task = xTaskGetHandle("hbeat");
     if (ctrl) {
         if (strtob(ctrl) && !task) {

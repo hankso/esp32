@@ -4,7 +4,6 @@
  * Create: 2024-03-25 17:23:12
  */
 
-#define DUAL_TUSB
 #include "usbmode.h"
 
 #ifdef CONFIG_BASE_USE_USB

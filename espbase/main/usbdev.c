@@ -4,13 +4,16 @@
  * Time: 2024-03-25 18:26:20
  */
 
+#if __has_include("tinyusb.h")
+#   include "tinyusb.h" // include before usbmode.h -> hidtool.h
+#endif
+
 #include "usbmode.h"
 #include "filesys.h"
 #include "config.h"
 
 #ifdef CONFIG_BASE_USE_USB
 
-#include "tinyusb.h"
 #include "usb/usb_host.h" // for usb_device_desc_t
 
 #ifdef CONFIG_BASE_USB_CDC_DEVICE
@@ -363,7 +366,7 @@ esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
 #   if !defined(CONFIG_BASE_FFS_FAT) && !defined(CONFIG_BASE_USE_SDFS)
-#       warning "Internal Flash and SDCard storage are not supported"
+#       warning "FAT Flash or SDCard storage are not supported"
 #   endif
 
 #   define CHECK_LUN(lun, retval)                                           \

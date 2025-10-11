@@ -126,11 +126,11 @@ void console_initialize() {
         ESP_LOGW(TAG, "Try using IDF-Monitor / PuTTY / SecureCRT.");
     }
     esp_console_config_t console_config = {
-        .max_cmdline_length = 256,
         .max_cmdline_args = 8,
+        .max_cmdline_length = 256,
 #if CONFIG_LOG_COLORS
+        .hint_bold = atoi(LOG_COLOR_CYAN),
         .hint_color = atoi(LOG_COLOR_CYAN),
-        .hint_bold = atoi(LOG_COLOR_CYAN)
 #endif
     };
     ESP_ERROR_CHECK( esp_console_init(&console_config) );

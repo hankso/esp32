@@ -167,11 +167,11 @@ function onCommand(key, cmdline, success, failed, name) {
                     escape('\tE.g. blink text', 32, 5),
                     '\nThe xterm-256-color foreground:',
                     Array.from({ length: 256 }, (v, i) =>
-                        escape((!i || i % 64 ? '' : '\n') + '0', 38, 5, i)
+                        escape((i % 36 == 15 ? '\n' : '') + '0', 38, 5, i)
                     ).join(''),
                     '\nThe xterm-256-color background:',
                     Array.from({ length: 256 }, (v, i) =>
-                        escape((!i || i % 64 ? '' : '\n') + ' ', 48, 5, i)
+                        escape((i % 36 == 15 ? '\n' : '') + ' ', 48, 5, i)
                     ).join(''),
                 ].join('\n'),
             })

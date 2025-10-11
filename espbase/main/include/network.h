@@ -13,22 +13,26 @@
 #   define CONFIG_BASE_USE_NET
 #endif
 
+#if defined(CONFIG_BASE_USE_WIFI) && defined(CONFIG_LWIP_IPV4_NAPT)
+#   define WITH_NAPT
+#endif
+
 #if __has_include("pcap.h")
 #   define WITH_PCAP
 #else
-#   warning "Run `idf.py add-dependency pcap`"
+#   warning "Run `idf.py add-dependency espressif/pcap`"
 #endif
 
 #if defined(IDF_TARGET_V4) || __has_include("mdns.h")
 #   define WITH_MDNS
 #else
-#   warning "Run `idf.py add-dependency mdns`"
+#   warning "Run `idf.py add-dependency espressif/mdns`"
 #endif
 
 #if defined(IDF_TARGET_V4) || __has_include("iperf.h")
 #   define WITH_IPERF
 #else
-#   warning "Run `idf.py add-dependency iperf`"
+#   warning "Run `idf.py add-dependency espressif/iperf`"
 #endif
 
 #ifdef __cplusplus
@@ -60,6 +64,10 @@ esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm);
 
 #if defined(CONFIG_BASE_USE_WIFI) || defined(CONFIG_BASE_USE_ETH)
 esp_err_t pcap_command(const char *ctrl, const char *itf, uint32_t npkt);
+
+esp_err_t pmap_command(const char *ctrl, const char *protocol,
+                       uint16_t sport, const char *daddr, uint16_t dport);
+#define   pmap_control(c) pmap_command((c), NULL, 0, NULL, 0)
 
 esp_err_t mdns_command(const char *ctrl, const char *hostname,
                        const char *service, const char *protocol,

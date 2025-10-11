@@ -31,14 +31,16 @@ typedef enum {
     LED_BLINK_MAX,
 } led_blink_t;
 
-void led_initialize();
+esp_err_t   led_set_blink(led_blink_t blink);
+led_blink_t led_get_blink();
 
 esp_err_t   led_set_light(int index, uint8_t brightness);
 uint8_t     led_get_light(int index);
+
 esp_err_t   led_set_color(int index, uint32_t color);
 uint32_t    led_get_color(int index);
-esp_err_t   led_set_blink(led_blink_t blink);
-led_blink_t led_get_blink();
+
+void led_initialize(); // called in drivers.c
 
 #ifdef __cplusplus
 }

@@ -11,7 +11,7 @@
 #include "filesys.h"
 #include "network.h"
 #include "sensors.h"
-#include "avcmode.h"
+#include "avitool.h"
 #include "ledmode.h"
 #include "usbmode.h"
 #include "btmode.h"
@@ -72,10 +72,13 @@
 #ifdef CONFIG_BASE_USE_BT
 #   define CONSOLE_NET_BT           //  368 Bytes
 #endif
-#if defined(CONFIG_BASE_USE_ETH) || defined(CONFIG_BASE_USE_WIFI)
+#ifdef CONFIG_BASE_USE_NET
 #   define CONSOLE_NET_IP           // 4312 Bytes
+#   ifdef WITH_NAPT
+#       define CONSOLE_NET_PMAP     // 1720 Bytes
+#   endif
 #   ifdef WITH_PCAP
-#       define CONSOLE_NET_PCAP     // TODO Bytes
+#       define CONSOLE_NET_PCAP     // 4424 Bytes
 #   endif
 #   ifdef WITH_MDNS
 #       define CONSOLE_NET_MDNS     //  520 Bytes
@@ -104,8 +107,11 @@
 #ifdef CONFIG_BASE_ALS_TRACK
 #   define CONSOLE_APP_ALS          // 1408 Bytes
 #endif
-#if defined(CONFIG_BASE_USE_I2S) || defined(CONFIG_BASE_USE_CAM)
+#ifdef CONFIG_BASE_USE_AVC
 #   define CONSOLE_APP_AVC          //  800 Bytes
+#endif
+#if defined(WITH_QRENC) || defined(WITH_QRDEC)
+#   define CONSOLE_APP_QRC          // 1419 Bytes
 #endif
 #define CONSOLE_APP_SEN             // 1872 Bytes
 
@@ -207,52 +213,34 @@ static bool parse_error(int argc, char **argv, void **argtable) {
 
 #ifdef CONSOLE_SYS_REBOOT
 static struct {
-#   ifdef CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
     arg_lit_t *halt;
-#   endif
     arg_lit_t *cxel;
     arg_int_t *tout;
     arg_end_t *end;
 } sys_reboot_args = {
-#   ifdef CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
     .halt = arg_lit0("h", "halt", "shutdown instead of reboot"),
-#   endif
     .cxel = arg_lit0("c", "cancel", "cancel pending reboot (if available)"),
     .tout = arg_int0("t", NULL, "0~65535", "reboot timeout in ms"),
     .end  = arg_end(sizeof(sys_reboot_args) / sizeof(void *))
 };
 
-static void sys_reboot_task(void *arg) {
-    uint32_t tout_ms = arg ? *(uint32_t *)arg : 0;
-    if (tout_ms && tout_ms != 0xDEADBEEF) {
-        ESP_LOGW(TAG, "Will reboot in %" PRIu32 "ms ...", tout_ms);
-        msleep(tout_ms);
-        tout_ms = 0;
-    }
-    if (tout_ms) {
-        esp_system_abort("Manually shutdown");
-    } else {
-        esp_restart();
-    }
-}
-
 static int sys_reboot(int argc, char **argv) {
     ARG_PARSE(argc, argv, &sys_reboot_args);
-    TaskHandle_t task = xTaskGetHandle("reboot");
-    static uint32_t end_ms, tout_ms;
-    if (sys_reboot_args.cxel->count && task) {
-        puts("Restart cancelled");
-        vTaskDelete(task);
-    } else if (task) {
-        printf("Restart pending: %.0fms", end_ms - get_timestamp(0) * 1e3);
+    static reboot_ctx_t ctx;
+    if (sys_reboot_args.cxel->count) {              // cancel pending task
+        if (ctx.task) {
+            vTaskDelete((TaskHandle_t)ctx.task);
+            puts("Restart cancelled");
+        }
+        memset(&ctx, 0, sizeof(ctx));
     } else {
-        tout_ms = ABS(ARG_INT(sys_reboot_args.tout, 0));
-        end_ms = (uint32_t)(get_timestamp(0) * 1e3) + tout_ms;
-#   ifdef CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
-        if (sys_reboot_args.halt->count) tout_ms = 0xDEADBEEF;
-#   endif
-        xTaskCreate(sys_reboot_task, "reboot", 4096, &tout_ms, 20, &task);
-        if (!task) sys_reboot_task(NULL);
+        bool halt = sys_reboot_args.halt->count;
+        if (!ctx.task || halt > ctx.halt || sys_reboot_args.tout->count) {
+            ctx.timeout_ms = ABS(ARG_INT(sys_reboot_args.tout, 0));
+            ctx.target_ms = 0;
+            ctx.halt = halt;
+        }
+        reboot(&ctx);                               // create or update task
     }
     return ESP_OK;
 }
@@ -342,9 +330,9 @@ static int sys_sleep(int argc, char **argv) {
         ESP_ERROR_CHECK( esp_sleep_enable_timer_wakeup(tout_us) );
     }
     bool light = true;
-    if (strstr(mode, "deep")) {
+    if (!strcasecmp(mode, "deep")) {
         light = false;
-    } else if (!strstr(mode, "light")) {
+    } else if (strcasecmp(mode, "light")) {
         ESP_LOGE(TAG, "Unsupported sleep mode: %s", mode);
         return ESP_ERR_INVALID_ARG;
     }
@@ -381,13 +369,11 @@ static struct {
     arg_str_t *cmd;
     arg_str_t *part;
     arg_str_t *url;
-    arg_lit_t *fce;
     arg_end_t *end;
 } sys_update_args = {
     .cmd  = arg_str0(NULL, NULL, "CMD", "boot|fetch|reset"),
     .part = arg_str0("p", NULL, "LABEL", "partition to boot from"),
     .url  = arg_str0("u", NULL, "URL", "specify URL to fetch"),
-    .fce  = arg_lit0("f", NULL, "skip version verification"),
     .end  = arg_end(sizeof(sys_update_args) / sizeof(void *))
 };
 
@@ -395,7 +381,7 @@ static int sys_update(int argc, char **argv) {
     ARG_PARSE(argc, argv, &sys_update_args);
     const char *cmd = ARG_STR(sys_update_args.cmd, "");
     const char *part = ARG_STR(sys_update_args.part, NULL);
-    if (strstr(cmd, "boot")) {
+    if (!strcasecmp(cmd, "boot")) {
         if (part) {
             printf("Boot from %s: ", part);
             if (!ota_updation_boot(part)) {
@@ -406,12 +392,12 @@ static int sys_update(int argc, char **argv) {
         } else {
             ota_updation_info();
         }
-    } else if (strstr(cmd, "reset")) {
+    } else if (!strcasecmp(cmd, "reset")) {
         ota_updation_reset();
         printf("OTA states reset done\n");
-    } else if (strstr(cmd, "fetch")) {
+    } else if (!strcasecmp(cmd, "fetch")) {
         const char *url = ARG_STR(sys_update_args.url, NULL);
-        if (!ota_updation_url(url, sys_update_args.fce->count)) {
+        if (!ota_updation_url(url)) {
             printf("Failed to udpate: %s\n", ota_updation_error());
             return ESP_FAIL;
         }
@@ -434,9 +420,9 @@ static struct {
 } sys_exec_args = {
     .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .hdr  = arg_litn("h", "header", 0, 4, "print ELF header and exit"),
-    .path = arg_str1(NULL, NULL, "path", "ELF file to run"),
+    .path = arg_str1(NULL, NULL, "PATH", "ELF file to run"),
     .sep  = arg_lit0(NULL, "", NULL), // add '--' seperator to arg_print_syntax
-    .argv = arg_strn(NULL, NULL, "argv", 0, 10, "args MUST be after '--'"),
+    .argv = arg_strn(NULL, NULL, "ARGV", 0, 10, "args MUST be after '--'"),
     .end  = arg_end(sizeof(sys_exec_args) / sizeof(void *))
 };
 
@@ -497,7 +483,7 @@ static struct {
 } drv_gpio_args = {
     .pin = arg_int0(NULL, NULL, NULL, "gpio number"),
     .lvl = arg_int0(NULL, NULL, "0|1", "set pin to LOW / HIGH"),
-    .cfg = arg_str0(NULL, "cfg", "str", "set pin MODE:IO,PULL:UD,DRV:0-3"),
+    .cfg = arg_str0(NULL, "cfg", "STR", "set pin MODE:IO,PULL:UD,DRV:0-3"),
     .i2c = arg_lit0(NULL, "i2c", "list pin of I2C GPIO Expander"),
     .spi = arg_lit0(NULL, "spi", "list pin of SPI GPIO Expander"),
     .end = arg_end(sizeof(drv_gpio_args) / sizeof(void *))
@@ -597,9 +583,9 @@ static int drv_led(int argc, char **argv) {
     }
     if (light) {
         uint8_t bval = 0;
-        if (strstr(light, "off")) {
+        if (!strcasecmp(light, "off")) {
             bval = 0;
-        } else if (strstr(light, "on")) {
+        } else if (!strcasecmp(light, "on")) {
             bval = 255;
         } else if (!parse_u8(light, &bval)) {
             printf("Invalid brightness: `%s`\n", light);
@@ -952,7 +938,7 @@ static struct {
     arg_lit_t *vfs;
     arg_end_t *end;
 } util_lsfs_args = {
-    .dir  = arg_str0(NULL, NULL, "path", NULL),
+    .dir  = arg_str0(NULL, NULL, "PATH", NULL),
     .ext  = arg_lit0("d", "sdcard", "use SDCard instead of Flash"),
     .stat = arg_lit0(NULL, "stat", "print stat of specified file"),
     .info = arg_lit0(NULL, "info", "print info of specified FS"),
@@ -1021,14 +1007,14 @@ static int util_config(int argc, char **argv) {
         } else for (int i = 0; !err && environ[i]; i++) {
             if (key && !startswith(environ[i], key)) continue;
             if (key && environ[i][strlen(key)] != ' ') continue;
-            err = unsetenv(environ[i]) ? errval() : 0;
+            err = unsetenv(environ[i]) ? errval(errno) : 0;
         }
     } else if (key) {
         if (val) {
             if (!env) {
                 err = config_set(key, val);
             } else if (setenv(key, val, true)) {
-                err = errval();
+                err = errval(errno);
             }
             printf("Set `%s` to `%s` %s\n", key, val, esp_err_to_name(err));
         } else {
@@ -1047,7 +1033,7 @@ static int util_config(int argc, char **argv) {
         config_stats();
     } else {
         int num = 0; while (environ[num]) { num++; }
-        LOOPN(i, num) { printf("[%d/%d] %s\n", i, num, environ[i]); }
+        LOOPN(i, num) { printf("[%d/%d] %s\n", i + 1, num, environ[i]); }
     }
     return err;
 }
@@ -1139,14 +1125,15 @@ static int util_hist(int argc, char **argv) {
     const char *cmd = ARG_STR(util_hist_args.cmd, "");
     const char *dst = ARG_STR(util_hist_args.dst, "history.txt");
     bool save = false;
-    if (strstr(cmd, "save")) {
+    if (!strcasecmp(cmd, "save")) {
         save = true;
-    } else if (!strstr(cmd, "load")) {
+    } else if (strcasecmp(cmd, "load")) {
         printf("Invalid command: `%s`\n", cmd);
         return err;
     }
     filesys_type_t type = FILESYS_TYPE(util_hist_args.ext->count);
-    const char *path = filesys_join(type, 2, Config.sys.DIR_DATA, dst);
+    const char *dir = type == FILESYS_FLASH ? Config.sys.DIR_DATA : NULL;
+    const char *path = filesys_join(type, 2, dir, dst);
     if (!save && !filesys_exists(type, path)) {
         printf("History file `%s` does not exist\n", path);
         err = ESP_ERR_INVALID_ARG;
@@ -1304,6 +1291,35 @@ static int net_ftm(int argc, char **argv) {
 }
 #endif
 
+#ifdef CONSOLE_NET_PMAP
+static struct {
+    arg_str_t *cmd;
+    arg_str_t *proto;
+    arg_int_t *sport;
+    arg_str_t *daddr;
+    arg_int_t *dport;
+    arg_end_t *end;
+} net_pmap_args = {
+    .cmd   = arg_str0(NULL, NULL, "CMD", "on|off|add|del|sync|load|dump"),
+    .proto = arg_str0("p", NULL, "tcp|udp", "default both"),
+    .sport = arg_int0("s", NULL, "0~65535", "port of ESP32"),
+    .daddr = arg_str0("h", NULL, "IPV4", "addr of client"),
+    .dport = arg_int0("d", NULL, "0~65535", "port of client"),
+    .end   = arg_end(sizeof(net_pmap_args) / sizeof(void *))
+};
+
+static int net_pmap(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_pmap_args);
+    return pmap_command(
+        ARG_STR(net_pmap_args.cmd, NULL),
+        ARG_STR(net_pmap_args.proto, "both"),
+        ARG_INT(net_pmap_args.sport, 0),
+        ARG_STR(net_pmap_args.daddr, NULL),
+        ARG_INT(net_pmap_args.dport, 0)
+    );
+}
+#endif
+
 #ifdef CONSOLE_NET_PCAP
 static struct {
     arg_str_t *ctrl;
@@ -1313,7 +1329,7 @@ static struct {
 } net_pcap_args = {
     .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
     .itf  = arg_str0(NULL, NULL, "eth|wifi", "select interface [default eth]"),
-    .pkt  = arg_int0("n", "num", "0~2^31", "stop after number of packets"),
+    .pkt  = arg_int0(NULL, "num", "0~2^31", "stop after number of packets"),
     .end  = arg_end(sizeof(net_pcap_args) / sizeof(void *))
 };
 
@@ -1498,10 +1514,10 @@ static struct {
     arg_end_t *end;
 } net_hbeat_args = {
     .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
-    .hurl = arg_str0(NULL, "hurl", "http", "endpoint to post device info"),
-    .iurl = arg_str0(NULL, "iurl", "http", "endpoint to post device data"),
-    .hdt  = arg_dbl0(NULL, "hdt", "sec", "duration of post info in sec"),
-    .idt  = arg_dbl0(NULL, "idt", "sec", "duration of post data in sec"),
+    .hurl = arg_str0(NULL, "hurl", "HTTP", "endpoint to post device info"),
+    .iurl = arg_str0(NULL, "iurl", "HTTP", "endpoint to post device data"),
+    .hdt  = arg_dbl0(NULL, "hdt", "SEC", "duration of post info in sec"),
+    .idt  = arg_dbl0(NULL, "idt", "SEC", "duration of post data in sec"),
     .end  = arg_end(sizeof(net_hbeat_args) / sizeof(void *))
 };
 
@@ -1527,6 +1543,9 @@ static esp_err_t register_net() {
 #endif
 #ifdef CONSOLE_NET_FTM
         ESP_CMD_ARG(net, ftm, "RTT Fine Timing Measurement between STA & AP"),
+#endif
+#ifdef CONSOLE_NET_PMAP
+        ESP_CMD_ARG(net, pmap, "Set / get port mapping when NAPT is enabled"),
 #endif
 #ifdef CONSOLE_NET_PCAP
         ESP_CMD_ARG(net, pcap, "Capture WiFi/ETH packets into pcap format"),
@@ -1750,47 +1769,110 @@ static int app_als(int argc, char **argv) {
 #ifdef CONSOLE_APP_AVC
 static struct {
     arg_str_t *tgt;
-    arg_str_t *ctrl;
-    arg_lit_t *viz;
+    arg_str_t *cmd;
     arg_int_t *tout;
     arg_end_t *end;
 } app_avc_args = {
     .tgt  = arg_str0(NULL, NULL, "1~4", "audio|video|all|cam"),
-    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
-    .viz  = arg_lit0(NULL, "viz", "print audio volume / video frame info"),
+    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off|print|{CFG}"),
     .tout = arg_int0("t", NULL, "0~2^31", "capture task timeout in ms"),
     .end  = arg_end(sizeof(app_avc_args) / sizeof(void *))
 };
 
 static int app_avc(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_avc_args);
-    const char *ctrl = ARG_STR(app_avc_args.ctrl, NULL);
-    const char *tgts = ARG_STR(app_avc_args.tgt, "3");
+    uint32_t tout_ms = ARG_INT(app_avc_args.tout, 0);
+    const char *cmd = ARG_STR(app_avc_args.cmd, NULL);
+    const char *tgt = ARG_STR(app_avc_args.tgt, "3");
     const char *itpl = app_avc_args.tgt->hdr.glossary;
-    const char *istr = strstr(itpl, tgts);
-    uint8_t index = istr ? strncnt(itpl, "|", istr - itpl) + 1: tgts[0] - '0';
+    const char *istr = strstr(itpl, tgt);
+    uint8_t index = istr ? strncnt(itpl, "|", istr - itpl) + 1: tgt[0] - '0';
     if (index == IMAGE_TARGET) {
-        static void * data;
-        static size_t dlen;
+        static video_data_t frame;
         esp_err_t err = ESP_OK;
-        if (!ctrl) {
+        if (!cmd) {
             err = CAMERA_PRINT(stdout);
-        } else if (strncnt(ctrl, "{:=}", -1)) {
-            err = CAMERA_LOADS(ctrl) ?: CAMERA_PRINT(stdout);
+        } else if (strncnt(cmd, "{:=}", -1)) {
+            err = CAMERA_LOADS(cmd) ?: CAMERA_PRINT(stdout);
+        } else if (strtob(cmd)) {
+            err = CAMERA_FETCH(frame);
+            if (!err) printf("Fetch image %p len %u", frame.data, frame.len);
         } else {
-            index |= strtob(ctrl) ? ACTION_READ : ACTION_WRITE;
-            err = avc_sync(index, &data, &dlen);
-            printf("Got image %p len %u %s", data, dlen, esp_err_to_name(err));
+            err = CAMERA_YIELD(frame);
+            if (!err) printf("Yield image %p len %u", frame.data, frame.len);
         }
         return err;
     }
-    return avc_async(
-        MIN(index, 3), ctrl,
-        ARG_INT(app_avc_args.tout, 0),
-        app_avc_args.viz->count ? stderr : NULL
-    );
+    return avi_command(MIN(index, 3), cmd, tout_ms, stderr);
 }
 #endif // CONSOLE_APP_AVC
+
+#ifdef CONSOLE_APP_QRC
+static struct {
+    arg_str_t *cmd;
+    arg_str_t *txt;
+    arg_int_t *bdr;
+    arg_str_t *clr;
+    arg_str_t *fmt;
+    arg_str_t *out;
+    arg_lit_t *ext;
+    arg_end_t *end;
+} app_qrc_args = {
+    .cmd = arg_str1(NULL, NULL, "enc|dec", ""),
+    .txt = arg_str0("t", NULL, "STR", "text to be encoded in qrcode"),
+    .bdr = arg_int0("b", NULL, "0~16", "padded border length"),
+    .clr = arg_str0("c", NULL, "inv|ansi", "color to print qrcode"),
+    .fmt = arg_str0("f", NULL, "FMT", "dots|mini|full"),
+    .out = arg_str0("o", NULL, "PATH", "save qrcode as .bmp|.svg"),
+    .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
+    .end = arg_end(sizeof(app_qrc_args) / sizeof(void *))
+};
+
+static int app_qrc(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &app_qrc_args);
+    esp_err_t err = ESP_OK;
+    const char *cmd = ARG_STR(app_qrc_args.cmd, "");
+    if (!strcasecmp(cmd, "enc")) {
+        const char *clr = ARG_STR(app_qrc_args.clr, "");
+        const char *fmt = ARG_STR(app_qrc_args.fmt, "");
+        const char *out = ARG_STR(app_qrc_args.out, NULL);
+        qrenc_config_t cfg;
+        memset(&cfg, 0, sizeof(cfg));
+        cfg.data = ARG_STR(app_qrc_args.txt, Config.info.NAME);
+        cfg.bdr = ARG_INT(app_qrc_args.bdr, 0);
+        if (!out) {
+            cfg.stream = stdout;
+        } else {
+            if (endswith(out, ".bmp")) {
+                cfg.flags |= QRENC_BMP;
+            } else if (endswith(out, ".svg")) {
+                cfg.flags |= QRENC_SVG;
+            } else {
+                return ESP_ERR_INVALID_ARG;
+            }
+            if (app_qrc_args.ext->count) {
+                cfg.stream = fopen(snorm(out), "w");
+            } else {
+                cfg.stream = fopen(fjoin(2, Config.sys.DIR_DATA, out), "w");
+            }
+            if (!cfg.stream) return errval(errno);
+        }
+        if (strcasestr(fmt, "full")) cfg.flags |= QRENC_FULL;
+        if (strcasestr(fmt, "mini")) cfg.flags |= QRENC_MINI;
+        if (strcasestr(fmt, "dots")) cfg.flags |= QRENC_DOTS;
+        if (strcasestr(clr, "ansi")) cfg.flags |= QRENC_ANSI;
+        if (strcasestr(clr, "inv")) {
+            cfg.flags |= QRENC_INV;
+            if (!out && !app_qrc_args.bdr->count) cfg.bdr = 1;
+        }
+        err = avi_qrenc(&cfg);
+        if (out) TRYNULL(cfg.stream, fclose);
+    } else if (!strcasecmp(cmd, "dec")) {
+        err = ESP_ERR_NOT_SUPPORTED; // TODO fetch camera and qrdec
+    }
+    return err;
+}
+#endif // CONSOLE_APP_QRC
 
 #ifdef CONSOLE_APP_SEN
 static struct {
@@ -1876,6 +1958,9 @@ static esp_err_t register_app() {
 #endif
 #ifdef CONSOLE_APP_AVC
         ESP_CMD_ARG(app, avc, "Control audio/video capturing"),
+#endif
+#ifdef CONSOLE_APP_QRC
+        ESP_CMD_ARG(app, qrc, "Encode or decode qrcode"),
 #endif
 #ifdef CONSOLE_APP_SEN
         ESP_CMD_ARG(app, sen, "Get sensor values"),

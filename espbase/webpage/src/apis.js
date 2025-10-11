@@ -67,12 +67,17 @@ export async function listDir(path = '', opt = {}) {
     })
 }
 
-export async function readFile(path, download = false, opt = {}) {
+export async function readFile(path, opt = {}) {
     return merge(opt, {
         url: 'edit',
         responseType: 'text', // raw file: do NOT parse to json
-        params: download ? { path, download: '' } : { path },
+        params: { path },
+        timeout: 0,
     })
+}
+
+export function download(path) {
+    return `${api.getUri()}edit?path=${path}&download`
 }
 
 export async function createPath(path, isdir = true, opt = {}) {

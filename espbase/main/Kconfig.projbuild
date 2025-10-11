@@ -4,32 +4,36 @@ menu "Project Config"
         prompt "Select Target ESP32 Board"
         default BASE_BOARD_DEVKIT if IDF_TARGET_ESP32
         default BASE_BOARD_S3LUAT if IDF_TARGET_ESP32S3
-        config BASE_BOARD_DEVKIT
-            bool "ESP32 DevKit by Espressif" if IDF_TARGET_ESP32
-        config BASE_BOARD_PICOD4
-            bool "ESP32 PicoKit by Espressif" if IDF_TARGET_ESP32
-        config BASE_BOARD_ESPEYE
-            bool "ESP32 CAM EYE by Espressif" if IDF_TARGET_ESP32
-        config BASE_BOARD_ATCAM
-            bool "ESP32 CAM DEV by AiThinker" if IDF_TARGET_ESP32
-        config BASE_BOARD_M5WIDE
-            bool "ESP32 CAM WIDE by M5STACK" if IDF_TARGET_ESP32
-        config BASE_BOARD_M5PSRAM
-            bool "ESP32 CAM PSRAM by M5STACK" if IDF_TARGET_ESP32
-        config BASE_BOARD_WRCAM
-            bool "ESP32 CAM WROVER by Freenove" if IDF_TARGET_ESP32
-        config BASE_BOARD_USBOTG
-            bool "ESP32S3 USB OTG by Espressif" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_S3ECAM
-            bool "ESP32S3 CAM ETH by Waveshare" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_S3WRCAM
-            bool "ESP32S3 CAM WROOM by Freenove" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_S3LUAT
-            bool "ESP32S3 CORE DEV by LuaTOS" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_S3NL191
-            bool "ESP32S3 LCD 1.91 by NoLogo" if IDF_TARGET_ESP32S3
-        config BASE_BOARD_S3XMINI
-            bool "ESP32S3 SuperMini by NoLogo" if IDF_TARGET_ESP32S3
+        if IDF_TARGET_ESP32
+            config BASE_BOARD_DEVKIT
+                bool "ESP32 DevKit by Espressif"
+            config BASE_BOARD_PICOD4
+                bool "ESP32 PicoKit by Espressif"
+            config BASE_BOARD_ESPEYE
+                bool "ESP32 CAM EYE by Espressif"
+            config BASE_BOARD_ATCAM
+                bool "ESP32 CAM DEV by AiThinker"
+            config BASE_BOARD_M5WIDE
+                bool "ESP32 CAM WIDE by M5STACK"
+            config BASE_BOARD_M5PSRAM
+                bool "ESP32 CAM PSRAM by M5STACK"
+            config BASE_BOARD_WRCAM
+                bool "ESP32 CAM WROVER by Freenove"
+        endif
+        if IDF_TARGET_ESP32S3
+            config BASE_BOARD_USBOTG
+                bool "ESP32S3 USB OTG by Espressif"
+            config BASE_BOARD_S3ECAM
+                bool "ESP32S3 CAM ETH by Waveshare"
+            config BASE_BOARD_S3WRCAM
+                bool "ESP32S3 CAM WROOM by Freenove"
+            config BASE_BOARD_S3LUAT
+                bool "ESP32S3 CORE DEV by LuaTOS"
+            config BASE_BOARD_S3NL191
+                bool "ESP32S3 LCD 1.91 by NoLogo"
+            config BASE_BOARD_S3XMINI
+                bool "ESP32S3 SuperMini by NoLogo"
+        endif
         config BASE_BOARD_CUSTOM
             bool "Custom ESP32 Board"
     endchoice
@@ -43,7 +47,15 @@ menu "Project Config"
         help
             Minimize IRAM usage when WiFi and BT are both enabled
 
-    config BASE_PSRAM
+    config BASE_DEBUG
+        bool "Enable DEBUG features and loggings"
+        default y
+
+    config BASE_AUTO_ALIGN
+        bool "Enable tab and space alignment in loggings"
+        default y
+
+    config BASE_USE_PSRAM
         bool "Enable PSRAM support"
         select ESP32_SPIRAM_SUPPORT if IDF_TARGET_ESP32
         select ESP32S3_SPIRAM_SUPPORT if IDF_TARGET_ESP32S3
@@ -52,14 +64,6 @@ menu "Project Config"
         select SPIRAM_IGNORE_NOTFOUND
         select SPIRAM # for ESP-IDF v5.0+
         default n
-
-    config BASE_DEBUG
-        bool "Enable DEBUG features and loggings"
-        default y
-
-    config BASE_AUTO_ALIGN
-        bool "Enable tab and space alignment in loggings"
-        default y
 
     menuconfig BASE_USE_UART
         bool "Enable UART"
@@ -229,7 +233,7 @@ menu "Project Config"
         depends on !BASE_BOARD_ATCAM
         default n
         help
-            Enable avc_command -> audio_xxx functions (~20KB)
+            Enable avi_command -> audio_xxx functions (~20KB)
     if BASE_USE_I2S
         config BASE_I2S_NUM
             int "I2S Port number"
@@ -250,10 +254,10 @@ menu "Project Config"
         bool "Enable Camera"
         select BASE_USE_I2C
         imply BASE_SCN_I2C_ALT
-        imply BASE_PSRAM
+        imply BASE_USE_PSRAM
         default n
         help
-            Enable avc_command -> video_xxx functions (~40KB)
+            Enable avi_command -> video_xxx functions (~60KB)
 
     menuconfig BASE_USE_SCN
         bool "Enable Screen"

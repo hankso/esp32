@@ -608,7 +608,7 @@ static int lvgl_ui_input(hid_report_t *rpt) {
     if (rpt->id == REPORT_ID_KEYBD) {
         hid_handle_keybd(HID_TARGET_SCN, &rpt->keybd, NULL);
         bool shift = KEYBD_MOD_HAS_SHIFT(rpt->keybd.modifier);
-        ITERV(key, rpt->keybd.keycode) {
+        ITERV(key, rpt->keybd.keycodes) {
             if (key <= HID_KEY_ERROR_UNDEFINED) continue;
             if (!ACQUIRE(ctx.mutex, 10)) continue;
             const char *str = hid_keycode_str(key, rpt->keybd.modifier);

@@ -24,6 +24,8 @@
 #include "esp_event.h"
 #include "esp_idf_version.h"
 
+#include "espmisc.h"
+
 // GCC tricks
 
 #define UNUSED              __attribute__((unused))
@@ -47,38 +49,12 @@
 #define TRYNULL(p, f)       do { if (p) f(p); (p) = (typeof(p))0; } while (0)
 #define TRYFREE(p)          TRYNULL((p), free)
 
-// ESP specific
-
-#define TIMEOUT(m)                                                          \
-        ( (m) == (typeof(m))(-1) ? portMAX_DELAY : pdMS_TO_TICKS(m) )
-#define EMALLOC(v, size)                                                    \
-        ( (v = (typeof(v)) malloc(size)) ? ESP_OK : ESP_ERR_NO_MEM )
-#define ECALLOC(v, num, size)                                               \
-        ( (v = (typeof(v)) calloc((num), (size))) ? ESP_OK : ESP_ERR_NO_MEM )
-#define EREALLOC(v, size)                                                   \
-        ({                                                                  \
-            typeof(v) ptr = (typeof(v)) realloc((v), (size));               \
-            if (ptr) (v) = ptr;                                             \
-            ptr ? ESP_OK : ESP_ERR_NO_MEM;                                  \
-        })
 #define ITERPN(v, a, n)                                                     \
         for (typeof(*(a)) *v = (a), *_##v = v + (n); v < _##v; v++)
 #define ITERVN(v, a, n)                                                     \
         for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
 #define ITERP(v, a)         ITERPN(v, (a), LEN((a)))
 #define ITERV(v, a)         ITERVN(v, (a), LEN((a)))
-#define MUTEX()             xSemaphoreCreateBinary()
-#define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
-#define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
-#define RELEASE(s)          ( (s) ? xSemaphoreGive(s) : 0 )
-#define REGEVTS(base, ...)  esp_event_handler_instance_register(            \
-                                base##_EVENT, ESP_EVENT_ANY_ID, __VA_ARGS__)
-#define UREGEVTS(base, inst)                                                \
-        do {                                                                \
-            if (inst) esp_event_handler_instance_unregister(                \
-                base##_EVENT, ESP_EVENT_ANY_ID, (inst));                    \
-            (inst) = NULL;                                                  \
-        } while (0)
 
 // May be defined somewhere
 
@@ -103,6 +79,7 @@
 #ifndef CDIV
 #   define CDIV(a, b)       ({ typeof(a) A_ = (a), B_ = (b);                \
                                B_ ? (A_ + B_ - 1) / B_ : 0; })
+#   define CMOD(a, b)       ( CDIV(a, b) * b )
 #endif
 
 #ifndef MAX
@@ -122,100 +99,289 @@
 #   define bitread(v, o)        bitsread((v), (o), 1)
 #endif
 
-// Version aliases
-
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-#   define IDF_TARGET_V5
-#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
-#   define IDF_TARGET_V4
-#else
-#   warning "This project has only been tested on ESP-IDF v4.4 & v5.x"
-#endif
-
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-// implemented in utils.c
-esp_err_t errval();
-const char *errstr();
+static inline size_t parse_all(const char *str, int *arr, size_t arrlen) {
+    size_t len = strlen(str ?: ""), idx = 0;
+    const char *ptr = str, *end = str + len;
+    char *endptr;
+    while (ptr < end && idx < arrlen) {
+        int val = strtol(ptr, &endptr, 0);
+        if (endptr != ptr) arr[idx++] = val;
+        ptr = endptr + 1;
+    }
+    return idx;
+}
 
-void msleep(uint32_t ms);
-uint64_t asleep(uint32_t ms, uint64_t state);
+static inline bool parse_f64(const char *str, double *ptr) {
+    if (!strlen(str ?: "")) return false;
+    char *endptr;
+    double val = strtod(str, &endptr);
+    if (endptr == str) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-int stridx(const char *str, const char *tpl);
-bool strtob(const char *str);
-size_t strncnt(const char *str, const char *wants, size_t slen);
-char * strtrim(char *str, const char *chars);
+static inline bool parse_f32(const char *str, float *ptr) {
+    if (!strlen(str ?: "")) return false;
+    char *endptr;
+    float val = strtof(str, &endptr);
+    if (endptr == str) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-char * b64encode(const char *src, char *dst, size_t slen);
+static inline bool parse_s64(const char *str, int64_t *ptr) {
+    if (!strlen(str ?: "")) return false;
+    char *endptr;
+    int64_t val = strtoll(str, &endptr, 0);
+    if (endptr == str) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-bool endswith(const char *, const char *tail);
-bool startswith(const char *, const char *head);
+static inline bool parse_s32(const char *str, int32_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < INT32_MIN || val > INT32_MAX) return 0;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-bool parse_f64(const char *, double *val);
-bool parse_f32(const char *, float *val);
-bool parse_s64(const char *, int64_t *val);
-bool parse_s32(const char *, int32_t *val);
-bool parse_u32(const char *, uint32_t *val);
-bool parse_u16(const char *, uint16_t *val);
-bool parse_u8(const char *, uint8_t *val);
-size_t parse_all(const char *, int *arr, size_t arrlen);
-size_t parse_pin(const char *, int *arr, size_t arrlen, const char **names);
+static inline bool parse_u32(const char *str, uint32_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT32_MAX) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-void hexdump(const void *src, size_t bytes, size_t maxlen);
-void hexdumpl(const void *src, size_t bytes, size_t maxlen);
-char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen);
+static inline bool parse_u16(const char *str, uint16_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT16_MAX) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-typedef struct {
-    uint8_t index;
-#define UANIM_CIRCLE 0
-#define UANIM_V_BAR  1
-#define UANIM_H_BAR  2
-#define UANIM_SHADE  3
-#define UANIM_DOT    4
-    uint8_t repeat;
-    uint16_t timeout_ms;
-    FILE *stream;
-} unicode_trick_t;
-esp_err_t unicode_tricks(const unicode_trick_t *);
+static inline bool parse_u8(const char *str, uint8_t *ptr) {
+    int64_t val = 0;
+    if (!parse_s64(str, &val) || val < 0 || val > UINT8_MAX) return false;
+    if (ptr) *ptr = val;
+    return true;
+}
 
-const char * unicode2str(uint32_t);
-size_t str2unicode(const char *, uint32_t *);
+static inline bool strtob(const char *str) {
+    if (!strlen(str ?: "")) return false;
+    return strspn(str, "1yY") == 1 || !strcasecmp(str, "on");
+}
 
-// Must provide file descriptor to `gbktable.bin` which is a 47KB
-// mapping file between 16Bit chinese unicode and GBK index.
-const char * unicode2gbk(FILE *, uint32_t);
-size_t gbk2unicode(FILE *, const char *, uint32_t *);
-size_t gbk2str_r(const char *src, char *dst, size_t dlen);
-char * gbk2str(const char *src);
+static inline size_t strncnt(const char *str, const char *wants, size_t slen) {
+    if (!strlen(wants ?: "")) return 0;
+    size_t cnt = 0, idx = 0, len = strnlen(str ?: "", slen);
+    while (idx < len) { if (strchr(wants, str[idx++])) cnt++; }
+    return cnt;
+}
 
-const char * format_size(double bytes);
-const char * format_sha256(const void *buf, size_t len);
-const char * format_binary(uint64_t val, size_t maxbits);
+static inline char * strtrim(char *str, const char *chars) {
+    size_t slen = strlen(str ?: "");
+    if (!slen || !chars) return str;
+    size_t head = strspn(str, chars);
+    size_t tail = slen - 1;
+    while (tail > head && strchr(chars, str[tail])) { tail--; }
+    str[tail + 1] = '\0';
+    return str + head;
+}
 
-void * setTimeout(uint32_t ms, void (*func)(void *), void *arg);
-void * setInterval(uint32_t ms, void (*func)(void *), void *arg);
-void clearTimer(void *hdl); // = clearTimeout + clearInterval
+static inline int stridx(const char *str, const char *tpl) {
+    size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
+    if (!slen || !tlen) return -1;
+    size_t cnt = strncnt(tpl, ",;/\\|", -1);
+    uint16_t idx, ret = parse_u16(str, &idx);       // case 1: number as index
+    if (ret && idx < MIN(cnt ?: tlen, tlen)) return idx;
+    const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
+    if (tmp && cnt) return strncnt(tpl, ",;/\\|", tmp - tpl);
+    if (tmp && slen == 1) return tmp - tpl;         // case 3: "ABC"
+    if (slen > 1 && !cnt && ( tmp = strchr(tpl, str[0]) ))
+        return tmp - tpl;                           // case 4: match first char
+    printf("Invalid `%s`: choose from `%s`\n", str, tpl);
+    return -1;
+}
 
-bool notify_increase(void *task);
-bool notify_decrease(void *task);
-bool notify_wait_for(uint32_t value, uint32_t tout_ms, uint32_t wait_ms);
+static inline bool endswith(const char *str, const char *tail) {
+    if (!str || !tail) return false;
+    int offset = strlen(str) - strlen(tail);
+    return !strcmp(str + MAX(offset, 0), tail);
+}
 
-typedef enum {
-    TSORT_STATE,
-    TSORT_TID,
-    TSORT_CPU,
-    TSORT_PRI,
-    TSORT_NAME,
-    TSORT_STACK,
-    TSORT_USAGE,
-} tsort_t;
-void task_info(tsort_t);
-void memory_info();
-void version_info();
-void hardware_info();
-void partition_info();
+static inline bool startswith(const char *str, const char *head) {
+    if (!str || !head) return false;
+    size_t headlen = strlen(head);
+    return strlen(str) < headlen ? false : !strncmp(str, head, headlen);
+}
+
+static inline char * b64encode(const char *inp, char *dst, size_t slen) {
+    size_t dlen = CDIV(slen, 3) * 4 + 1;
+    if (!inp || !slen || (!dst && !( dst = (char *)malloc(dlen) ))) return dst;
+    const char *end = inp + slen, *chars =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (char *out = dst; inp < end; inp += 3, out += 4) {
+        uint32_t u24 = inp[0] << 16;
+        if ((inp + 1) < end) u24 |= inp[1] << 8;
+        if ((inp + 2) < end) u24 |= inp[2];
+        out[0] = chars[(u24 >> 18) & 0x3F];
+        out[1] = chars[(u24 >> 12) & 0x3F];
+        out[2] = (inp + 1) >= end ? '=' : chars[(u24 >> 6) & 0x3F];
+        out[3] = (inp + 2) >= end ? '=' : chars[u24 & 0x3F];
+    }
+    dst[dlen - 1] = '\0';
+    return dst;
+}
+
+static inline uint8_t numdigits(int n) {
+    uint8_t i = !n;
+    while (n) { n /= 10; i++; }
+    return i;
+}
+
+static inline char hexdigits(uint8_t v) {
+    if (v < 10) return v + '0';
+    if (v > 15) return hexdigits(v % 16);
+    return v - 10 + 'A';
+}
+
+static inline void hexdump(const void *src, size_t bytes, size_t maxlen) {
+    size_t maxbytes = maxlen / 3;
+    LOOPN(i, bytes) {
+        if (i && i % maxbytes == 0) putchar('\n');
+        printf("%02X ", ((uint8_t *)src)[i]);
+    }
+    if (bytes) putchar('\n');
+}
+
+static inline void hexdumpl(const void *src, size_t bytes, size_t maxlen) {
+    size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
+    LOOPN(i, count) { printf("%02X ", ((uint8_t *)src)[i]); }
+    if (bytes && maxbytes && bytes > maxbytes)
+        printf("... [%u/%u]", count, bytes);
+    putchar('\n');
+}
+
+static inline char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
+    if (!dst || !maxlen) return 0;
+    size_t maxbytes, count, offset = 0;
+    if ((bytes * 2 + 1) <= maxlen) {
+        maxbytes = (maxlen - 1) / 2;
+    } else if (maxlen < (9 + numdigits(bytes) + numdigits(maxlen / 2))) {
+        dst[0] = '\0';
+        return dst; // no space
+    } else { // append tail to dst
+        offset = maxlen - 9 - numdigits(bytes);
+        maxbytes = (offset - numdigits(maxlen / 2)) / 2;
+    }
+    count = MIN(bytes, maxbytes);
+    LOOPN(i, count) {
+        dst[2 * i + 0] = hexdigits(((uint8_t *)src)[i] >> 4);
+        dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
+    }
+    if (offset) {
+        offset -= numdigits(count);
+        if (offset > (count * 2))
+            memset(dst + count * 2, ' ', offset - count * 2);
+        sprintf(dst + offset, " ... [%u/%u]", count, bytes);
+    } else {
+        dst[count * 2] = '\0';
+    }
+    return dst;
+}
+
+static inline const char * unicode2str(uint32_t unicode) {
+    // Convert between Unicode and UTF-8 encoded Bytes
+    // 0x000000 - 0x00007F <=> 0b0xxxxxxx
+    // 0x000080 - 0x0007FF <=> 0b110xxxxx 0b10xxxxxx
+    // 0x000800 - 0x00FFFF <=> 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
+    // 0x010000 - 0x1FFFFF <=> 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
+    static char buf[5];
+    if (unicode < 0x80) {
+        buf[0] = unicode;
+        buf[1] = '\0';
+    } else if (unicode < 0x800) {
+        buf[0] = 0xC0 | ((unicode >> 6) & 0x1F);
+        buf[1] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[2] = '\0';
+    } else if (unicode < 0x10000) {
+        buf[0] = 0xE0 | ((unicode >> 12) & 0xF);
+        buf[1] = 0x80 | ((unicode >> 6) & 0x3F);
+        buf[2] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[3] = '\0';
+    } else if (unicode < 0x1FFFFF) {
+        buf[0] = 0xF0 | ((unicode >> 18) & 0x7);
+        buf[1] = 0x80 | ((unicode >> 12) & 0x3F);
+        buf[2] = 0x80 | ((unicode >> 6) & 0x3F);
+        buf[3] = 0x80 | ((unicode >> 0) & 0x3F);
+        buf[4] = '\0';
+    } else {
+        buf[0] = '\0';
+    }
+    return buf;
+}
+
+static inline size_t str2unicode(const char *str, uint32_t *uptr) {
+    if (!str || str[0] > 0xF7) return 0;
+    uint32_t nbytes, unicode;
+    if (str[0] >= 0xF0) {
+        nbytes = 4;
+        unicode = str[0] & 0x7;
+    } else if (str[0] >= 0xE0) {
+        nbytes = 3;
+        unicode = str[0] & 0xF;
+    } else if (str[0] >= 0xC0) {
+        nbytes = 2;
+        unicode = str[0] & 0x1F;
+    } else {
+        unicode = str[0];
+        nbytes = unicode ? 1 : 0;
+    }
+    if (strlen(str) < nbytes) return 0;
+    for (uint32_t i = 1; i < nbytes; i++) {
+        if ((str[i] >> 6) != 0x2) return 0; // invalid format
+        unicode = (unicode << 6) | (str[i] & 0x3F);
+    }
+    if (uptr) *uptr = unicode;
+    return nbytes;
+}
+
+static inline const char * unicode2gbk(FILE *fd, uint32_t unicode) {
+    // Convert between Unicode and GBK encoded Bytes
+    // 0x0800 - 0xFFFF <=> 0b1xxxxxxx 0bxxxxxxxx (0x8140 - 0xFEFF)
+    // Must provide file descriptor to `gbktable.bin` which is a 47KB
+    // mapping file between 16Bit chinese unicode and GBK index.
+    static char buf[3];
+    buf[0] = '\0';
+    if (unicode < 0x800 || unicode > 0xFFFF || !fd || fseek(fd, 0, SEEK_SET))
+        return buf;
+    for (uint16_t val; fread(&val, 1, 2, fd) == 2;) {
+        if (unicode != val) continue;
+        uint16_t idx = ftell(fd) / 2, num = idx / (0x100 - 0x40) + 1;
+        uint16_t gbk = 0x8100 + idx + num * 0x40;
+        buf[0] = gbk >> 8;
+        buf[1] = gbk & 0xFF;
+        buf[2] = '\0';
+        break;
+    }
+    return buf;
+}
+
+static inline size_t gbk2unicode(FILE *fd, const char *str, uint32_t *uptr) {
+    if (!fd || !str || str[0] > 0xFE) return 0;
+    if (str[0] < 0x81) {
+        if (uptr) *uptr = str[0];
+        return str[0] ? 1 : 0;
+    }
+    uint16_t unicode = 0, val = ((str[0] - 0x81) << 8) | str[1];
+    if (!fseek(fd, (val - CDIV(val, 0x100) * 0x40) * 2, SEEK_SET) &&
+        fread(&unicode, 1, 2, fd) == 2 && unicode && uptr) *uptr = unicode;
+    return unicode ? 2 : 0;
+}
 
 #ifdef __cplusplus
 }

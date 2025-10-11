@@ -1,7 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
 
-include($ENV{IDF_PATH}/tools/cmake/version.cmake)
-
 set(COMPONENTS main)
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
 set(SDKCONFIG_BASE "${CMAKE_CURRENT_LIST_DIR}/sdkconfig")
@@ -18,12 +16,20 @@ if(EXISTS "$ENV{IDF_PATH}/../components")
     set(EXTRA_COMPONENT_DIRS "$ENV{IDF_PATH}/../components")
 endif()
 
-set(helper_py python "${CMAKE_CURRENT_LIST_DIR}/helper.py")
-execute_process(COMMAND ${helper_py} prebuild)
-
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
+
+idf_build_get_property(python PYTHON)
 idf_build_set_property(MINIMAL_BUILD ON)
+
+set(helper_py "${python}" "${CMAKE_CURRENT_LIST_DIR}/helper.py")
+execute_process(COMMAND ${helper_py} prebuild)  # run once for configure
+
 project(espbase VERSION 1.1.0)
+
+add_custom_command(
+    TARGET ${PROJECT_NAME}.elf POST_BUILD
+    COMMAND ${helper_py} postbuild              # run for each build
+)
 
 # CONFIG_BASE_XXX are defined in main/Kconfig.projbuild
 

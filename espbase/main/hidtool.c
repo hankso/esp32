@@ -89,7 +89,7 @@ void hidtool_initialize() {
         HIDTool.pad = GMPAD_SWITCH;
         HIDTool.rlen[REPORT_ID_GMPAD] = SIZEOF(hid_gmpad_report_t, nswitch);
         hidfile = "switch.hid";                                     // 170 Bytes
-        snprintf(HIDTool.dstr, blen, "Mintendo wireless gamepad");
+        snprintf(HIDTool.dstr, blen, "Nintendo wireless gamepad");
     } else if (!strcasecmp(Config.app.HID_MODE, "DSENSE")) {
         HIDTool.vid = 0x054C;
         HIDTool.pid = 0x0CE6;

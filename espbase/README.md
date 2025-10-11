@@ -1,10 +1,5 @@
 # ESP Base project
 
-### NVS partition
-
-Run `python helper.py genid --pack` to generate nvs partition as `build/nvs.bin`.
-Run `python helper.py genid --pack --flash COMx` to flash into chip.
-
 ### LED PWM assignment
 
 - LEDC low speed mode
@@ -20,29 +15,6 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
   + Timer 2
     * Channel 3 Mux to PIN_BUZZ
     * 3 bit
-
-### I2C assignment
-
-- I2C master 0
-  + 400 KHz
-  + GPIO Expander
-    * ADDR 0x20, 0x21, 0x22
-  + VLX Sensor
-    * ADDR 0x29
-  + ALS Sensor
-    * ADDR: 0x44, 0x45, 0x46, 0x47
-  + GY39 Sensor
-    * ADDR 0x5B
-  + I2C Screen / Touch
-    * ADDR 0x3C
-
-### SPI assignment
-
-- SPI master
-  + host 0
-    * CS0: SDCard / SDFS
-    * CS1: GPIO Expander
-    * CS2: SPI Screen
 
 ### ESP32 GPIO assignment
 
@@ -102,14 +74,14 @@ Run `python helper.py genid --pack --flash COMx` to flash into chip.
 5. ADC2: ADC2 pins cannot be used when Wi-Fi is used. So, if you are using Wi-Fi and you are having trouble getting the value from an ADC2 GPIO, you may consider using an ADC1 GPIO instead, that should solve your problem.
 6. GPIO20 is only available on ESP32-PICO-V3 chip package.
 
-#### Example output of `gpio` command
-
 - ESP32 DevKit
     + LED: GPIO2
     + No GPIO0, 20, 37, 38
 - ESP32 Pico DevKit
     + LED: N/A
     + No GPIO20
+
+#### Example output of `gpio` command
 
 ```
 Native GPIO 0-39
@@ -129,11 +101,11 @@ PIN Value Usage
 12    LOW SPI MISO
 13    LOW SPI MOSI
 14    LOW SPI SCLK
-15   HIGH SPI CS0 (SDCard)
+15   HIGH SPI CS for SDCard
 16   HIGH Flash D2WD
 17   HIGH Flash D2WD
-18   HIGH SPI CS1 (Screen)
-19   HIGH SPI CS2 (GPIOExp)
+18   HIGH SPI CS for Screen
+19   HIGH SPI CS for GPIOExp
 20    LOW ESP32-PICO-V3
 21   HIGH I2C SDA0
 22   HIGH I2C SCL0
@@ -263,13 +235,13 @@ PIN Value Usage
 5    HIGH I2C SDA0
 6    HIGH I2C SCL0
 7    HIGH SPI Screen D/C
-8    HIGH SPI CS0 (SDCard)
-9    HIGH SPI CS1 (Screen)
-10   HIGH SPI CS2 (GPIOExp)
+8    HIGH SPI CS for Screen
+9    HIGH SPI CS for GPIOExp
+10   HIGH SPI CS for SDCard
 11    LOW SPI MOSI
 12    LOW SPI SCLK
 13    LOW SPI MISO
-14   HIGH SPI CS3 (Ethernet)
+14   HIGH SPI CS for Ethernet
 15    LOW Knob encoder A
 16    LOW Knob encoder B
 17    LOW Servo Pitch

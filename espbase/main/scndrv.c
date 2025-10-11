@@ -39,12 +39,12 @@ static struct {
     int axes[7];                // invc, invx, invy, swap, gapx, gapy, rot
     int bus, addr, speed, mode;
     gpio_num_t sda, scl;        // for I2C
-    union PACKED {
-        struct PACKED {
+    union {
+        struct {
             int bl, rst;
             int cs, dc;         // for SPI
             int wr, rd;         // for I80
-        };
+        } PACKED;
         int pins[6 + SOC_LCD_I80_BUS_WIDTH];
     };
 #if defined(WITH_U8G2)
@@ -79,13 +79,13 @@ static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
         if (conf.pin_bit_mask) return gpio_config(&conf);
     }   break;
     case U8X8_MSG_GPIO_CS:
-        if (ctx.cs != GPIO_NUM_NC)  gpio_set_level(ctx.cs, arg); break;
+        if (ctx.cs != GPIO_NUM_NC)  { gpio_set_level(ctx.cs, arg); } break;
     case U8X8_MSG_GPIO_RESET:
-        if (ctx.rst != GPIO_NUM_NC) gpio_set_level(ctx.rst, arg); break;
+        if (ctx.rst != GPIO_NUM_NC) { gpio_set_level(ctx.rst, arg); } break;
     case U8X8_MSG_GPIO_I2C_CLOCK:
-        if (ctx.scl != GPIO_NUM_NC) gpio_set_level(ctx.scl, arg); break;
+        if (ctx.scl != GPIO_NUM_NC) { gpio_set_level(ctx.scl, arg); } break;
     case U8X8_MSG_GPIO_I2C_DATA:
-        if (ctx.sda != GPIO_NUM_NC) gpio_set_level(ctx.sda, arg); break;
+        if (ctx.sda != GPIO_NUM_NC) { gpio_set_level(ctx.sda, arg); } break;
     case U8X8_MSG_DELAY_MILLI: msleep(arg); break;
     }
     return 0;
@@ -381,6 +381,8 @@ void scn_initialize() {
     if (( ctx.probed = ctx.bus > 0 )) {
         LOOPN(i, ctx.bus) { bus_config.data_gpio_nums[i] = ctx.pins[6 + i]; }
         ctx.probed = esp_lcd_new_i80_bus(&bus_config, &ctx.bhdl) == ESP_OK;
+    } else {
+        ESP_LOGE(TAG, "Invalid pins `%s` for Screen", str);
     }
 #elif defined(CONFIG_BASE_SCN_SPI)              // SPI Screen
     ctx.speed = CONFIG_BASE_SCN_SPI_SPEED;

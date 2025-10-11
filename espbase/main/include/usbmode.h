@@ -6,13 +6,6 @@
 
 #pragma once
 
-#if __has_include("tusb.h")
-#   define WITH_TUSB
-#   ifndef DUAL_TUSB
-#       include "tusb.h"
-#   endif
-#endif
-
 #include "globals.h"
 #include "hidtool.h"
 
@@ -29,23 +22,23 @@
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
 #   if !defined(IDF_TARGET_V4) && !__has_include("class/hid/hid_device.h")
-#       warning "Run `idf.py add-dependency esp_tinyusb`"
+#       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
 #       undef CONFIG_BASE_USB_HID_DEVICE
 #   endif
 #endif
 
 #if defined(CONFIG_BASE_USB_CDC_HOST) && !__has_include("usb/cdc_acm_host.h")
-#   warning "Run `idf.py add-dependency usb_host_cdc_acm`"
+#   warning "Run `idf.py add-dependency espressif/usb_host_cdc_acm`"
 #   undef CONFIG_BASE_USB_CDC_HOST
 #endif
 
 #if defined(CONFIG_BASE_USB_MSC_HOST) && !__has_include("msc_host.h")
-#   warning "Run `idf.py add-dependency usb_host_msc`"
+#   warning "Run `idf.py add-dependency espressif/usb_host_msc`"
 #   undef CONFIG_BASE_USB_MSC_HOST
 #endif
 
 #if defined(CONFIG_BASE_USB_HID_HOST) && !__has_include("usb/hid_host.h")
-#   warning "Run `idf.py add-dependency usb_host_hid`"
+#   warning "Run `idf.py add-dependency espressif/usb_host_hid`"
 #   undef CONFIG_BASE_USB_HID_HOST
 #endif
 

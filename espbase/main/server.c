@@ -8,7 +8,7 @@
 #include "config.h"             // for Config
 #include "update.h"             // for ota_updation_xxx
 #include "filesys.h"            // for filesys_xxx
-#include "avcmode.h"            // for AUDIO_XXX && VIDEO_XXX
+#include "avitool.h"            // for AUDIO_XXX && VIDEO_XXX
 #include "ledmode.h"            // for led_set_blink
 #include "console.h"            // for console_handle_xxx
 #include "timesync.h"           // for format_datetime
@@ -351,7 +351,8 @@ static const char * guess_type(const char *filename) {
 
 static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
     struct stat st;
-    const char *fullpath = fnorm(path);
+    filesys_path_t fullpath;
+    fnormr(fullpath, path);
     char *basename = strrchr(fullpath, '/');
     if (!basename || stat(fullpath, &st))
         return send_err(req, 500, "Failed to open file");
@@ -365,6 +366,7 @@ static esp_err_t send_file(httpd_req_t *req, const char *path, bool dl) {
     char clen[10], cdis[strlen(basename) + 24], *buf = basename + 1;
     httpd_resp_set_type(req, guess_type(basename));
     httpd_resp_set_hdr(req, "Last-Modified", mtime);
+    if (dl) httpd_resp_set_hdr(req, "Cache-Control", "no-store");
     sprintf(cdis, "%s; filename=\"%s\"", dl ? "attachment" : "inline", buf);
     httpd_resp_set_hdr(req, "Content-Disposition", cdis);
     if (endswith(basename, ".gz"))
@@ -746,15 +748,12 @@ static esp_err_t on_config(httpd_req_t *req) {
     return ESP_OK;
 }
 
-static inline void reboot(void *arg) { esp_restart(); NOTUSED(arg); }
-
 static esp_err_t on_update_file(httpd_req_t *req, const char *name,
                                 size_t idx, char *data, size_t len, bool end)
 {
     if (!idx) {
         fprintf(stderr, "Update file: %s\n", name);
         if (strcmp(name, "update")) return ESP_ERR_HTTPD_SKIP_DATA;
-        if (!has_param(req, "size", -1) && !ota_updation_begin(0)) goto error;
         led_set_blink(1);
     }
     if (len && !ota_updation_write(data, len)) goto error;
@@ -762,7 +761,8 @@ static esp_err_t on_update_file(httpd_req_t *req, const char *name,
         if (!ota_updation_end()) goto error;
         fprintf(stderr, "Update success: %s\n", format_size(idx + len));
         send_str(req, "OTA Updation success: rebooting now");
-        setTimeout(500, reboot, NULL);
+        reboot_ctx_t ctx = { .timeout_ms = 500 };
+        reboot(&ctx);
     }
     return ESP_OK;
 error:
@@ -836,16 +836,16 @@ static UNUSED int socket_send_all(int fd, void *buf, size_t len) {
 static http_media_t audio_ctx;
 
 static void handle_audio_streaming(void *arg) {
-    audio_evt_t *evt = arg;
-    notify_increase(evt->task);
-    if (!evt->len) goto stop;
-    if (!socket_send_all(audio_ctx.fd, evt->data, evt->len)) goto exit;
+    audio_data_t *pkt = arg;
+    notify_increase(pkt->task);
+    if (!pkt->len) goto stop;
+    if (!socket_send_all(audio_ctx.fd, pkt->data, pkt->len)) goto exit;
 stop:
     UREGEVTS(AVC, audio_ctx.inst);
     if (audio_ctx.stop) AUDIO_STOP();
     ESP_LOGI(TAG, "Audio stream to %s stopped", audio_ctx.addr);
 exit:
-    notify_decrease(evt->task);
+    notify_decrease(pkt->task);
 }
 #endif
 
@@ -854,17 +854,17 @@ static http_media_t video_ctx;
 
 static void handle_video_streaming(void *arg) {
     if (!video_ctx.fd) return;  // once
-    video_evt_t *evt = arg;
-    notify_increase(evt->task);
-    if (!evt->mode) goto exit;  // VID_EVENT_START
-    if (!evt->len) goto stop;   // VID_EVENT_STOP
+    video_data_t *pkt = arg;
+    notify_increase(pkt->task);
+    if (!pkt->mode) goto exit;  // VID_EVENT_START
+    if (!pkt->len) goto stop;   // VID_EVENT_STOP
     static char bdary[51 + 14 + 1] =
         "--FRAME\r\n"
         "Content-Type: image/jpeg\r\n"
         "Content-Length: ";
-    int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", evt->len);
+    int blen = 51 + snprintf(bdary + 51, 15, "%d\r\n\r\n", pkt->len);
     if (!socket_send_all(video_ctx.fd, bdary, blen) &&
-        !socket_send_all(video_ctx.fd, evt->data, evt->len) &&
+        !socket_send_all(video_ctx.fd, pkt->data, pkt->len) &&
         !video_ctx.once) goto exit;
     if (video_ctx.once) {
         httpd_sess_trigger_close(server, video_ctx.fd);
@@ -875,11 +875,11 @@ stop:
     if (video_ctx.stop) VIDEO_STOP();
     ESP_LOGI(TAG, "Video stream to %s stopped", video_ctx.addr);
 exit:
-    notify_decrease(evt->task);
+    notify_decrease(pkt->task);
 }
 #endif
 
-#if defined(CONFIG_BASE_USE_I2S) || defined(CONFIG_BASE_USE_CAM)
+#ifdef CONFIG_BASE_USE_AVC
 static void on_media_data(void *func, esp_event_base_t b, int32_t i, void *p) {
     // this function is called in sys_evt task
     // recv data from capture task

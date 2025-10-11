@@ -219,7 +219,7 @@ typedef struct {
     uint8_t : 3;
 } PACKED hid_keybd_output_t;
 
-#if !defined(WITH_TUSB) || defined(DUAL_TUSB)
+#if !CFG_TUD_HID
 typedef struct {
     uint8_t buttons;
 #   define MOUSE_BUTTON_LEFT                BIT0

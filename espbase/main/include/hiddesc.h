@@ -8,8 +8,6 @@
 
 #pragma once
 
-#define DUAL_TUSB
-
 /*
  * Copied from tinyusb-v0.9.0/src/class/hid/hid.h
  * And HID Usage Table for Universal Serial Device 1.21

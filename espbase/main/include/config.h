@@ -13,7 +13,7 @@ extern "C" {
 #endif
 
 // All values (number, boolean, text) are stored as strings
-// `1`, `on`, `yes` are interpreted as True (see utils.c -> strtob)
+// `1`, `on`, `yes` are interpreted as True (see globals.h -> strtob)
 
 typedef struct {
     const char * TIMEZONE;  // Set local timezone (see man tzset(3))

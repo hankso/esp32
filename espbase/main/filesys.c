@@ -421,7 +421,7 @@ void filesys_pstat(filesys_type_t type, const char *path) {
     }
     char tbuf[3][36]; // YYYY-mm-dd HH:MM:SS.MILLISECS TZONE
     LOOPN(i, 3) {
-        struct timespec *ts = &st.st_atim + i * sizeof(ts);
+        struct timespec *ts = &st.st_atim + i;
         struct tm *ptm = localtime(&ts->tv_sec);
         if (strftime(tbuf[i], 36, "%F %T.123456789 %z", ptm)) {
             sprintf(tbuf[i] + 20, "%09ld", ts->tv_nsec);

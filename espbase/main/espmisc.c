@@ -1,5 +1,5 @@
 /* 
- * File: utils.c
+ * File: espmisc.c
  * Authors: Hank <hankso1106@gmail.com>
  * Create: 2020-03-20 21:37:14
  */
@@ -23,8 +23,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-esp_err_t errval() {
-    switch (errno) {
+esp_err_t errval(int error) {
+    switch (error) {
     case 0:         return ESP_OK;
     case ENOMEM:    return ESP_ERR_NO_MEM;
     case EINVAL:    return ESP_ERR_INVALID_ARG;
@@ -35,17 +35,54 @@ esp_err_t errval() {
     case ENOENT:    return ESP_ERR_NOT_FOUND;
     case ENOTSUP:   return ESP_ERR_NOT_SUPPORTED;
     case ETIMEDOUT: return ESP_ERR_TIMEOUT;
+#ifndef IDF_TARGET_V4
     case EPERM:     return ESP_ERR_NOT_ALLOWED;
+#endif
     default:        return ESP_FAIL;
     }
 }
 
-const char *errstr() {
-    esp_err_t err = errval();
-    return err == ESP_FAIL && errno ? strerror(errno) : esp_err_to_name(err);
+const char *errstr(int error) {
+    esp_err_t err = errval(error);
+    return err == ESP_FAIL && error ? strerror(error) : esp_err_to_name(err);
 }
 
-void msleep(uint32_t ms) { vTaskDelay(ms / portTICK_PERIOD_MS); }
+void reboot(void *arg) {
+    if (!arg) esp_restart();
+    const char *T = Config.info.NAME;
+    reboot_ctx_t *ptr = (reboot_ctx_t *)arg;
+    reboot_ctx_t ctx = *ptr;                            // local copy
+    if (ctx.timeout_ms) {
+        uint32_t ts = pdTICKS_TO_MS(xTaskGetTickCount());
+        if (ctx.target_ms > ts) {
+            ESP_LOGW(T, "Will reboot in %s", format_time(ctx.target_ms - ts));
+            return;
+        }
+        if (xTaskGetCurrentTaskHandle() != ctx.task) {  // create or update
+            TRYNULL(ctx.task, vTaskDelete);
+            if (xTaskCreate(
+                reboot, "reboot", 4096, &ctx, 20, (TaskHandle_t *)&ctx.task
+            ) == pdPASS) {
+                ESP_LOGW(T, "Will reboot in %s", format_time(ctx.timeout_ms));
+                ptr->target_ms = ctx.target_ms = ts + ctx.timeout_ms;
+                ptr->task = ctx.task;
+                return;
+            }                                           // ERR_NO_MEM
+        } else {
+            msleep(ctx.timeout_ms);                     // in task
+        }
+    }
+    if (ctx.halt) {
+#ifdef CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT
+        esp_system_abort("Manually shutdown");
+#else
+        ESP_LOGW(T, "CONFIG_ESP_SYSTEM_PANIC_PRINT_HALT not set! Will reboot");
+#endif
+    }
+    esp_restart();
+}
+
+void msleep(uint32_t ms) { vTaskDelay(TIMEOUT(ms)); }
 
 uint64_t asleep(uint32_t ms, uint64_t next) {
     uint64_t curr = xTaskGetTickCount();
@@ -57,295 +94,15 @@ uint64_t asleep(uint32_t ms, uint64_t next) {
     return next + TIMEOUT(ms);
 }
 
-int stridx(const char *str, const char *tpl) {
-    size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
-    if (!slen || !tlen) return -1;
-    size_t cnt = strncnt(tpl, ",;/\\|", -1);
-    uint16_t idx, ret = parse_u16(str, &idx);       // case 1: number as index
-    if (ret && idx < MIN(cnt ?: tlen, tlen)) return idx;
-    const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
-    if (tmp && cnt) return strncnt(tpl, ",;/\\|", tmp - tpl);
-    if (tmp && slen == 1) return tmp - tpl;         // case 3: "ABC"
-    if (slen > 1 && !cnt && ( tmp = strchr(tpl, str[0]) ))
-        return tmp - tpl;                           // case 4: match first char
-    printf("Invalid `%s`: choose from `%s`\n", str, tpl);
-    return -1;
-}
-
-bool strtob(const char *str) {
-    if (!strlen(str ?: "")) return false;
-    return strspn(str, "1yY") == 1 || !strcasecmp(str, "on");
-}
-
-size_t strncnt(const char *str, const char *wants, size_t slen) {
-    if (!strlen(wants ?: "")) return 0;
-    size_t cnt = 0, idx = 0, len = strnlen(str ?: "", slen);
-    while (idx < len) { if (strchr(wants, str[idx++])) cnt++; }
-    return cnt;
-}
-
-char * strtrim(char *str, const char *chars) {
-    size_t slen = strlen(str ?: "");
-    if (!slen || !chars) return str;
-    size_t head = strspn(str, chars);
-    size_t tail = slen - 1;
-    while (tail > head && strchr(chars, str[tail])) { tail--; }
-    str[tail + 1] = '\0';
-    return str + head;
-}
-
-char * b64encode(const char *inp, char *dst, size_t slen) {
-    const char *end = inp + slen, chars[] =
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    if (!inp || (!dst && ECALLOC(dst, 1, CDIV(slen, 3) * 4 + 1))) return dst;
-    for (char *out = dst; inp < end; inp += 3, out += 4) {
-        uint32_t u24 = inp[0] << 16;
-        if ((inp + 1) < end) u24 |= inp[1] << 8;
-        if ((inp + 2) < end) u24 |= inp[2];
-        out[0] = chars[(u24 >> 18) & 0x3F];
-        out[1] = chars[(u24 >> 12) & 0x3F];
-        out[2] = (inp + 1) >= end ? '=' : chars[(u24 >> 6) & 0x3F];
-        out[3] = (inp + 2) >= end ? '=' : chars[u24 & 0x3F];
-    }
-    return dst;
-}
-
-bool endswith(const char *str, const char *tail) {
-    if (!str || !tail) return false;
-    int offset = strlen(str) - strlen(tail);
-    return !strcmp(str + MAX(offset, 0), tail);
-}
-
-bool startswith(const char *str, const char *head) {
-    if (!str || !head) return false;
-    size_t headlen = strlen(head);
-    return strlen(str) < headlen ? false : !strncmp(str, head, headlen);
-}
-
-bool parse_f64(const char *str, double *ptr) {
-    if (!strlen(str ?: "")) return false;
-    char *endptr;
-    double val = strtod(str, &endptr);
-    if (endptr == str) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_f32(const char *str, float *ptr) {
-    if (!strlen(str ?: "")) return false;
-    char *endptr;
-    float val = strtof(str, &endptr);
-    if (endptr == str) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_s64(const char *str, int64_t *ptr) {
-    if (!strlen(str ?: "")) return false;
-    char *endptr;
-    int64_t val = strtoll(str, &endptr, 0);
-    if (endptr == str) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_s32(const char *str, int32_t *ptr) {
-    int64_t val = 0;
-    if (!parse_s64(str, &val) || val < INT32_MIN || val > INT32_MAX) return 0;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_u32(const char *str, uint32_t *ptr) {
-    int64_t val = 0;
-    if (!parse_s64(str, &val) || val < 0 || val > UINT32_MAX) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_u16(const char *str, uint16_t *ptr) {
-    int64_t val = 0;
-    if (!parse_s64(str, &val) || val < 0 || val > UINT16_MAX) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-bool parse_u8(const char *str, uint8_t *ptr) {
-    int64_t val = 0;
-    if (!parse_s64(str, &val) || val < 0 || val > UINT8_MAX) return false;
-    if (ptr) *ptr = val;
-    return true;
-}
-
-size_t parse_all(const char *str, int *var, size_t size) {
-    size_t len = strlen(str ?: ""), idx = 0;
-    const char *ptr = str, *end = str + len;
-    char *endptr;
-    while (ptr < end && idx < size) {
-        int val = strtol(ptr, &endptr, 0);
-        if (endptr != ptr) var[idx++] = val;
-        ptr = endptr + 1;
-    }
-    return idx;
-}
-
 size_t parse_pin(const char *str, int *arr, size_t len, const char **names) {
     size_t num = parse_all(str, arr, len);
-    LOOPN(i, names ? num : 0) {
+    if (!names || !num) return 0;
+    LOOPN(i, num) {
         if (arr[i] == GPIO_NUM_NC || !names[i]) continue;
         const char *usage = gpio_usage(arr[i], names[i]);
-        if (!usage || startswith(usage, "Strapping")) continue; // not used
-        if (strcmp(usage, names[i])) {
-            printf("Invalid pin %d: already used as %s", arr[i], usage);
-            return 0;
-        }
+        if (usage != names[i]) return 0;
     }
-    if (names && !num) printf("Invalid pins: `%s`\n", str);
     return num;
-}
-
-static uint8_t numdigits(int n) {
-    uint8_t i = !n;
-    while (n) { n /= 10; i++; }
-    return i;
-}
-
-static char hexdigits(uint8_t v) {
-    if (v < 10) return v + '0';
-    if (v > 15) return hexdigits(v % 16);
-    return v - 10 + 'A';
-}
-
-void hexdump(const void *src, size_t bytes, size_t maxlen) {
-    size_t maxbytes = maxlen / 3;
-    LOOPN(i, bytes) {
-        if (i && i % maxbytes == 0) putchar('\n');
-        printf("%02X ", ((uint8_t *)src)[i]);
-    }
-    if (bytes) putchar('\n');
-}
-
-void hexdumpl(const void *src, size_t bytes, size_t maxlen) {
-    size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
-    LOOPN(i, count) { printf("%02X ", ((uint8_t *)src)[i]); }
-    if (bytes && maxbytes && bytes > maxbytes)
-        printf("... [%u/%u]", count, bytes);
-    putchar('\n');
-}
-
-char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
-    if (!dst || !maxlen) return 0;
-    size_t maxbytes, count, offset = 0;
-    if ((bytes * 2 + 1) <= maxlen) {
-        maxbytes = (maxlen - 1) / 2;
-    } else if (maxlen < (9 + numdigits(bytes) + numdigits(maxlen / 2))) {
-        dst[0] = '\0';
-        return dst; // no space
-    } else { // append tail to dst
-        offset = maxlen - 9 - numdigits(bytes);
-        maxbytes = (offset - numdigits(maxlen / 2)) / 2;
-    }
-    count = MIN(bytes, maxbytes);
-    LOOPN(i, count) {
-        dst[2 * i + 0] = hexdigits(((uint8_t *)src)[i] >> 4);
-        dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
-    }
-    if (offset) {
-        offset -= numdigits(count);
-        if (offset > (count * 2))
-            memset(dst + count * 2, ' ', offset - count * 2);
-        sprintf(dst + offset, " ... [%u/%u]", count, bytes);
-    } else {
-        dst[count * 2] = '\0';
-    }
-    return dst;
-}
-
-// Convert between Unicode and UTF-8 encoded Bytes
-// 0x000000 - 0x00007F <=> 0b0xxxxxxx
-// 0x000080 - 0x0007FF <=> 0b110xxxxx 0b10xxxxxx
-// 0x000800 - 0x00FFFF <=> 0b1110xxxx 0b10xxxxxx 0b10xxxxxx
-// 0x010000 - 0x1FFFFF <=> 0b11110xxx 0b10xxxxxx 0b10xxxxxx 0b10xxxxxx
-const char * unicode2str(uint32_t unicode) {
-    static char buf[5];
-    if (unicode < 0x80) {
-        buf[0] = unicode;
-        buf[1] = '\0';
-    } else if (unicode < 0x800) {
-        buf[0] = 0xC0 | ((unicode >> 6) & 0x1F);
-        buf[1] = 0x80 | ((unicode >> 0) & 0x3F);
-        buf[2] = '\0';
-    } else if (unicode < 0x10000) {
-        buf[0] = 0xE0 | ((unicode >> 12) & 0xF);
-        buf[1] = 0x80 | ((unicode >> 6) & 0x3F);
-        buf[2] = 0x80 | ((unicode >> 0) & 0x3F);
-        buf[3] = '\0';
-    } else if (unicode < 0x1FFFFF) {
-        buf[0] = 0xF0 | ((unicode >> 18) & 0x7);
-        buf[1] = 0x80 | ((unicode >> 12) & 0x3F);
-        buf[2] = 0x80 | ((unicode >> 6) & 0x3F);
-        buf[3] = 0x80 | ((unicode >> 0) & 0x3F);
-        buf[4] = '\0';
-    } else {
-        buf[0] = '\0';
-    }
-    return buf;
-}
-
-size_t str2unicode(const char *str, uint32_t *uptr) {
-    if (!str || str[0] > 0xF7) return 0;
-    uint32_t nbytes, unicode;
-    if (str[0] >= 0xF0) {
-        nbytes = 4;
-        unicode = str[0] & 0x7;
-    } else if (str[0] >= 0xE0) {
-        nbytes = 3;
-        unicode = str[0] & 0xF;
-    } else if (str[0] >= 0xC0) {
-        nbytes = 2;
-        unicode = str[0] & 0x1F;
-    } else {
-        unicode = str[0];
-        nbytes = unicode ? 1 : 0;
-    }
-    if (strlen(str) < nbytes) return 0;
-    for (uint32_t i = 1; i < nbytes; i++) {
-        if ((str[i] >> 6) != 0x2) return 0; // invalid format
-        unicode = (unicode << 6) | (str[i] & 0x3F);
-    }
-    if (uptr) *uptr = unicode;
-    return nbytes;
-}
-
-// Convert between Unicode and GBK encoded Bytes
-// 0x0800 - 0xFFFF <=> 0b1xxxxxxx 0bxxxxxxxx (0x8140 - 0xFEFF)
-const char * unicode2gbk(FILE *fd, uint32_t unicode) {
-    static char buf[3];
-    buf[0] = '\0';
-    if (unicode < 0x800 || unicode > 0xFFFF || !fd || fseek(fd, 0, SEEK_SET))
-        return buf;
-    for (uint16_t val; fread(&val, 1, 2, fd) == 2;) {
-        if (unicode != val) continue;
-        uint16_t idx = ftell(fd) / 2, num = idx / (0x100 - 0x40) + 1;
-        uint16_t gbk = 0x8100 + idx + num * 0x40;
-        buf[0] = gbk >> 8;
-        buf[1] = gbk & 0xFF;
-        buf[2] = '\0';
-        break;
-    }
-    return buf;
-}
-
-size_t gbk2unicode(FILE *fd, const char *str, uint32_t *uptr) {
-    if (!fd || !str || str[0] > 0xFE) return 0;
-    if (str[0] < 0x81) {
-        if (uptr) *uptr = str[0];
-        return str[0] ? 1 : 0;
-    }
-    uint16_t unicode = 0, val = ((str[0] - 0x81) << 8) | str[1];
-    if (!fseek(fd, (val - CDIV(val, 0x100) * 0x40) * 2, SEEK_SET) &&
-        fread(&unicode, 1, 2, fd) == 2 && unicode && uptr) *uptr = unicode;
-    return unicode ? 2 : 0;
 }
 
 size_t gbk2str_r(const char *src, char *dst, size_t dlen) {
@@ -370,30 +127,60 @@ char * gbk2str(const char *src) {
     return dst;
 }
 
-static uint8_t unicode_table[][10] = {
-    { 0x25, 5, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                      // circle
-    { 0x25, 8, 0x8F, 0x8E, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x88 },    // v bars
-    { 0x25, 8, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88 },    // h bars
-    { 0x25, 4, 0x91, 0x92, 0x93, 0x89 },                            // shades
-    { 0x28, 8, 0x46, 0x07, 0x0B, 0x19, 0x38, 0xB0, 0xE0, 0xC4 },    // dots
+static uint8_t utpls[][10] = {
+    { 0x25, 0x05, 0xCB, 0xD4, 0xD1, 0xD5, 0xCF },                   // ○◔◑◕●
+    { 0x25, 0x18, 0x8F, 0x8E, 0x8D, 0x8C, 0x8B, 0x8A, 0x89, 0x88 }, // ▏▎▍▌▋▊▉█
+    { 0x25, 0x18, 0x81, 0x82, 0x83, 0x84, 0x85, 0x86, 0x87, 0x88 }, // ▁▂▃▄▅▆▇█
+    { 0x25, 0x14, 0x91, 0x92, 0x93, 0x88 },                         // ░▒▓█
+    { 0x28, 0x08, 0x46, 0x07, 0x0B, 0x19, 0x38, 0xB0, 0xE0, 0xC4 }, // ⡆⠇⠋⠙⠸⢰⣠⣄
 };
 
-esp_err_t unicode_tricks(const unicode_trick_t *conf) {
-    if (conf->index >= LEN(unicode_table)) return ESP_ERR_INVALID_ARG;
-    uint16_t base = (uint16_t)unicode_table[conf->index][0] << 8;
-    uint16_t intv = conf->timeout_ms / unicode_table[conf->index][1];
-    uint8_t count = MAX(conf->repeat, 1);
-    FILE *stream = conf->stream ?: stderr;
-    LOOPN(i, unicode_table[conf->index][1]) {
-        uint8_t code = unicode_table[conf->index][i + 2];
+esp_err_t unicode_tricks(const unicode_trick_t *cfg) {
+    if (cfg->index >= LEN(utpls)) return ESP_ERR_INVALID_ARG;
+    uint8_t *tpl = utpls[cfg->index], loop = tpl[1] & 0x10;
+    uint8_t iter = tpl[1] & 0xF, count = MAX(1, cfg->repeat);
+    uint16_t base = tpl[0] << 8, intv = 1000 / iter;
+    FILE *stream = cfg->stream ?: stderr;
+    LOOPN(i, cfg->timeout_ms / intv) {
+        uint8_t idx = i % iter;
+        if (loop && (i / iter) % 2) idx = iter - 1 - idx;
+        const char *str = unicode2str(base | tpl[2 + idx]);
         fputc('\r', stream);
-        LOOPN(j, count) { fprintf(stream, unicode2str(base | code)); }
+        LOOPN(j, count) { fprintf(stream, str); }
         fflush(stream);
-        if (intv) msleep(intv);
+        msleep(intv);
     }
     fputc('\n', stream);
     fflush(stream);
     return ESP_OK;
+}
+
+const char * format_size(double bytes) {
+    static const int dems[] = { 0, 1, 2, 3, 3, 4 };
+    static char buf[16]; // xxxx.xx u\0
+    int exp = 0;
+    while (exp < LEN(dems) && bytes > 1024) {
+        bytes /= 1024;
+        exp++;
+    }
+    snprintf(buf, sizeof(buf), "%.*f %cB", dems[exp], bytes, " KMGTP"[exp]);
+    return buf;
+}
+
+const char * format_time(double ms) {
+    static char buf[16];
+    if (ms < 1e3) {
+        snprintf(buf, sizeof(buf), "%3.0f ms", ms);
+    } else if (ms < 60e3) {
+        snprintf(buf, sizeof(buf), "%4.1f s", ms / 1e3);
+    } else if (ms < 3600e3) {
+        snprintf(buf, sizeof(buf), "%4.1f m", ms / 60e3);
+    } else if (ms < 86400e3) {
+        snprintf(buf, sizeof(buf), "%4.1f h", ms / 3600e3);
+    } else {
+        snprintf(buf, sizeof(buf), "%4.1f d", ms / 86400e3);
+    }
+    return buf;
 }
 
 const char * format_sha256(const void *src, size_t len) {
@@ -412,80 +199,39 @@ const char * format_binary(uint64_t val, size_t maxbits) {
     return buf;
 }
 
-const char * format_size(double bytes) {
-    static const int dems[] = { 0, 1, 2, 3, 3, 4 };
-    static char buf[16]; // xxxx.xx u\0
-    int exp = 0;
-    while (exp < LEN(dems) && bytes > 1024) {
-        bytes /= 1024;
-        exp++;
-    }
-    snprintf(buf, sizeof(buf), "%.*f %cB", dems[exp], bytes, " KMGTP"[exp]);
-    return buf;
-}
-
-const char * format_time(double secs) {
-    static char buf[16];
-    if (secs < 1) {
-        snprintf(buf, sizeof(buf), "%3.0f ms", secs * 1e3);
-    } else if (secs < 60) {
-        snprintf(buf, sizeof(buf), "%4.1f s", secs);
-    } else if (secs < 3600) {
-        snprintf(buf, sizeof(buf), "%4.1f m", secs / 60);
-    } else if (secs < 86400) {
-        snprintf(buf, sizeof(buf), "%4.1f h", secs / 3600);
-    } else if (secs < UINT32_MAX) {
-        snprintf(buf, sizeof(buf), "%4.1f d", secs / 86400);
-    }
-    return buf;
-}
-
-static void * createTimer(int64_t us, void (*func)(void *), void *arg) {
-    esp_timer_handle_t hdl = NULL;
-    const esp_timer_create_args_t args = { .callback = func, .arg = arg };
-    if (!func || esp_timer_create(&args, &hdl) != ESP_OK) {
-        hdl = NULL;
-    } else if (us < 0) {
-        esp_timer_start_once(hdl, -us);
-    } else {
-        esp_timer_start_periodic(hdl, us);
-    }
-    return hdl;
-}
-
-void * setTimeout(uint32_t ms, void (*func)(void *), void *arg) {
-    return createTimer((int64_t)ms * -1000, func, arg);
-}
-
-void * setInterval(uint32_t ms, void (*func)(void *), void *arg) {
-    return createTimer((int64_t)ms * +1000, func, arg);
-}
-
-void clearTimer(void *hdl) {
-    if (!hdl) return;
-    esp_timer_stop(hdl);
-    esp_timer_delete(hdl);
-}
-
 bool notify_increase(void *task) {
-    return task ? xTaskNotifyGive(task) : false;
+    if (!task) return false;
+    if (!xPortInIsrContext()) return xTaskNotifyGive(task);
+    vTaskNotifyGiveFromISR(task, NULL);
+    return true;
 }
 
 bool notify_decrease(void *task) {
     uint32_t val = 0;
-    if (task) xTaskNotifyAndQuery(task, 0, eNoAction, &val);
-    return val ? xTaskNotify(task, val - 1, eSetValueWithOverwrite) : false;
+    if (xPortInIsrContext()) {
+        if (task) xTaskNotifyAndQueryFromISR(task, 0, eNoAction, &val, NULL);
+        if (!val) return false;
+        return xTaskNotifyFromISR(task, val - 1, eSetValueWithOverwrite, NULL);
+    } else {
+        if (task) xTaskNotifyAndQuery(task, 0, eNoAction, &val);
+        if (!val) return false;
+        return xTaskNotify(task, val - 1, eSetValueWithOverwrite);
+    }
 }
 
 bool notify_wait_for(uint32_t target, uint32_t tout_ms, uint32_t wait_ms) {
-    uint32_t val = ulTaskNotifyValueClear(NULL, 0);
-    if (val == target && !xTaskNotifyWait(0, 0, &val, TIMEOUT(wait_ms)))
-        return true;
-    TickType_t ts = xTaskGetTickCount();
-    while (val != target && tout_ms) {
-        if (!xTaskNotifyWait(0, 0, &val, TIMEOUT(tout_ms))) break;
-        TickType_t dt = xTaskGetTickCount() - ts; ts += dt;
-        if (tout_ms != -1) tout_ms -= MIN(tout_ms, pdTICKS_TO_MS(dt));
+    uint32_t val = ulTaskNotifyValueClear(NULL, 0); // get value without clear
+    TickType_t wait = TIMEOUT(wait_ms), tout = TIMEOUT(tout_ms);
+    if (val == target && wait && !xTaskNotifyWait(0, 0, &val, wait))
+        return true; // target matched and not notified in wait_ms
+    TickType_t ts = xTaskGetTickCount(), dt;
+    while (val != target && tout) {
+        if (!xTaskNotifyWait(0, 0, &val, tout)) break;
+        if (tout != portMAX_DELAY) {
+            if (( dt = xTaskGetTickCount() - ts ) > tout) break;
+            tout -= dt;
+            ts += dt;
+        }
     }
     return val == target;
 }
@@ -535,7 +281,7 @@ void task_info(tsort_t sort) {
         tmp = tasks[i]; tasks[i] = tasks[j]; tasks[j] = tmp;
     } }
     printf("S ID CPU Pri Name            StackHW Used %s\n",
-            format_time(pdTICKS_TO_MS(curr - task_hist[TASK_TIME]) / 1e3));
+            format_time(pdTICKS_TO_MS(curr - task_hist[TASK_TIME])));
     LOOPN(i, num) {
         printf(
             "%c %-2d %3d %3d %-15s %7s %3.0f%% ",

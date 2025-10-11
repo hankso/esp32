@@ -1,6 +1,6 @@
 <script setup>
 import { type, rules } from '@/utils'
-import { listDir, readFile, uploadFile, createPath, deletePath } from '@/apis'
+import { listDir, download, uploadFile, createPath, deletePath } from '@/apis'
 
 import {
     mdiUpload,
@@ -293,7 +293,8 @@ onMounted(refresh)
                 <v-btn
                     icon
                     v-if="sfiles.length === 1"
-                    @click="readFile(sfiles[0], true)"
+                    target="_blank"
+                    :href="download(sfiles[0])"
                 >
                     <v-icon :icon="mdiDownload"></v-icon>
                     <v-tooltip activator="parent" location="bottom">

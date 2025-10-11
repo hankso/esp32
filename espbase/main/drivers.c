@@ -7,7 +7,7 @@
 #include "drivers.h"
 #include "hidtool.h"            // for hid_report_xxx
 #include "ledmode.h"            // for led_initialize
-#include "avcmode.h"            // for avc_initialize
+#include "avitool.h"            // for avi_initialize
 #include "sensors.h"            // for tscn_command
 #include "screen.h"             // for scn_initialize && scn_command
 #include "config.h"
@@ -189,8 +189,8 @@ static void adc_initialize() {
         if (!adc.calis[i])
             err = adc_cali_create_scheme_line_fitting(&line, &adc.calis[i]);
 #   endif
-#endif
 done:
+#endif
         if (err) {
            adc.chans[i] = -1;
            err = ESP_OK;
@@ -412,6 +412,11 @@ esp_err_t dac_cwave(uint8_t i, uint32_t v) {
 /*
  * Touch sensor (capacity pad or matrix or slider)
  */
+
+#if defined(CONFIG_BASE_USE_TPAD) && defined(IDF_TARGET_V4)
+#   warning "touch_element on IDF V4 only support ESP32-S2"
+#   undef CONFIG_BASE_USE_TPAD
+#endif
 
 #ifdef CONFIG_BASE_USE_TPAD
 #   include "soc/touch_sensor_periph.h"
@@ -694,7 +699,7 @@ esp_err_t i2c_wtrd(
 esp_err_t i2c_probe(uint8_t b, uint8_t a) {
     return ESP_ERR_INVALID_STATE; NOTUSED(b); NOTUSED(a);
 }
-#elif IDF_TARGET_V4
+#elif defined(IDF_TARGET_V4)
 static void i2c_initialize() {
     i2c_config_t cfg = {
         .mode             = I2C_MODE_MASTER,
@@ -714,16 +719,6 @@ static void i2c_initialize() {
     ESP_ERROR_CHECK( i2c_param_config(I2C_NUM_1, &cfg) );
     ESP_ERROR_CHECK( i2c_driver_install(I2C_NUM_1, cfg.mode, 0, 0, 0) );
 #   endif
-}
-
-esp_err_t i2c_probe(uint8_t bus, uint8_t addr) {
-    i2c_cmd_handle_t cmd = i2c_cmd_link_create();
-    i2c_master_start(cmd);
-    i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
-    i2c_master_stop(cmd);
-    esp_err_t err = i2c_master_cmd_begin(bus, cmd, TIMEOUT(20));
-    i2c_cmd_link_delete(cmd);
-    return err;
 }
 
 esp_err_t i2c_wtrd(             // optmized on i2c_master_write_read_device
@@ -750,7 +745,7 @@ esp_err_t i2c_wtrd(             // optmized on i2c_master_write_read_device
 }
 
 esp_err_t i2c_probe(uint8_t b, uint8_t a) { return i2c_wtrd(b, a, 0, 1, 0, 0); }
-#else // IDF_TARGET_V4
+#else // IDF_TARGET_V5
 static struct {
     i2c_master_bus_handle_t bus;
     i2c_master_dev_handle_t dev[0x80];
@@ -995,7 +990,6 @@ static esp_err_t i2c_gexp_init(uint8_t bus, uint8_t addr) {
         if (i2c_gexp[i].addr) continue;
         i2c_gexp[i].bus = bus;
         i2c_gexp[i].addr = addr;
-        i2c_gexp[i].data = data;
         return ESP_OK;
     }
     return ESP_ERR_INVALID_SIZE;
@@ -1208,10 +1202,6 @@ static const char * usage_table[GPIO_PIN_COUNT] = {
     [PIN_TXD]   = "UART TX" STR(CONFIG_BASE_UART_NUM),
     [PIN_RXD]   = "UART RX" STR(CONFIG_BASE_UART_NUM),
 #endif
-#ifdef CONFIG_BASE_USE_I2S
-    [PIN_CLK]   = "I2S CLK",
-    [PIN_DAT]   = "I2S DAT",
-#endif
 #ifdef CONFIG_BASE_USE_I2C0
     [PIN_SDA0]  = "I2C SDA0",
     [PIN_SCL0]  = "I2C SCL0",
@@ -1250,6 +1240,32 @@ const char * gpio_usage(gpio_num_t pin, const char *usage) {
     }
     return current;
 }
+
+#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 0) // backport from IDF v5.5
+#   include "hal/gpio_ll.h"
+
+typedef struct {
+    uint32_t fun_sel, sig_out;
+    gpio_drive_cap_t drv;
+    bool pu, pd, ie, oe, oe_ctrl_by_periph, oe_inv, od, slp_sel;
+} gpio_io_config_t;
+
+static esp_err_t gpio_get_io_config(gpio_num_t pin, gpio_io_config_t *cfg) {
+    if (!GPIO_IS_VALID_GPIO(pin)) return ESP_ERR_INVALID_ARG;
+#   ifdef IDF_TARGET_V4
+    memset(cfg, 0, sizeof(gpio_io_config_t));
+    return gpio_get_drive_capability(pin, &cfg->drv);
+#   else
+    uint32_t drv;
+    gpio_ll_get_io_config(GPIO_LL_GET_HW(GPIO_PORT_0), pin,
+        &cfg->pu, &cfg->pd, &cfg->ie, &cfg->oe,
+        &cfg->oe_ctrl_by_periph, &cfg->oe_inv, &cfg->od,
+        &drv, &cfg->fun_sel, &cfg->sig_out, &cfg->slp_sel);
+    cfg->drv = drv;
+    return ESP_OK;
+#   endif
+}
+#endif
 
 esp_err_t gpio_reconfig(gpio_num_t pin, const char *str) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
@@ -1434,32 +1450,6 @@ static void gpio_initialize() {
 #endif
 }
 
-#if ESP_IDF_VERSION < ESP_IDF_VERSION_VAL(5, 5, 0)  // backport from v5.5
-#   include "hal/gpio_ll.h"
-
-typedef struct {
-    uint32_t fun_sel, sig_out;
-    gpio_drive_cap_t drv;
-    bool pu, pd, ie, oe, oe_ctrl_by_periph, oe_inv, od, slp_sel;
-} gpio_io_config_t;
-
-esp_err_t gpio_get_io_config(gpio_num_t pin, gpio_io_config_t *cfg) {
-    if (!GPIO_IS_VALID_GPIO(pin)) return ESP_ERR_INVALID_ARG;
-#   ifdef IDF_TARGET_V4
-    memset(cfg, 0, sizeof(gpio_io_config_t));
-    return gpio_get_drive_capability(pin, &cfg->drv);
-#   else
-    uint32_t drv;
-    gpio_ll_get_io_config(GPIO_LL_GET_HW(GPIO_PORT_0), pin,
-        &cfg->pu, &cfg->pd, &cfg->ie, &cfg->oe,
-        &cfg->oe_ctrl_by_periph, &cfg->oe_inv, &cfg->od,
-        &drv, &cfg->fun_sel, &cfg->sig_out, &cfg->slp_sel);
-    cfg->drv = drv;
-    return ESP_OK;
-#   endif
-}
-#endif
-
 esp_err_t gexp_set_level(int pin, bool level) {
     if (GPIO_IS_VALID_GPIO(pin)) {
 #ifdef IDF_TARGET_V4
@@ -1637,7 +1627,7 @@ void driver_initialize() {
 #ifdef CONFIG_BASE_USE_LED
     led_initialize();
 #endif
-    avc_initialize();       // MIC and CAM
-    scn_initialize();       // LCD display
-    gexp_initialize();      // GPIO Expander
+    avi_initialize();
+    scn_initialize();
+    gexp_initialize();
 }
