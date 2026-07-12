@@ -6,6 +6,19 @@
 
 #pragma once
 
+#include "sdkconfig.h"
+#include "esp_err.h"
+#include "esp_log.h"
+#include "esp_event.h"
+#include "esp_system.h"
+#include "esp_idf_version.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
+#include "freertos/semphr.h"
+#include "freertos/event_groups.h"
+#include "cJSON.h"
+
 // ESP specific macros
 
 #define TIMEOUT(m)                                                          \
@@ -20,6 +33,7 @@
             if (ptr) (v) = ptr;                                             \
             ptr ? ESP_OK : ESP_ERR_NO_MEM;                                  \
         })
+#define MSFPO()             pdTICKS_TO_MS(xTaskGetTickCount())
 #define MUTEX()             xSemaphoreCreateBinary()
 #define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
 #define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
@@ -32,15 +46,22 @@
                 base##_EVENT, ESP_EVENT_ANY_ID, (inst));                    \
             (inst) = NULL;                                                  \
         } while (0)
+#define STRACE(tag, msg)                                                    \
+        for (int a, b = uxTaskGetStackHighWaterMark(NULL), done = 0; !done; \
+            a = uxTaskGetStackHighWaterMark(NULL),                          \
+            done = ({ ESP_LOGI(tag, "%s: %d Bytes", msg, b - a); 1; })      \
+        )
 
 // Version aliases
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(6, 0, 0)
+#   define IDF_TARGET_V6
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 #   define IDF_TARGET_V5
 #elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(4, 4, 0)
 #   define IDF_TARGET_V4
 #else
-#   warning "This project has only been tested on ESP-IDF v4.4 & v5.x"
+#   warning "This project has only been tested on ESP-IDF v4.4 & v5.x & v6.0"
 #endif
 
 #ifdef __cplusplus
@@ -60,7 +81,7 @@ typedef struct {
 void reboot(void *ctx);
 
 void msleep(uint32_t ms);
-uint64_t asleep(uint32_t ms, uint64_t state);
+TickType_t asleep(uint32_t ms, TickType_t state);
 
 size_t parse_pin(const char *, int *arr, size_t arrlen, const char **names);
 

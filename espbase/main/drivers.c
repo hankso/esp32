@@ -16,8 +16,6 @@
 #include "soc/soc_caps.h"
 #include "driver/ledc.h"
 #include "driver/rtc_io.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 #ifdef CONFIG_BASE_USE_BTN
 #   include "iot_button.h"
@@ -412,11 +410,6 @@ esp_err_t dac_cwave(uint8_t i, uint32_t v) {
 /*
  * Touch sensor (capacity pad or matrix or slider)
  */
-
-#if defined(CONFIG_BASE_USE_TPAD) && defined(IDF_TARGET_V4)
-#   warning "touch_element on IDF V4 only support ESP32-S2"
-#   undef CONFIG_BASE_USE_TPAD
-#endif
 
 #ifdef CONFIG_BASE_USE_TPAD
 #   include "soc/touch_sensor_periph.h"
@@ -1576,7 +1569,11 @@ static void twdt_initialize() {
     LOOPN(i, 2)
 #   endif
     {
+#   ifdef IDF_TARGET_V6
+        TaskHandle_t idle = xTaskGetIdleTaskHandleForCore(i);
+#   else
         TaskHandle_t idle = xTaskGetIdleTaskHandleForCPU(i);
+#   endif
         if (idle && !esp_task_wdt_status(idle) && !esp_task_wdt_delete(idle)) {
             ESP_LOGI(TAG, "Task IDLE%d @ CPU%d removed from WDT", i, i);
         }
@@ -1594,7 +1591,7 @@ void driver_initialize() {
         "adc button", "knob",
 #endif
 #ifdef CONFIG_BASE_USE_CAM
-        "cam_hal", "camera", "s3 ll_cam",
+        "cam_hal", "camera", "s3 ll_cam", "ov3660", "ov5640",
 #endif
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }

@@ -23,6 +23,18 @@
 #   warning "Run `idf.py add-dependency espressif/qrcode`"
 #endif
 
+#ifdef CONFIG_BASE_USE_CAM
+#   if __has_include("quirc.h")
+#       define WITH_QRDEC
+#   else
+#       warning "Run `idf.py add-dependency espressif/quirc`"
+#   endif
+#endif
+
+#define SHIFT3(a, b, c)     (((a) << 16) | ((b) << 8) | (c))
+#define SHIFT4(a, b, c, d)  (((a) << 24) | SHIFT3((b), (c), (d)))
+#define FOURCC(a, b, c, d)  SHIFT4((u32)(d), (u32)(c), (u32)(b), (u32)(a))
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -64,9 +76,10 @@ typedef struct {
             u32 max_Bps;
             u32 padding;
             u32 flags1;
+#define AVI_HEADER_AVIH_FLAG 0x110          // HAS_INDEX | IS_INTERLEAVED
             u32 total_frames;
             u32 initial_frames1;
-            u32 streams;
+            u32 num_streams;
             u32 buffer_size1;
             u32 width1;
             u32 height1;
@@ -106,9 +119,21 @@ typedef struct {
 } PACKED avi_header_t;
 
 typedef struct {
-    fcc two_code;   // e.g. 00dc for compressed video frames
-    u32 length;
-} PACKED avi_frame_t;
+    fcc ckid;       // e.g. mjpg for 00dc, rgb for 01db, wav for 02wb
+    u32 dlen;
+} PACKED avi_chunk_t;
+
+typedef struct {
+    fcc idx1;
+    u32 idx1len;
+#define AVI_HEADER_IDX1_LEN (16 * 1)
+    struct {
+        fcc ckid;   // same as avi_chunk_t -> ckid
+        u32 flags;  // 0x1: LIST, 0x10: KEYFRAME, 0x100: NO_TIME
+        u32 offset; // chunk offset from the start of the movi list
+        u32 size;   // chunk size in bytes
+    } streams[1];   // = avih -> num_streams (here we only have 1 video stream)
+} PACKED avi_tailer_t;
 
 typedef struct {
 #define BMP_HEADER_FILE_LEN 14
@@ -133,23 +158,26 @@ typedef struct {
 typedef struct {
     u32 srate;      // sample rate
     u16 nch;        // number of channel
-    u16 depth;      // Bytes per channel per sample
-} PACKED audio_mode_t;
+    u16 bpc;        // bits per channel per sample
+} audio_mode_t;
 
 typedef struct {
     u16 fps;        // frame per second
     u16 width;      // frame width in pixel
     u16 height;     // frame height in pixel
-    u16 depth;      // frame depth in Byte
-    fcc fourcc;
-} PACKED video_mode_t;
+    u16 bpp;        // bits per pixel
+    union {
+        fcc fourcc;
+        uint32_t fmt;
+    };
+} video_mode_t;
 
 typedef struct {
     size_t id;
     size_t len;
     void *data;
     void *task;
-    audio_mode_t *mode;
+    audio_mode_t mode;
 } audio_data_t;
 
 typedef struct {
@@ -157,7 +185,7 @@ typedef struct {
     size_t len;
     void *data;
     void *task;
-    video_mode_t *mode;
+    video_mode_t mode;
 } video_data_t;
 
 // esp_event_post keeps a copy of event_data instead of passing it (a pointer)
@@ -176,8 +204,8 @@ enum {
     AUD_EVENT_DATA,     // pkt.data = audio data, pkt.len > 0, pkt.id >= 0
     AUD_EVENT_STOP,     // pkt.data = NULL,       pkt.len = 0
     VID_EVENT_START,    // pkt.data = AVI header, pkt.len = sizeof(avi_header_t)
-    VID_EVENT_DATA,     // pkt.data = frame jpeg, pkt.len > 0, pkt.id >= 0
-    VID_EVENT_STOP,     // pkt.data = AVI tailer, pkt.len = 8 + pkt.id * 16
+    VID_EVENT_DATA,     // pkt.data = video data, pkt.len > 0, pkt.id >= 0
+    VID_EVENT_STOP,     // pkt.data = NULL,       pkt.len = 0
 };
 
 enum {
@@ -207,8 +235,8 @@ typedef struct {
 #define QRENC_FULL  BIT(3)  // print with full char (2x size)
 #define QRENC_MINI  BIT(4)  // print with mini rect | dots
 #define QRENC_DOTS  BIT(5)  // print with unicode braille
-#define QRENC_ANSI  BIT(6)  // print as rainbow
-#define QRENC_INV   BIT(7)  // color inverted
+#define QRENC_ANSI  BIT(6)  // print as colorful rainbow
+#define QRENC_INV   BIT(7)  // black & white inverted
     FILE *stream;
     const void *data;
     size_t dlen;
@@ -218,8 +246,9 @@ typedef struct {
 } qrenc_config_t;
 
 esp_err_t avi_qrenc(qrenc_config_t *);
+esp_err_t avi_qrdec(video_data_t *);
 
-void avi_initialize(); // called in drivers.c
+void avi_initialize();      // called in drivers.c
 
 #ifdef __cplusplus
 }

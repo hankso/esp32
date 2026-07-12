@@ -14,23 +14,29 @@
 #endif
 
 #if defined(CONFIG_BASE_USE_WIFI) && defined(CONFIG_LWIP_IPV4_NAPT)
-#   define WITH_NAPT
+#   define WITH_NAPT    // ~2KB
 #endif
 
 #if __has_include("pcap.h")
-#   define WITH_PCAP
+#   define WITH_PCAP    // ~4KB
 #else
 #   warning "Run `idf.py add-dependency espressif/pcap`"
 #endif
 
+#if __has_include("mqtt_client.h")
+#   define WITH_MQTT    // ~30KB
+#else
+#   warning "Run `idf.py add-dependency espressif/mqtt`"
+#endif
+
 #if defined(IDF_TARGET_V4) || __has_include("mdns.h")
-#   define WITH_MDNS
+#   define WITH_MDNS    // ~34KB
 #else
 #   warning "Run `idf.py add-dependency espressif/mdns`"
 #endif
 
 #if defined(IDF_TARGET_V4) || __has_include("iperf.h")
-#   define WITH_IPERF
+#   define WITH_IPERF   // ~ 5KB
 #else
 #   warning "Run `idf.py add-dependency espressif/iperf`"
 #endif
@@ -52,7 +58,7 @@ esp_err_t wifi_ap_stop();
 esp_err_t wifi_ap_list_sta();
 
 esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip);
-esp_err_t wifi_sta_stop();
+esp_err_t wifi_sta_stop(bool down);
 esp_err_t wifi_sta_scan(const char *ssid, uint8_t channel,
                         uint16_t timeout_ms, bool verbose);
 esp_err_t wifi_sta_wait(uint16_t timeout_ms);
@@ -64,6 +70,17 @@ esp_err_t ftm_respond(const char *ctrl, int16_t offset_cm);
 
 #if defined(CONFIG_BASE_USE_WIFI) || defined(CONFIG_BASE_USE_ETH)
 esp_err_t pcap_command(const char *ctrl, const char *itf, uint32_t npkt);
+
+typedef struct {
+    const void *data;
+    size_t len;
+    uint8_t qos;
+    bool retain;
+} mqtt_pub_t;
+
+esp_err_t mqtt_command(const char *ctrl, const char *url,
+                       const char *topic, const mqtt_pub_t *pub);
+#define   mqtt_control(c) mqtt_command((c), NULL, NULL, NULL)
 
 esp_err_t pmap_command(const char *ctrl, const char *protocol,
                        uint16_t sport, const char *daddr, uint16_t dport);

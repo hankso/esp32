@@ -10,7 +10,6 @@
 #include "nvs_flash.h"
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
-#include "cJSON.h"
 
 #define NAMESPACE_INFO "info"
 #define NAMESPACE_CFG "config"
@@ -47,7 +46,7 @@ config_t Config = {
         .STA_GATE  = "",
         .AP_SSID   = "",
         .AP_PASS   = "",
-        .AP_HOST   = "10.0.2.1",
+        .AP_HOST   = "10.0.2.1/24",
         .AP_CHAN   = "1",
         .AP_NCON   = "4",
         .AP_NAPT   = "y",
@@ -63,6 +62,8 @@ config_t Config = {
         .AUTH_BASE = "n",
     },
     .app = {
+        .MQTT_RUN  = "",
+        .MQTT_URL  = "mqtt://rw:readwrite@test.mosquitto.org:1884",
         .MDNS_RUN  = "y",
         .MDNS_HOST = "",
         .SNTP_RUN  = "y",
@@ -130,6 +131,8 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
     {"web.auth.base",   &Config.web.AUTH_BASE,  NULL},
 
+    {"app.mqtt.run",    &Config.app.MQTT_RUN,   NULL},
+    {"app.mqtt.url",    &Config.app.MQTT_URL,   NULL},
     {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
     {"app.mdns.host",   &Config.app.MDNS_HOST,  NULL},
     {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
@@ -163,9 +166,7 @@ static struct {
 } ctx;
 
 static int16_t config_index(const char *key) {
-    LOOPN(i, rwlen) {
-        if (!strcmp(key, rwlst[i].key)) return i;
-    }
+    LOOPN(i, rwlen) { if (!strcmp(key, rwlst[i].key)) return i; }
     return -1;
 }
 
@@ -204,10 +205,10 @@ const char * config_get(const char *key) {
 
 void config_stats() {
 #ifdef CONFIG_BASE_AUTO_ALIGN
-    size_t keylen = 0;
+    int keylen = 0;
     LOOPN(i, rwlen) { keylen = MAX(keylen, strlen(rwlst[i].key)); }
 #else
-    size_t keylen = 16;
+    int keylen = 16;
 #endif
     printf("Namespace: " NAMESPACE_CFG "\n  %-*s Value\n", keylen, "Key");
     LOOPN(i, rwlen) {
@@ -215,7 +216,7 @@ void config_stats() {
         if (endswith(rwlst[i].key, "pass")) {
             LPCHR('*', MIN(strlen(*rwlst[i].val), 16));
         } else {
-            printf(*rwlst[i].val);
+            fputs(*rwlst[i].val, stdout);
         }
         printf("%s\n", rwlst[i].freeval ? " (modified)" : "");
     }
@@ -299,7 +300,7 @@ static esp_err_t nvs_load_str(nvs_handle_t hdl, config_entry_t *ent) {
     return err;
 }
 
-static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
+static esp_err_t nvs_repr_val(nvs_entry_info_t *info, char **pval) {
     char *buf = NULL;
     size_t len = 16, off = 0;
     uint8_t data[8];
@@ -354,7 +355,7 @@ static esp_err_t nvs_load_val_ro(nvs_entry_info_t *info, char **vptr) {
     }
     if (hdl) nvs_close(hdl);
     if (err) TRYFREE(buf);
-    *vptr = buf;
+    *pval = buf;
     return err;
 }
 
@@ -372,44 +373,24 @@ static esp_err_t config_nvs_init() {
     return err;
 }
 
-esp_err_t config_nvs_open(void **pptr, const char *ns, bool ro) {
-    if (!pptr || !ns) return ESP_ERR_INVALID_ARG;
-    config_nvs_close(pptr);
-    nvs_handle_t *hptr = (nvs_handle_t *)pptr;
-    esp_err_t err = config_nvs_init();
-    if (!err) err = nvs_open(ns, ro ? NVS_READONLY : NVS_READWRITE, hptr);
-    if (err) *pptr = NULL;
+esp_err_t config_nvs_open(void **phdl, const char *ns, bool ro) {
+    if (!phdl || !ns) return ESP_ERR_INVALID_ARG;
+    config_nvs_close(phdl);
+    nvs_open_mode_t mode = ro ? NVS_READONLY : NVS_READWRITE;
+    esp_err_t err = config_nvs_init() ?: nvs_open(ns, mode, (nvs_handle_t *)phdl);
+    if (err) *phdl = NULL;
     return err;
 }
 
-int config_nvs_read(void *ptr, const char *key, void *buf, size_t size) {
-    if (!key || !buf || !size) return -ESP_ERR_INVALID_ARG;
-    size_t len;
-    nvs_handle_t hdl = (nvs_handle_t)ptr;
-    esp_err_t err = nvs_get_blob(hdl, key, NULL, &len);
-    if (!err) err = (len && len <= size) ? ESP_OK : ESP_ERR_INVALID_ARG;
-    if (!err) err = nvs_get_blob(hdl, key, buf, &len);
-    return err ? -err : len;
+esp_err_t config_nvs_delete(void *hdl, const char *key) {
+    if (key) return nvs_erase_key((nvs_handle_t)hdl, key);
+    return nvs_erase_all((nvs_handle_t)hdl);
 }
 
-int config_nvs_write(void *ptr, const char *key, const void *val, size_t len) {
-    if (!key || !val || !len) return -ESP_ERR_INVALID_ARG;
-    nvs_handle_t hdl = (nvs_handle_t)ptr;
-    esp_err_t err = nvs_set_blob(hdl, key, val, len);
-    if (!err) err = nvs_commit(hdl);
-    return err ? -err : len;
-}
-
-esp_err_t config_nvs_delete(void *ptr, const char *key) {
-    nvs_handle_t hdl = (nvs_handle_t)ptr;
-    return key ? nvs_erase_key(hdl, key) : nvs_erase_all(hdl);
-}
-
-esp_err_t config_nvs_close(void **pptr) {
-    if (!pptr) return ESP_ERR_INVALID_ARG;
-    nvs_handle_t *hptr = (nvs_handle_t *)pptr;
-    esp_err_t err = nvs_commit(*hptr);
-    TRYNULL(*hptr, nvs_close);
+esp_err_t config_nvs_close(void **phdl) {
+    if (!phdl) return ESP_ERR_INVALID_ARG;
+    esp_err_t err = nvs_commit(*(nvs_handle_t *)phdl);
+    TRYNULL(*(nvs_handle_t *)phdl, nvs_close);
     return err;
 }
 
@@ -431,7 +412,47 @@ esp_err_t config_nvs_dump() {
             continue;
         ESP_LOGW(TAG, "Set `%s` failed: %s", rwlst[i].key, esp_err_to_name(err));
     }
-    return err;
+    return err ?: nvs_commit(ctx.hdl);
+}
+
+int config_nvs_read(void *hdl, const char *key, void *buf, size_t size) {
+    if (!hdl || !key || !buf || !size) return -ESP_ERR_INVALID_ARG;
+    size_t len;
+    esp_err_t err = nvs_get_blob((nvs_handle_t)hdl, key, NULL, &len);
+    if (!err) err = (len && len <= size) ? ESP_OK : ESP_ERR_INVALID_ARG;
+    if (!err) err = nvs_get_blob((nvs_handle_t)hdl, key, buf, &len);
+    return err ? -err : len;
+}
+
+int config_nvs_write(void *hdl, const char *key, const void *val, size_t len) {
+    if (!hdl || !key || !val || !len) return -ESP_ERR_INVALID_ARG;
+    esp_err_t err = nvs_set_blob((nvs_handle_t)hdl, key, val, len);
+    if (!err) err = nvs_commit((nvs_handle_t)hdl);
+    return err ? -err : len;
+}
+
+int config_nvs_jdump(void *hdl, const char *key, void *obj) {
+    if (!hdl || !key || !obj) return -ESP_ERR_INVALID_ARG;
+    char *buf = cJSON_PrintUnformatted(obj);
+    if (!buf) return -ESP_ERR_NO_MEM;
+    size_t len = strlen(buf);
+    esp_err_t err = nvs_set_str((nvs_handle_t)hdl, key, buf);
+    if (!err) err = nvs_commit((nvs_handle_t)hdl);
+    TRYFREE(buf);
+    return err ? -err : len;
+}
+
+void * config_nvs_jload(void *hdl, const char *key) {
+    size_t len = 0;
+    cJSON *obj = NULL;
+    void *buf = NULL;
+    if (hdl && key && !nvs_get_str((nvs_handle_t)hdl, key, NULL, &len) &&
+        !EMALLOC(buf, len) && !nvs_get_str((nvs_handle_t)hdl, key, buf, &len)
+    ) {
+        obj = cJSON_ParseWithLength(buf, len);
+    }
+    TRYFREE(buf);
+    return obj;
 }
 
 static const char * nvs_type_str(nvs_type_t type) {
@@ -470,14 +491,10 @@ void config_nvs_list(bool all) {
         if (err) {
             ESP_LOGW(TAG, "Failed to stat nvs: %s", esp_err_to_name(err));
         } else {
-            printf(
-                "NVS Partition Size: %s\n"
-                "  Namespaces: %d\n"
-                "  Entries: %d/%d (%.2f %% free)\n\n",
-                format_size(ctx.part->size), stat.namespace_count,
-                stat.used_entries, stat.total_entries,
-                100.0 * stat.free_entries / (stat.total_entries ?: 1)
-            );
+            printf("NVS Partition Size: %s\n", format_size(ctx.part->size));
+            printf("  Namespaces: %zu\n  Entries: %zu/%zu (%.2f %% free)\n\n",
+                   stat.namespace_count, stat.used_entries, stat.total_entries,
+                   100.0 * stat.free_entries / (stat.total_entries ?: 1));
         }
     }
     const char *ns = all ? NULL : NAMESPACE_CFG, *val;
@@ -488,7 +505,7 @@ void config_nvs_list(bool all) {
         return;
     }
 #ifdef CONFIG_BASE_AUTO_ALIGN
-    size_t nslen = 0, keylen = 0;
+    int nslen = 0, keylen = 0;
     while (iter) {
         nvs_entry_info(iter, &info);
         nslen = MAX(nslen, strlen(info.namespace_name));
@@ -498,7 +515,7 @@ void config_nvs_list(bool all) {
     TRYNULL(iter, nvs_release_iterator);
     NVS_ITER_INIT(iter, ctx.part->label, ns, NVS_TYPE_ANY);
 #else
-    size_t nslen = 16, keylen = NVS_KEY_NAME_MAX_SIZE; // see nvs.h
+    int nslen = 16, keylen = NVS_KEY_NAME_MAX_SIZE; // see nvs.h
 #endif
     if (all) {
         printf("%-*s %-*s Type Value\n", nslen, "Namespace", keylen, "Key");
@@ -511,7 +528,7 @@ void config_nvs_list(bool all) {
         if (!strcmp(info.namespace_name, NAMESPACE_CFG)) {
             val = config_get(info.key);
         } else {
-            val = nvs_load_val_ro(&info, &tmp) ? "" : tmp;
+            val = nvs_repr_val(&info, &tmp) ? "" : tmp;
         }
         printf("%-*s %-*s %4s ",
                 all ? nslen : 1, all ? info.namespace_name : " ",
@@ -552,8 +569,7 @@ void config_initialize() {
     Config.info.VER = desc->version;
     LOOPN(i, LEN(rolst)) {
         if (!( err = nvs_load_str(info, rolst + i) )) continue;
-        ESP_LOGD(TAG, "Get `%s` failed: %s",
-                 rolst[i].key, esp_err_to_name(err));
+        ESP_LOGD(TAG, "Get `%s` failed: %s", rolst[i].key, esp_err_to_name(err));
     }
     config_nvs_close((void **)&info);
     if (strlen(Config.sys.TIMEZONE)) {

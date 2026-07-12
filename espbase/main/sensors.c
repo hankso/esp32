@@ -249,7 +249,7 @@ static void tscn_handle_touchpad(tscn_data_t *dat) {
 
 static void tscn_handle_gesture(tscn_data_t *next, tscn_data_t *prev) {
     static uint16_t x, y;
-    static uint64_t t[16], single = TIMEOUT(350), multiple = TIMEOUT(50);
+    static TickType_t t[16], single = TIMEOUT(350), multiple = TIMEOUT(50);
     if (next->num > prev->num) {
         if (!prev->num) {                               // first finger
             x = next->pts[0].x;
@@ -379,9 +379,8 @@ static esp_err_t tscn_initialize(uint8_t bus, uint8_t addr) {
     case 0x64: chip = "FT6336"; break;
     default:   return err ?: ESP_ERR_NOT_SUPPORTED;
     }
-    if (( err = smbus_regtable(bus, addr, regs + 2, LEN(regs) - 2) ))
-        return err;
-    if (!tscn.nvs) config_nvs_open(&tscn.nvs, "tscn", false);
+    if (( err = smbus_regtable(bus, addr, regs + 2, LEN(regs) - 2) )) return err;
+    if (!tscn.nvs && ( err = config_nvs_open(&tscn.nvs, "tscn", false) )) return err;
     if (config_nvs_read(tscn.nvs, "hres", tscn.hres, sizeof(tscn.hres)) < 0 ||
         config_nvs_read(tscn.nvs, "vres", tscn.vres, sizeof(tscn.vres)) < 0
     ) {
@@ -591,7 +590,7 @@ static esp_err_t ist3931_read_frame(uint8_t bus, uint8_t addr, bool verbose) {
     esp_err_t err = ist3931_rect(bus, addr, 0, 0);
     if (!err) err = smbus_write_byte(bus, addr, MS_REG_CMD, MS_RDRAM);
     if (!err) err = i2c_wtrd(bus, addr, NULL, 0, buf, len);
-    if (!err && verbose) hexdump(buf + 1, len - 1, 80);
+    if (!err && verbose) hexdump(stdout, buf + 1, len - 1, 80);
     return err;
 }
 
@@ -716,10 +715,10 @@ static esp_err_t vlx_sync_spad(uint8_t bus, uint8_t addr) {
     if (err || !spad || !smap) return err ?: ESP_FAIL;
     uint8_t first = (spad->val & 0x80) ? 12 : 0, total = spad->val & 0x7F;
     for (int cnt = 0, i = 0; i < 48; i++) {
-        smap[i / 8].reg &= 0xFF;
+        smap[i >> 3].reg &= 0xFF; // write regs
         if (i < first || cnt == total) {
-            smap[i / 8].val &= ~BIT(i % 8);
-        } else if (bitread(smap[i / 8].val, i % 8)) {
+            smap[i >> 3].val &= ~BIT(i & 7);
+        } else if (bitread(smap[i >> 3].val, i & 7)) {
             cnt++;
         }
     }

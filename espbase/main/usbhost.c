@@ -9,9 +9,6 @@
 #ifdef CONFIG_BASE_USE_USB
 
 #include "usb/usb_host.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/event_groups.h"
 
 #ifdef CONFIG_BASE_USB_CDC_HOST
 #   include "usb/cdc_acm_host.h"
@@ -199,7 +196,7 @@ static esp_err_t usbh_common_exit() {
 static const char * CDC = "CDC";
 
 static bool cdc_acm_rx_cb(const uint8_t *data, size_t size, void *arg) {
-    ESP_LOGI(TAG, "%s got data[%u]", CDC, size);
+    ESP_LOGI(TAG, "%s got data[%zu]", CDC, size);
     ESP_LOG_BUFFER_HEXDUMP(TAG, data, size, ESP_LOG_INFO);
     return true;
 }
@@ -507,7 +504,7 @@ static void hid_event_cb(
     uint8_t data[64], *ptr = data;
     hid_host_device_get_raw_input_report_data(dev, data, sizeof(data), &size);
     if (params.sub_class != HID_SUBCLASS_BOOT_INTERFACE) {
-        hexdump(data, size, 80);
+        hexdump(stdout, data, size, 80);
     } else if (params.proto == HID_PROTOCOL_KEYBOARD && size >= 8) {
         if (size > sizeof(hid_keybd_report_t)) ptr += 1;
         hid_keybd_report_t *kbd = (hid_keybd_report_t *)ptr;
@@ -522,7 +519,7 @@ static void hid_event_cb(
         hid_handle_mouse(HID_TARGET_USB, mse, NULL, NULL);
     } else {
         int offset = printf("%s %s ", addr, hid_protocol_str(params.proto));
-        if (offset > 0) hexdumpl(data, size, 80 - offset);
+        if (offset > 0) hexdumpl(stdout, data, size, 80 - offset);
     }
 }
 
@@ -639,10 +636,10 @@ static void hid_host_task(void *arg) {
             wprintf(L"SerialNumber : %ls\n", info.iSerialNumber);
         printf("SubClass     : %s\n"
                "Proto        : %s\n"
-               "Descriptor   : %u\n",
+               "Descriptor   : %zu\n",
                params.sub_class ? "BOOT" : "",
                hid_protocol_str(params.proto), dlen);
-        hexdump(desc, dlen, 80);
+        hexdump(stdout, desc, dlen, 80);
         continue;
 close:
         hid_host_device_close(dev);

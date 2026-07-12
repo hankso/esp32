@@ -18,10 +18,6 @@
 #include "screen.h"
 #include "server.h"
 
-#include "esp_system.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-
 void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
 
 RTC_DATA_ATTR uint8_t count[3];

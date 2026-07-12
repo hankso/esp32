@@ -9,9 +9,6 @@
 
 #ifdef CONFIG_BASE_USE_BT
 
-#include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
-
 #include "esp_mac.h"
 #include "esp_bt.h"
 #include "esp_bt_defs.h"

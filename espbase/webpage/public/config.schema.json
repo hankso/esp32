@@ -205,6 +205,15 @@
       "type": "string",
       "pattern": "^[01yn]?$"
     },
+    "app.mqtt.run": {
+      "description": "Enable MQTT client",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "app.mqtt.url": {
+      "description": "MQTT server `scheme://[user:pswd@]host[:port][/path][#cid]`",
+      "type": "string"
+    },
     "app.mdns.run": {
       "description": "Enable mDNS server",
       "type": "string",
@@ -219,7 +228,7 @@
       ]
     },
     "app.sntp.run": {
-      "description": "Enable SNTP service",
+      "description": "Enable SNTP client",
       "type": "string",
       "pattern": "^[01yn]?$"
     },

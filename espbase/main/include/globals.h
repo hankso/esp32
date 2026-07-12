@@ -8,6 +8,7 @@
 
 #include <math.h>
 #include <time.h>
+#include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
 #include <stdint.h>
@@ -17,12 +18,6 @@
 #include <inttypes.h>
 #include <assert.h>
 #include <unistd.h>
-
-#include "sdkconfig.h"
-#include "esp_err.h"
-#include "esp_log.h"
-#include "esp_event.h"
-#include "esp_idf_version.h"
 
 #include "espmisc.h"
 
@@ -196,7 +191,7 @@ static inline int stridx(const char *str, const char *tpl) {
     size_t slen = strlen(str ?: ""), tlen = strlen(tpl ?: "");
     if (!slen || !tlen) return -1;
     size_t cnt = strncnt(tpl, ",;/\\|", -1);
-    uint16_t idx, ret = parse_u16(str, &idx);       // case 1: number as index
+    uint16_t idx, ret = parse_u16(str, &idx);   // case 1: number as index
     if (ret && idx < MIN(cnt ?: tlen, tlen)) return idx;
     const char *tmp = strcasestr(tpl, str);         // case 2: "aaa|bbb|ccc"
     if (tmp && cnt) return strncnt(tpl, ",;/\\|", tmp - tpl);
@@ -244,41 +239,64 @@ static inline uint8_t numdigits(int n) {
 }
 
 static inline char hexdigits(uint8_t v) {
-    if (v < 10) return v + '0';
-    if (v > 15) return hexdigits(v % 16);
-    return v - 10 + 'A';
+    if (v < 0xA) return v + '0';
+    if (v > 0xF) return hexdigits(v & 0xF);
+    return v - 0xA + 'A';
 }
 
-static inline void hexdump(const void *src, size_t bytes, size_t maxlen) {
-    size_t maxbytes = maxlen / 3;
+static inline void hexdump(FILE *stream, const void *buf, size_t bytes, size_t line_width) {
+    if (!stream || !buf || !bytes || line_width < 3) return;
+    size_t maxbytes = line_width / 3;
     LOOPN(i, bytes) {
-        if (i && i % maxbytes == 0) putchar('\n');
-        printf("%02X ", ((uint8_t *)src)[i]);
+        if (i && i % maxbytes == 0) fputc('\n', stream);
+        fprintf(stream, "%02X ", ((uint8_t *)buf)[i]);
     }
-    if (bytes) putchar('\n');
+    if (bytes) fputc('\n', stream);
 }
 
-static inline void hexdumpl(const void *src, size_t bytes, size_t maxlen) {
-    size_t maxbytes = maxlen / 3, count = MIN(bytes, maxbytes);
-    LOOPN(i, count) { printf("%02X ", ((uint8_t *)src)[i]); }
+static inline void hexdumpc(FILE *stream, const void *buf, size_t bytes) {
+    if (!stream || !buf || !bytes) return;
+    char ascii[0x10 + 1];
+    const uint8_t *ptr = (const uint8_t *)buf;
+    LOOPN(i, CMOD(bytes, 0x10)) {
+        int idx = i % 0x10;
+        if (idx == 0) printf("%p:", ptr + i);
+        if (i < bytes) {
+            fprintf(stream, "%s%02x", i % 2 ? "" : " ", ptr[i]);
+            ascii[idx] = isprint(ptr[i]) ? ptr[i] : '.';
+        } else {
+            fprintf(stream, "%*s", i % 2 ? 2 : 3, "");
+            ascii[idx] = ' ';
+        }
+        if (idx == 0xF) {
+            ascii[idx + 1] = 0;
+            fprintf(stream, " |%s|\n", ascii);
+        }
+    }
+}
+
+static inline void hexdumpl(FILE *stream, const void *buf, size_t bytes, size_t line_width) {
+    if (!stream || !buf || !bytes || line_width < 3) return;
+    size_t maxbytes = line_width / 3, count = MIN(bytes, maxbytes);
+    LOOPN(i, count) { fprintf(stream, "%02X ", ((uint8_t *)buf)[i]); }
     if (bytes && maxbytes && bytes > maxbytes)
-        printf("... [%u/%u]", count, bytes);
-    putchar('\n');
+        fprintf(stream, "... [%zu/%zu]", count, bytes);
+    fputc('\n', stream);
 }
 
-static inline char * hexdumps(const void *src, char *dst, size_t bytes, size_t maxlen) {
-    if (!dst || !maxlen) return 0;
+static inline char * hexdumps(const void *src, char *dst, size_t slen, size_t dlen) {
+    if (!dst || !dlen) return 0;
     size_t maxbytes, count, offset = 0;
-    if ((bytes * 2 + 1) <= maxlen) {
-        maxbytes = (maxlen - 1) / 2;
-    } else if (maxlen < (9 + numdigits(bytes) + numdigits(maxlen / 2))) {
+    if ((slen * 2 + 1) <= dlen) {
+        maxbytes = (dlen - 1) / 2;
+    } else if (dlen < (9 + numdigits(slen) + numdigits(dlen / 2))) {
         dst[0] = '\0';
         return dst; // no space
     } else { // append tail to dst
-        offset = maxlen - 9 - numdigits(bytes);
-        maxbytes = (offset - numdigits(maxlen / 2)) / 2;
+        offset = dlen - 9 - numdigits(slen);
+        maxbytes = (offset - numdigits(dlen / 2)) / 2;
     }
-    count = MIN(bytes, maxbytes);
+    count = MIN(slen, maxbytes);
     LOOPN(i, count) {
         dst[2 * i + 0] = hexdigits(((uint8_t *)src)[i] >> 4);
         dst[2 * i + 1] = hexdigits(((uint8_t *)src)[i] & 0xF);
@@ -287,7 +305,7 @@ static inline char * hexdumps(const void *src, char *dst, size_t bytes, size_t m
         offset -= numdigits(count);
         if (offset > (count * 2))
             memset(dst + count * 2, ' ', offset - count * 2);
-        sprintf(dst + offset, " ... [%u/%u]", count, bytes);
+        sprintf(dst + offset, " ... [%zu/%zu]", count, slen);
     } else {
         dst[count * 2] = '\0';
     }
@@ -325,7 +343,7 @@ static inline const char * unicode2str(uint32_t unicode) {
     return buf;
 }
 
-static inline size_t str2unicode(const char *str, uint32_t *uptr) {
+static inline size_t str2unicode(const uint8_t *str, uint32_t *uptr) {
     if (!str || str[0] > 0xF7) return 0;
     uint32_t nbytes, unicode;
     if (str[0] >= 0xF0) {
@@ -341,7 +359,7 @@ static inline size_t str2unicode(const char *str, uint32_t *uptr) {
         unicode = str[0];
         nbytes = unicode ? 1 : 0;
     }
-    if (strlen(str) < nbytes) return 0;
+    if (strlen((const char *)str) < nbytes) return 0;
     for (uint32_t i = 1; i < nbytes; i++) {
         if ((str[i] >> 6) != 0x2) return 0; // invalid format
         unicode = (unicode << 6) | (str[i] & 0x3F);
@@ -371,7 +389,7 @@ static inline const char * unicode2gbk(FILE *fd, uint32_t unicode) {
     return buf;
 }
 
-static inline size_t gbk2unicode(FILE *fd, const char *str, uint32_t *uptr) {
+static inline size_t gbk2unicode(FILE *fd, const uint8_t *str, uint32_t *uptr) {
     if (!fd || !str || str[0] > 0xFE) return 0;
     if (str[0] < 0x81) {
         if (uptr) *uptr = str[0];

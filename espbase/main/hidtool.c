@@ -7,7 +7,7 @@
 #include "hiddesc.h"
 #include "hidtool.h"
 #include "network.h"            // for network_parse_addr
-#include "filesys.h"            // for filesys_load
+#include "filesys.h"            // for filesys_readfile
 #include "usbmode.h"            // for hidu_send_report
 #include "btmode.h"             // for hidb_send_report
 #include "screen.h"             // for scn_command
@@ -108,7 +108,7 @@ void hidtool_initialize() {
         // Skip files larger than HIDTool.desc buffer
         size_t dlen = sizeof(HIDTool.desc);
         const char *hidpath = fjoin(2, Config.sys.DIR_DATA, hidfile);
-        uint8_t *desc = fload(hidpath, &dlen);
+        void *desc = fload(hidpath, &dlen);
         if (desc) memcpy(HIDTool.desc, desc, HIDTool.dlen = dlen);
         TRYFREE(desc);
     }
@@ -576,7 +576,7 @@ static uint8_t str2modifier(const char *str) {
     uint8_t mod = 0;
     LOOPN(i, LEN(modifier_names)) {
         if (strcasestr(str, modifier_names[i])) {
-            mod |= 1 << (i % 8);
+            mod |= BIT(i & 7);
         }
     }
     return mod;

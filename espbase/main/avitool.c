@@ -6,10 +6,11 @@
  */
 
 #include "avitool.h"
-#include "drivers.h"
+#include "config.h"
+#include "drivers.h"            // for NUM_I2C
 #include "timesync.h"           // for format_timestamp
 
-#include "cJSON.h"
+#include "esp_jpeg_dec.h"
 
 ESP_EVENT_DEFINE_BASE(AVC_EVENT);
 
@@ -38,7 +39,7 @@ static UNUSED struct {
 #   define I2S_RELEASE()    i2s_stop(NUM_I2S)
 #   define I2S_READ(...)    i2s_read(NUM_I2S, __VA_ARGS__)
 #   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_BITS_PER_SAMPLE_16BIT / 8 )
+#   define PDM_BPC          I2S_BITS_PER_SAMPLE_16BIT
 #   define PDM_TYPE         int16_t
 #   ifdef CONFIG_BASE_PDM_STEREO
 #       define PDM_NCH      I2S_CHANNEL_STEREO
@@ -52,7 +53,7 @@ static void i2s_initialize() {
     i2s_config_t i2s_cfg = {
         .mode                   = I2S_MODE_MASTER | I2S_MODE_RX | I2S_MODE_PDM,
         .sample_rate            = PDM_SHZ,
-        .bits_per_sample        = PDM_BPC * 8,
+        .bits_per_sample        = PDM_BPC,
         .channel_format         = PDM_FCH,
         .communication_format   = I2S_COMM_FORMAT_STAND_I2S,
         .intr_alloc_flags       = ESP_INTR_FLAG_LEVEL2,
@@ -84,7 +85,7 @@ static i2s_chan_handle_t i2s_handle;
 #   define I2S_RELEASE()    i2s_channel_disable(i2s_handle)
 #   define I2S_READ(...)    i2s_channel_read(i2s_handle, __VA_ARGS__)
 #   define PDM_SHZ          CONFIG_BASE_PDM_SAMPLE_RATE
-#   define PDM_BPC          ( I2S_DATA_BIT_WIDTH_16BIT / 8 )
+#   define PDM_BPC          I2S_DATA_BIT_WIDTH_16BIT
 #   define PDM_TYPE         int16_t
 #   ifdef CONFIG_BASE_PDM_STEREO
 #       define PDM_NCH      I2S_SLOT_MODE_STEREO
@@ -97,7 +98,7 @@ static void i2s_initialize() {
     i2s_chan_config_t chan_cfg = DEFAULT(CHANNEL, NUM_I2S, I2S_ROLE_MASTER);
     i2s_pdm_rx_config_t pdm_cfg = {
         .clk_cfg  = DEFAULT(PDM_RX_CLK, PDM_SHZ),
-        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC * 8, PDM_NCH),
+        .slot_cfg = DEFAULT(PDM_RX_SLOT, PDM_BPC, PDM_NCH),
         .gpio_cfg = { .clk = PIN_CLK, .din = PIN_DAT },
     };
 #   undef DEFAULT
@@ -114,7 +115,7 @@ static void i2s_initialize() {
 }
 #endif // IDF_TARGET_V4
 
-static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+static void aud_print(void *arg, esp_event_base_t b, int32_t id, void *data) {
     static char eqls[80 - 4 - 3 - 13];
     audio_data_t *pkt = *(audio_data_t **)data;
     FILE *stream = arg;
@@ -125,11 +126,11 @@ static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
         fputc('\n', stream);
         fflush(stream);
     }
-    if (id != AUD_EVENT_DATA || pkt->id % 10 || !pkt->mode->nch) return;
-    uint16_t nch = pkt->mode->nch, tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
-    uint64_t vmax = BIT(pkt->mode->depth * 8 - 1);
+    if (id != AUD_EVENT_DATA || pkt->id % 10 || !pkt->mode.nch) return;
+    uint16_t nch = pkt->mode.nch, tlen = (sizeof(eqls) - (nch - 1) * 6) / nch;
+    uint64_t vmax = BIT(pkt->mode.bpc - 1);
     PDM_TYPE *buf = pkt->data, vol[nch], len[nch];
-    LOOPN(i, pkt->len / nch / pkt->mode->depth) {
+    LOOPN(i, pkt->len / nch / (pkt->mode.bpc / 8)) {
         LOOPN(j, nch) {
             vol[j] = MAX(vol[j], ABS(buf[i * nch + j]));
         }
@@ -151,27 +152,24 @@ static void aud_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
     fflush(stream);
 }
 
-static void aud_capture(void *arg) {
+static void aud_task(void *arg) {
     audio_mode_t mode = { PDM_SHZ, PDM_NCH, PDM_BPC };
     wav_header_t WAV = {
         "RIFF", -1,
         "WAVE",
         "fmt ", WAV_HEADER_FMT_LEN,
             0x01, mode.nch, mode.srate,
-            mode.nch * mode.depth * mode.srate,
-            mode.nch * mode.depth, mode.depth * 8,
+            mode.srate * mode.nch * mode.bpc / 8,
+            mode.nch * mode.bpc / 8, mode.bpc,
         "data", -1
     };
     uint32_t dlen = WAV.Bps * MIN(UINT32_MAX / WAV.Bps, (uint32_t)arg / 1000);
     size_t rlen, blen = WAV.Bps / 50; // 20ms buffer
     void *data = malloc(2 * blen);
-    if (!data) {
-        audio.task = NULL;
-        return;
-    }
+    if (!data) goto exit;
     WAV.filelen = (WAV.datalen = dlen) + sizeof(WAV) - 8;  // < U32_MAX
     audio_data_t wav = { .task = audio.task, .data = &WAV, .len = sizeof(WAV) };
-    audio_data_t pkt = { .task = audio.task, .data = data, .mode = &mode };
+    audio_data_t pkt = { .task = audio.task, .data = data, .mode = mode };
     AVC_POST(AUD_EVENT_START, wav, -1);
 
     I2S_ACQUIRE();
@@ -190,6 +188,7 @@ static void aud_capture(void *arg) {
     notify_released(50, 10);
     UREGEVTS(AVC, audio.shdl);
     TRYFREE(pkt.data);
+exit:
     audio.task = NULL;
     vTaskDelete(NULL);
 }
@@ -200,8 +199,8 @@ static void aud_capture(void *arg) {
 #ifdef CONFIG_BASE_USE_CAM
 #   define CAM_ACQUIRE(c)   ( (c)->set_reg((c), 0x3008, 0x40, 0) ) // standby
 #   define CAM_RELEASE(c)   ( (c)->set_reg((c), 0x3008, 0x40, 0x40) )
-#   define CAM_HORRES(c)    ( resolution[(c)->status.framesize].width )
-#   define CAM_VERRES(c)    ( resolution[(c)->status.framesize].height )
+#   define CAM_HRES(c)      ( resolution[(c)->status.framesize].width )
+#   define CAM_VRES(c)      ( resolution[(c)->status.framesize].height )
 #   include "esp_camera.h"
 #   ifdef CONFIG_BASE_USE_PSRAM
 #       include "esp_psram.h"
@@ -278,29 +277,10 @@ static void cam_initialize() {
     CAM_RELEASE(cam);
 }
 
-static void cam_flush() {
-    if (cam_cfg.grab_mode != CAMERA_GRAB_WHEN_EMPTY) return;
-    LOOPN(i, cam_cfg.fb_count) { esp_camera_fb_return(esp_camera_fb_get()); }
-}
-
-static camera_fb_t * cam_grab() {
-    static bool warned = false;
-    camera_fb_t *frame = NULL;
-    if (video.task) {
-        frame = esp_camera_fb_get();
-        if (!warned) {
-            ESP_LOGW(TAG, "Mix used async and sync APIs!");
-            warned = true;
-        }
-    } else {
-        sensor_t *cam = esp_camera_sensor_get();
-        if (!cam) return NULL;
-        CAM_ACQUIRE(cam);
-        cam_flush();
-        frame = esp_camera_fb_get();
-        CAM_RELEASE(cam);
-    }
-    return frame;
+static void cam_flush(uint8_t num) {
+    if (!num && cam_cfg.grab_mode == CAMERA_GRAB_WHEN_EMPTY)
+        num = cam_cfg.fb_count;
+    LOOPN(i, num) { esp_camera_fb_return(esp_camera_fb_get()); }
 }
 
 static_assert(sizeof(sensor_t) <= UINT8_MAX, "offset overflow: use uint16_t");
@@ -357,7 +337,7 @@ static float cam_fps(sensor_t *cam, int *val) {
     int vts = cam->get_reg(cam, 0x380E, 0xFFFF);
     float clk = 1.25 * cam->xclk_freq_hz;
     if (!val) return clk / hts / vts;
-    int tgt = *val ? CONS(clk / hts / *val, CAM_VERRES(cam), 0xFFFF) : vts;
+    int tgt = *val ? CONS(clk / hts / *val, CAM_VRES(cam), 0xFFFF) : vts;
     return tgt == vts ? 0 : cam->set_reg(cam, 0x380E, tgt, 0xFFFF);
 }
 
@@ -395,17 +375,55 @@ static esp_err_t cam_loads(sensor_t *cam, const char *json) {
     return err ?: esp_camera_save_to_nvs("camera");
 }
 
+static struct {
+    const char *fourcc;
+    const char *pfstr;
+    uint8_t bpp;
+} formats[] = {
+    [PIXFORMAT_GRAYSCALE] = { "GREY", "GREY8", 8 },
+    [PIXFORMAT_RGB888]    = { "RGB3", "RGB888", 24 },
+    [PIXFORMAT_RGB565]    = { "RGBP", "RGB565", 16 },
+    [PIXFORMAT_YUV422]    = { "YUYV", "YUV422", 16 },
+    [PIXFORMAT_JPEG]      = { "JPEG", "JPEG", 1 },
+
+    [PIXFORMAT_RGB555]    = { "RGBO", "RGB555", 16 },
+    [PIXFORMAT_RGB444]    = { "R444", "RGB444", 12 },
+    [PIXFORMAT_YUV420]    = { "M420", "YUV420", 12 },
+    [PIXFORMAT_RAW8]      = { "BA81", "RAW8", 8 },
+    [PIXFORMAT_RAW]       = { "BG10", "RAW", 8 },
+};
+
+static esp_err_t fmt_info(pixformat_t fmt, const char **s, fcc f, uint16_t *b) {
+    if (fmt < LEN(formats) && formats[fmt].fourcc) {
+        if (b) *b = formats[fmt].bpp;
+        if (s) *s = formats[fmt].pfstr;
+        if (f) strcpy(f, formats[fmt].fourcc);
+    } else {
+        if (b) *b = 0;
+        if (s) *s = "UNKNOWN";
+        if (f) memset(f, 0, sizeof(fcc));
+    }
+    return (fmt == PIXFORMAT_GRAYSCALE ||
+            fmt == PIXFORMAT_RGB888 ||
+            fmt == PIXFORMAT_RGB565 ||
+            fmt == PIXFORMAT_YUV422 ||
+            fmt == PIXFORMAT_JPEG) ? ESP_OK : ESP_ERR_NOT_SUPPORTED;
+}
+
 static char * cam_dumps(sensor_t *cam, FILE *stream) {
     if (stream) {
-        size_t klen = strlen("framerate");
+        int klen = strlen("framerate");
 #   ifdef CONFIG_BASE_AUTO_ALIGN
         ITERP(attr, cam_attrs) { klen = MAX(klen, strlen(attr->key)); }
 #   endif
-        fprintf(stream, "%*s: %.3f\n", klen, "framerate", cam_fps(cam, NULL));
-        fprintf(stream, "%*s: %d\n", klen, "width", CAM_HORRES(cam));
-        fprintf(stream, "%*s: %d\n", klen, "height", CAM_VERRES(cam));
+        const char *pfstr; fmt_info(cam->pixformat, &pfstr, NULL, NULL);
+        int fmt = cam_get(cam, 0), size = cam_get(cam, 1);
+        int w = CAM_HRES(cam), h = CAM_VRES(cam);
         fprintf(stream, "%*s: %d\n", klen, "xclk", cam->xclk_freq_hz);
-        LOOPN(i, LEN(cam_attrs)) {
+        fprintf(stream, "%*s: %.3f\n", klen, "framerate", cam_fps(cam, NULL));
+        fprintf(stream, "%*s: %d (%s)\n", klen, "pixformat", fmt, pfstr);
+        fprintf(stream, "%*s: %d (%dx%d)\n", klen, "framesize", size, w, h);
+        LOOP(i, 2, LEN(cam_attrs)) { // skip pixformat & framesize
             fprintf(stream, "%*s: %d\n",
                     klen, cam_attrs[i].key, cam_get(cam, i));
         }
@@ -426,35 +444,33 @@ static char * cam_dumps(sensor_t *cam, FILE *stream) {
     return json;
 }
 
-static void vid_visual(void *arg, esp_event_base_t b, int32_t id, void *data) {
+static void vid_print(void *arg, esp_event_base_t b, int32_t id, void *data) {
     video_data_t *pkt = *(video_data_t **)data;
     notify_increase(pkt->task);
     if (id == VID_EVENT_STOP) {
         fputc('\n', arg);
-    } else if (id == VID_EVENT_DATA && (pkt->id % pkt->mode->fps) == 0) {
+    } else if (id == VID_EVENT_DATA && (pkt->id % pkt->mode.fps) == 0) {
         static size_t last_id;
-        static TickType_t last_ts;
+        static uint32_t last_ms;
         size_t di = pkt->id - last_id; last_id = pkt->id;
-        TickType_t dt = xTaskGetTickCount() - last_ts; last_ts += dt;
-        float real_fps = dt ? di * 1e3 / pdTICKS_TO_MS(dt) : 0;
-        fprintf(arg, "\r%s %08d %dx%dx%d %dFPS %.4s %d Bytes %.*fFPS\n",
-                format_timestamp_us(0),
-                pkt->id, pkt->mode->width, pkt->mode->height,
-                pkt->mode->depth, pkt->mode->fps,
-                pkt->mode->fourcc, pkt->len,
-                real_fps >= 10 ? 1 : 2, real_fps);
+        uint32_t dtms = MSFPO() - last_ms; last_ms += dtms;
+        float fps = dtms ? di * 1e3 / dtms : 0;
+        fprintf(arg, "\r%s %08zu %dx%dx%db %dFPS %.4s %zu Bytes %.*fFPS\n",
+                format_timestamp_us(0), pkt->id, pkt->mode.width,
+                pkt->mode.height, pkt->mode.bpp, pkt->mode.fps,
+                pkt->mode.fourcc, pkt->len, fps >= 10 ? 1 : 2, fps);
     }
     fflush(arg);
     notify_decrease(pkt->task);
 }
 
-static void vid_capture(void *arg) {
+static void vid_task(void *arg) {
     sensor_t *cam = esp_camera_sensor_get();
-    if (!cam) return;
-    float fps = cam_fps(cam, NULL);
-    video_mode_t mode = { fps, CAM_HORRES(cam), CAM_VERRES(cam), 3, "MJPG" };
-    uint32_t BPF = mode.width * mode.height * mode.depth / 10; // BytePerFrame
-    uint32_t nframe = fps * MIN(UINT32_MAX / fps, (uint32_t)arg / 1000.0);
+    if (!cam) goto exit;
+    video_mode_t mode = { cam_fps(cam, 0), CAM_HRES(cam), CAM_VRES(cam), 0, .fmt = 0 };
+    if (fmt_info(cam->pixformat, NULL, mode.fourcc, &mode.bpp)) goto exit;
+    uint32_t BPF = mode.width * mode.height * mode.bpp / 100; // BytePerFrame
+    uint32_t nframe = mode.fps * MIN(UINT32_MAX / mode.fps, (uint32_t)arg / 1e3);
     camera_fb_t *next = NULL, *prev = NULL;
     avi_header_t AVI = {
         "RIFF", -1,
@@ -469,34 +485,40 @@ static void vid_capture(void *arg) {
                 BPF, -1, 0, 0, 0, mode.width, mode.height,
             "strf", AVI_HEADER_STRF_LEN,
                 AVI_HEADER_STRF_LEN, mode.width, mode.height, 1,
-                mode.depth * 8, "MJPG", BPF, 0, 0, 0, 0,
+                mode.bpp, "MJPG", BPF, 0, 0, 0, 0,
         "LIST", -1, "movi",
     };
     video_data_t avi = { .task = video.task, .data = &AVI, .len = sizeof(AVI) };
-    video_data_t pkt = { .task = video.task, .data = NULL, .mode = &mode };
+    video_data_t pkt = { .task = video.task, .data = NULL, .mode = mode };
     AVC_POST(VID_EVENT_START, avi, -1);
 
     CAM_ACQUIRE(cam);
-    cam_flush();
+    cam_flush(0);
     for (pkt.id = 0; video.run && pkt.id < nframe; pkt.id++) {
-        // FIXME: fb_count = 1: must return before get
-        if (!( next = esp_camera_fb_get() )) break;
         if (!notify_released(500, 0)) {
-            ESP_LOGD(TAG, "%08u: frame not released", pkt.id);
-            esp_camera_fb_return(next);
+            ESP_LOGD(TAG, "%08zu: prev frame not released", pkt.id);
+            pkt.id--;
             continue;
         }
-        if (prev && prev->format != PIXFORMAT_JPEG) TRYFREE(pkt.data);
-        if (next->format == PIXFORMAT_JPEG) {
-            pkt.data = next->buf;
-            pkt.len = next->len;
-        } else if (!frame2jpg(next, 80, (uint8_t **)&pkt.data, &pkt.len)) {
-            ESP_LOGE(TAG, "%08u: JPEG compression failed", pkt.id);
+        if (prev && pkt.data != prev->buf) TRYFREE(pkt.data);
+        TRYNULL(prev, esp_camera_fb_return);
+        if (!( next = esp_camera_fb_get() )) break;
+        const char *pfstr = ""; uint16_t bpp = 0;
+        if (fmt_info(next->format, &pfstr, NULL, &bpp)) {
+            ESP_LOGE(TAG, "%08zu: Unsupported format %s", pkt.id, pfstr);
             esp_camera_fb_return(next);
             break;
+        } else if (next->len < next->width * next->height * bpp / 8) {
+            pkt.data = next->buf;
+            pkt.len = next->len;
+        } else if (!frame2jpg(next, 10, (uint8_t **)&pkt.data, &pkt.len)) {
+            ESP_LOGE(TAG, "%08zu: JPEG compression failed", pkt.id);
+            esp_camera_fb_return(next);
+            break;
+        } else if (!pkt.data) {
+            ESP_LOGW(TAG, "%08zu: JPEG %zu to %zu %p", pkt.id, next->len, pkt.len, pkt.data);
         }
         AVC_POST(VID_EVENT_DATA, pkt, 10);
-        TRYNULL(prev, esp_camera_fb_return);
         prev = next;
     }
     CAM_RELEASE(cam);
@@ -506,8 +528,9 @@ static void vid_capture(void *arg) {
     AVC_POST(VID_EVENT_STOP, avi, -1);
     notify_released(50, 10);
     UREGEVTS(AVC, video.shdl);
-    if (prev && prev->format != PIXFORMAT_JPEG) TRYFREE(pkt.data);
+    if (prev && pkt.data != prev->buf) TRYFREE(pkt.data);
     TRYNULL(prev, esp_camera_fb_return);
+exit:
     video.task = NULL;
     vTaskDelete(NULL);
 }
@@ -526,7 +549,9 @@ esp_err_t avi_command(
             if (!ptr) return ESP_ERR_INVALID_ARG;
             sensor_t *cam = esp_camera_sensor_get();
             if (!cam) return ESP_ERR_INVALID_STATE;
+            static video_mode_t mode;
             static camera_fb_t *frame;
+            static bool warned = false;
             if (!strcasecmp(ctrl, "print")) {
                 cam_dumps(cam, (FILE *)ptr);
             } else if (!strcasecmp(ctrl, "loads")) {
@@ -536,16 +561,34 @@ esp_err_t avi_command(
                 return json ? ESP_OK : ESP_ERR_NO_MEM;
             } else if (!strcasecmp(ctrl, "fetch")) {
                 video_data_t *pkt = (video_data_t *)ptr;
-                if (!frame && !( frame = cam_grab() )) return ESP_FAIL;
+                memset(pkt, 0, sizeof(video_data_t));
+                if (!frame) {
+                    if (video.task) {
+                        frame = esp_camera_fb_get();
+                        if (!warned) {
+                            ESP_LOGW(TAG, "Mix used async and sync APIs!");
+                            warned = true;
+                        }
+                    } else {
+                        CAM_ACQUIRE(cam);
+                        cam_flush(10);
+                        frame = esp_camera_fb_get();
+                        CAM_RELEASE(cam);
+                    }
+                    if (!frame) return ESP_FAIL;
+                }
+                mode.width = frame->width;
+                mode.height = frame->height;
+                fmt_info(frame->format, NULL, mode.fourcc, &mode.bpp);
+                pkt->mode = mode;
                 pkt->data = frame->buf;
                 pkt->len = frame->len;
             } else if (!strcasecmp(ctrl, "yield")) {
                 video_data_t *pkt = (video_data_t *)ptr;
                 if (!frame || frame->buf != pkt->data || frame->len != pkt->len)
                     return ESP_ERR_INVALID_STATE;
+                memset(pkt, 0, sizeof(video_data_t));
                 TRYNULL(frame, esp_camera_fb_return);
-                pkt->data = NULL;
-                pkt->len = 0;
             }
             return ESP_OK;
 #endif
@@ -553,24 +596,24 @@ esp_err_t avi_command(
             UNUSED FILE *fp = (FILE *)ptr;
             if (!fp) return ESP_ERR_INVALID_ARG;
 #ifdef CONFIG_BASE_USE_I2S
-            if (atgt && !audio.shdl) REGEVTS(AVC, aud_visual, fp, &audio.shdl);
+            if (atgt && !audio.shdl) REGEVTS(AVC, aud_print, fp, &audio.shdl);
 #endif
 #ifdef CONFIG_BASE_USE_CAM
-            if (vtgt && !video.shdl) REGEVTS(AVC, vid_visual, fp, &video.shdl);
+            if (vtgt && !video.shdl) REGEVTS(AVC, vid_print, fp, &video.shdl);
 #endif
         } else if (strtob(ctrl)) {
             UNUSED void *arg = (void *)(tout_ms ?: UINT32_MAX);
 #ifdef CONFIG_BASE_USE_I2S
             if (atgt && !audio.task) {
                 audio.run = true;
-                xTaskCreate(aud_capture, "audio", 8192, arg, 20, &audio.task);
+                xTaskCreate(aud_task, "audio", 8192, arg, 20, &audio.task);
                 if (!audio.task) return ESP_ERR_NO_MEM;
             }
 #endif
 #ifdef CONFIG_BASE_USE_CAM
             if (vtgt && !video.task) {
                 video.run = true;
-                xTaskCreate(vid_capture, "video", 4096, arg, 20, &video.task);
+                xTaskCreate(vid_task, "video", 4096, arg, 20, &video.task);
                 if (!video.task) return ESP_ERR_NO_MEM;
             }
 #endif
@@ -592,7 +635,7 @@ esp_err_t avi_command(
     return ESP_OK;
 }
 
-// QRCode encoder
+// QRCode codec
 
 #ifdef WITH_QRENC
 #   include "../qrcodegen.h"
@@ -633,6 +676,7 @@ esp_err_t avi_qrenc(qrenc_config_t *cfg) {
     bool ansi = cfg->flags & QRENC_ANSI;
     uint8_t ixor = inv ? 0xFF : 0;
     int size = qrcodegen_getSize(rst), tl = size / 3, th = size * 2 / 3;
+
 #   define MARKER(x, y)                                                     \
     ( x < 0 || y < 0 || x >= size || y >= size ||                           \
       (x < tl && y < tl) || (x < tl && y >= th) || (x >= th && y < tl) )
@@ -644,28 +688,31 @@ esp_err_t avi_qrenc(qrenc_config_t *cfg) {
             fprintf(cfg->stream, "\x1b[38;2;%u;%u;%um%s\x1b[0m",            \
                     r, (uint8_t)(cos((r + g) * M_2_PI / 1e3) * 255), g, s); \
         } else {                                                            \
-            fprintf(cfg->stream, s);                                        \
+            fputs(s, cfg->stream);                                          \
         }                                                                   \
     } while (0)
+
     if (cfg->flags & QRENC_BMP) {                       // save as bmp
-        int line = CMOD(size / 8, 4);
-        int lpad = line - CDIV(size, 8);                // pad for 4 Bytes
+        uint8_t line = CMOD(size / 8, 4);
+        uint8_t lpad = line - CDIV(size, 8);            // pad for 4 Bytes
+        uint16_t bpp = 1, nplt = 1 << bpp;              // black and white
+        uint32_t *palette = NULL;
+        size_t plen = nplt * sizeof(uint32_t);
+        if (( err = ECALLOC(palette, nplt, sizeof(uint32_t)) )) goto exit;
+        LOOP(i, 1, nplt) { palette[i] = 0xFFFFFFFF * i / (nplt - 1); };
         bmp_header_t BMP = {
-            "BM", -1, 0, BMP_HEADER_FILE_LEN + BMP_HEADER_INFO_LEN,
+            "BM", -1, 0, BMP_HEADER_FILE_LEN + BMP_HEADER_INFO_LEN + plen,
             BMP_HEADER_INFO_LEN, size, size, 1,
-            1, 0, line * size, 0, 0, 0, 0
+            bpp, 0, line * size, 0x0B13, 0x0B13, 0, 0
         };
-        int nplt = 1 << CONS(BMP.bpp, 1, 4);
-        uint32_t PLT[nplt];
-        LOOPN(i, nplt) { PLT[i] = 0xFFFFFFFF * i / (nplt - 1); };
-        BMP.offset += sizeof(PLT);
         BMP.filelen = BMP.offset + BMP.datalen;
         fwrite(&BMP, sizeof(BMP), 1, cfg->stream);
-        fwrite(&PLT, sizeof(PLT), 1, cfg->stream);
+        fwrite(palette, plen, 1, cfg->stream);
+        free(palette);
         uint8_t val = 0, final = size - 1;
         LOOPND(y, size) {                               // v-flip
             LOOPN(x, size) {
-                uint8_t mod = x % 8;
+                uint8_t mod = x & 7;
                 if (qrcodegen_getModule(rst, x, y)) val |= BIT(mod);
                 if (mod == 7 || x == final) {
                     fputc(val ^ ixor, cfg->stream);
@@ -720,11 +767,139 @@ exit:
     TRYFREE(tmp);
     return err;
 }
-#else
+#else // WITH_QRENC
 esp_err_t avi_qrenc(qrenc_config_t *c) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(c);
 }
-#endif
+#endif // WITH_QRENC
+
+#ifdef WITH_QRDEC
+#   include "quirc.h"
+
+static struct {
+    void *mutex;
+    uint16_t hres;
+    uint16_t vres;
+    struct quirc *ctx;
+} qrdec;
+
+static void qrdec_task(void *stream) {
+    // quirc_end uses about 10KB stack, so run this in a separate task
+    quirc_end(qrdec.ctx);
+    // qrcode_code and qrcode_data will use about 12KB stack
+    struct quirc_code code;
+    struct quirc_data data;
+    int found = quirc_count(qrdec.ctx);
+    if (!found) {
+        fprintf(stream, "qrdec found nothing on %ux%u\n", qrdec.hres, qrdec.vres);
+    } else LOOPN(i, found) {
+        quirc_extract(qrdec.ctx, i, &code);
+        quirc_decode_error_t err = quirc_decode(&code, &data);  // 8KB
+        if (err == QUIRC_ERROR_DATA_ECC) {
+            quirc_flip(&code);                                  // 4KB
+            err = quirc_decode(&code, &data);
+        }
+        if (err) {
+            fprintf(stream, "qrdec %d error: %s\n", i, quirc_strerror(err));
+            continue;
+        }
+        // uint8_t *qrcode = &code.cell_bitmap - 1; qrcode[0] = code.size;
+        // should we print qrcode?
+        fprintf(stream,
+            "qrdec %d: ver %d, ecl %c, eci %" PRIu32 ", mask %d, type %s\n",
+            i, data.version, "MLHQ"[data.ecc_level], data.eci, data.mask,
+            data.data_type == QUIRC_DATA_TYPE_NUMERIC ? "NUMERIC" :
+            data.data_type == QUIRC_DATA_TYPE_ALPHA ? "ALPHA" :
+            data.data_type == QUIRC_DATA_TYPE_BYTE ? "BINARY" :
+            data.data_type == QUIRC_DATA_TYPE_KANJI ? "KANJI" : "UNKNOWN");
+        if (data.data_type == QUIRC_DATA_TYPE_BYTE) {
+            hexdumpc(stream, data.payload, data.payload_len);
+        } else {
+            fprintf(stream, "%s\n", (const char *)data.payload);
+        }
+    }
+    RELEASE(qrdec.mutex);
+    vTaskDelete(NULL);
+}
+
+static esp_err_t frame2grey(video_data_t *frame, uint8_t *dst) {
+    uint8_t *src = frame->data, *end;
+    uint32_t npx = frame->mode.width * frame->mode.height;
+    switch (frame->mode.fmt) {
+    case FOURCC('G', 'R', 'E', 'Y'): memcpy(dst, src, npx); return ESP_OK;
+    case FOURCC('Y', 'U', 'Y', 'V'):
+        for (; npx--; src += 2) { *dst++ = *src; } return ESP_OK;
+    case FOURCC('R', 'G', 'B', '3'):
+        for (; npx--; src += 3) {
+            *dst++ = (src[0] * 299 + src[1] * 587 + src[2] * 114) / 1000;
+        }
+        return ESP_OK;
+    case FOURCC('R', 'G', 'B', 'P'):
+        for (; npx--; src += 2) {
+            uint16_t v = src[1] << 8 | src[0]; // swap16
+            *dst++ = ((v & 0xF800) * 8 + (v & 0x7E0) * 4 + (v & 0x1F) * 8) / 3;
+        }
+        return ESP_OK;
+    case FOURCC('J', 'P', 'E', 'G'): {
+        int count = 0;
+        jpeg_dec_header_info_t info;
+        jpeg_dec_io_t io = { .inbuf = frame->data, .inbuf_len = frame->len };
+        jpeg_dec_handle_t hdl;
+        jpeg_dec_config_t cfg = DEFAULT_JPEG_DEC_CONFIG();
+        cfg.output_type = JPEG_PIXEL_FORMAT_CbYCrY;
+        cfg.block_enable = true;
+        jpeg_error_t err = jpeg_dec_open(&cfg, &hdl);
+        if (!err) err = jpeg_dec_parse_header(hdl, &io, &info);
+        if (!err) err = jpeg_dec_get_outbuf_len(hdl, &io.out_size);
+        if (!err) err = jpeg_dec_get_process_count(hdl, &count);
+        if (!err) {
+            io.outbuf = jpeg_calloc_align(io.out_size, 16);
+            err = io.outbuf ? JPEG_ERR_OK : JPEG_ERR_NO_MEM;
+        }
+        if (!err) LOOPN(i, count) {
+            if (( err = jpeg_dec_process(hdl, &io) )) break;
+            for (src = io.outbuf + 1, end = io.outbuf + io.out_size;
+                 src < end && npx--; src += 2
+            ) { *dst++ = *src; }
+        }
+        TRYNULL(hdl, jpeg_dec_close);
+        TRYFREE(io.outbuf);
+        switch (err) {
+        case JPEG_ERR_OK:           return ESP_OK;
+        case JPEG_ERR_FAIL:         return ESP_FAIL;
+        case JPEG_ERR_NO_MEM:       return ESP_ERR_NO_MEM;
+        case JPEG_ERR_BAD_DATA:     return ESP_ERR_INVALID_SIZE;
+        case JPEG_ERR_NO_MORE_DATA: return ESP_ERR_INVALID_SIZE;
+        case JPEG_ERR_INVALID_PARAM: return ESP_ERR_INVALID_ARG;
+        default: break; // fallback to ESP_ERR_NOT_SUPPORTED
+        }
+    }   FALLTH;
+    default: return ESP_ERR_NOT_SUPPORTED;
+    }
+}
+
+esp_err_t avi_qrdec(video_data_t *frame) {
+    if (!frame || !frame->data) return ESP_ERR_INVALID_ARG;
+    if (!qrdec.mutex && !( qrdec.mutex = MUTEX() )) return ESP_ERR_NO_MEM;
+    if (!qrdec.ctx && !( qrdec.ctx = quirc_new() )) return ESP_ERR_NO_MEM;
+    if (frame->mode.width != qrdec.hres || frame->mode.height != qrdec.vres) {
+        if (quirc_resize(qrdec.ctx, frame->mode.width, frame->mode.height))
+            return ESP_ERR_NO_MEM;
+        qrdec.hres = frame->mode.width;
+        qrdec.vres = frame->mode.height;
+    }
+    esp_err_t err = frame2grey(frame, quirc_begin(qrdec.ctx, NULL, NULL));
+    if (err) return err;
+    if (!xTaskCreate(qrdec_task, "qrdec", 24 * 1024, stdout, 5, NULL))
+        return ESP_ERR_NO_MEM;
+    if (!ACQUIRE(qrdec.mutex, 5000)) return ESP_ERR_TIMEOUT;
+    return ESP_OK;
+}
+#else // WITH_QRDEC
+esp_err_t avi_qrdec(video_data_t *f) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(f);
+}
+#endif // WITH_QRDEC
 
 void avi_initialize() {
 #ifdef CONFIG_BASE_USE_I2S

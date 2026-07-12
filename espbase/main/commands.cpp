@@ -24,8 +24,6 @@
 #include "esp_console.h"
 #include "esp_heap_caps.h"
 #include "rom/uart.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 #include "linenoise/linenoise.h"
 #include "argtable3/argtable3.h"
 
@@ -80,6 +78,9 @@
 #   ifdef WITH_PCAP
 #       define CONSOLE_NET_PCAP     // 4424 Bytes
 #   endif
+#   ifdef WITH_MQTT
+#       define CONSOLE_NET_MQTT     //  432 Bytes
+#   endif
 #   ifdef WITH_MDNS
 #       define CONSOLE_NET_MDNS     //  520 Bytes
 #   endif
@@ -127,20 +128,23 @@ static esp_err_t register_commands(const esp_console_cmd_t *cmds, size_t num) {
     return err;
 }
 
-static bool parse_error(int argc, char **argv, void **argtable) {
-    LOOPN(i, argc) {
-        if (!strcmp(argv[i], "--help")) {
-            printf("Usage: %s", argv[0]);
-            arg_print_syntax(stdout, argtable, "\n");
-            arg_print_glossary(stdout, argtable, "  %-20s %s\n");
-            return true;
-        }
+static bool parse_error(int argc, char **argv, arg_hdr_t **argtable) {
+    int end, help = 0, shortopt = 0;
+    for (end = 0; !(argtable[end]->flag & ARG_TERMINATOR); end++) {
+        if (strchr(argtable[end]->shortopts ?: "", 'h')) shortopt = true;
     }
-    if (arg_parse(argc, argv, argtable) != 0) {
-        arg_hdr_t **table = (arg_hdr_t **)argtable;
-        int tabindex = 0;
-        while (!(table[tabindex]->flag & ARG_TERMINATOR)) { tabindex++; }
-        arg_print_errors(stdout, (arg_end_t *)table[tabindex], argv[0]);
+    LOOPN(i, argc) {
+        if (( help = !strcmp(argv[i], "--help") ) || (!shortopt &&
+            ( help = !strcmp(argv[i], "-h") ))) break;
+    }
+    if (help) {
+        if (argc) printf("Usage: %s", argv[0]);
+        arg_print_syntax(stdout, (void **)argtable, "\n");
+        arg_print_glossary(stdout, (void **)argtable, "  %-20s %s\n");
+        return true;
+    }
+    if (arg_parse(argc, argv, (void **)argtable) != 0) {
+        arg_print_errors(stdout, (arg_end_t *)argtable[end], argv[0]);
         printf("Try '%s --help' for more information\n", argv[0]);
         return true;
     }
@@ -149,7 +153,7 @@ static bool parse_error(int argc, char **argv, void **argtable) {
 
 #define ARG_PARSE(c, v, t)                                                  \
         do {                                                                \
-            if (parse_error((c), (v), (void **)(t)))                        \
+            if (parse_error((c), (v), (arg_hdr_t **)(t)))                   \
                 return ESP_ERR_CONSOLE_ARGPARSE;                            \
         } while (0)
 
@@ -248,8 +252,9 @@ static int sys_reboot(int argc, char **argv) {
 
 #ifdef CONSOLE_SYS_SLEEP
 static const char * const wakeup_reason_list[] = {
-    "Undefined", "Undefined", "EXT0", "EXT1",
-    "Timer", "Touchpad", "ULP", "GPIO", "UART",
+    "Undefined", "All", "EXT0", "EXT1", "Timer",
+    "Touchpad", "ULP", "GPIO", "UART", "WiFi",
+    "CoCPU", "CoCPU-Crash", "BT", "VAD",
 };
 
 static struct {
@@ -358,8 +363,17 @@ static int sys_sleep(int argc, char **argv) {
     } else {
         esp_deep_sleep_start(); // no-return (see console_register_commands)
     }
-    fprintf(stderr, "Woken up from light sleep mode by %s\n",
-            wakeup_reason_list[(int)esp_sleep_get_wakeup_cause()]);
+#   ifdef IDF_TARGET_V6
+    uint32_t causes = esp_sleep_get_wakeup_causes();
+    LOOPN(i, LEN(wakeup_reason_list)) {
+        if (!bitread(causes, i)) continue;
+        fprintf(stderr, "Woken up from sleep by %s\n", wakeup_reason_list[i]);
+    }
+#   else
+    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+    fprintf(stderr, "Woken up from sleep by %s\n",
+            cause < LEN(wakeup_reason_list) ? wakeup_reason_list[cause] : "Unknown");
+#   endif
     return esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
 }
 #endif // CONSOLE_SYS_SLEEP
@@ -436,7 +450,7 @@ static esp_err_t sys_exec(int argc, char **argv) {
     if (sys_exec_args.hdr->count) {
         filesys_readelf(type, path, sys_exec_args.hdr->count);
     } else if (!( err = ECALLOC(eargv, eargc, sizeof(char *)) )) {
-        char *basename = strrchr(path, '/');
+        const char *basename = strrchr(path, '/');
         LOOPN(i, eargc) {
             eargv[i] = i ? strdup(sys_exec_args.argv->sval[i - 1]) :
                            strdup(basename ? basename + 1 : path);
@@ -552,7 +566,7 @@ static struct {
     arg_end_t *end;
 } drv_led_args = {
     .idx = arg_int0(NULL, NULL, NULL, "LED index"),
-    .lgt = arg_str0("l", NULL, "0~255", "set lightness or on|off"),
+    .lgt = arg_str0("l", NULL, "0~255", "set brightness"),
     .clr = arg_str0("c", NULL, "0xRRGGBB", "set RGB color"),
     .blk = arg_int0("b", NULL, NULL, "set blink effect"),
     .end = arg_end(sizeof(drv_led_args) / sizeof(void *))
@@ -973,41 +987,50 @@ static struct {
     arg_str_t *key;
     arg_str_t *val;
     arg_lit_t *load;
-    arg_lit_t *save;
+    arg_lit_t *dump;
     arg_lit_t *lcfg;
     arg_lit_t *lall;
-    arg_str_t *del;
     arg_lit_t *env;
+    arg_str_t *del;
     arg_end_t *end;
 } util_config_args = {
     .key  = arg_str0(NULL, NULL, "KEY", "specify config by key"),
     .val  = arg_str0(NULL, NULL, "VAL", "set config value"),
     .load = arg_lit0(NULL, "load", "load NVS to RAM"),
-    .save = arg_lit0(NULL, "save", "save RAM to NVS"),
-    .lcfg = arg_lit0(NULL, "list", "list NVS entries"),
+    .dump = arg_lit0(NULL, "dump", "dump RAM to NVS"),
+    .lcfg = arg_lit0(NULL, "list", "list cfg NVS entries"),
     .lall = arg_lit0(NULL, "all", "list all NVS entries"),
-    .del  = arg_str0(NULL, "del", "NS", "erase partition/namespace/key"),
     .env  = arg_lit0(NULL, "env", "use environ instead of NVS backend"),
+    .del  = arg_str0(NULL, "del", "NS", "erase partition/namespace/key"),
     .end  = arg_end(sizeof(util_config_args) / sizeof(void *))
 };
+
+extern char **environ;
 
 static int util_config(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_config_args);
     esp_err_t err = ESP_OK;
-    const char *key = ARG_STR(util_config_args.key, NULL);
-    const char *val = ARG_STR(util_config_args.val, NULL);
-    const char *del = ARG_STR(util_config_args.del, NULL);
     bool env = util_config_args.env->count;
+    const char *del = ARG_STR(util_config_args.del, NULL);
+    const char *val = ARG_STR(util_config_args.val, NULL);
+    const char *key = ARG_STR(util_config_args.key, env ? del : NULL);
     if (del) {
         if (!env) {
             void *hdl = NULL;
             err = config_nvs_open(&hdl, del, false);
             if (!err) err = config_nvs_delete(hdl, key);
             config_nvs_close(&hdl);
-        } else for (int i = 0; !err && environ[i]; i++) {
-            if (key && !startswith(environ[i], key)) continue;
-            if (key && environ[i][strlen(key)] != ' ') continue;
-            err = unsetenv(environ[i]) ? errval(errno) : 0;
+        } else for (char *tmp, **ptr = environ; !err && *ptr;) {
+            if (key && !startswith(*ptr, key)) {
+                ptr++;
+            } else if (key && (*ptr)[strlen(key)] == '=') {
+                err = unsetenv(key) ? errval(errno) : 0;
+            } else if (!( tmp = strndup(*ptr, strcspn(*ptr, "=")) )) {
+                err = ESP_ERR_NO_MEM;
+            } else {
+                err = unsetenv(tmp) ? errval(errno) : 0;
+            }
+            TRYFREE(tmp);
         }
     } else if (key) {
         if (val) {
@@ -1023,7 +1046,7 @@ static int util_config(int argc, char **argv) {
         }
     } else if (util_config_args.load->count) {
         err = config_nvs_load();
-    } else if (util_config_args.save->count) {
+    } else if (util_config_args.dump->count) {
         err = config_nvs_dump();
     } else if (util_config_args.lcfg->count) {
         config_nvs_list(false);
@@ -1113,7 +1136,7 @@ static struct {
     arg_lit_t *ext;
     arg_end_t *end;
 } util_hist_args = {
-    .cmd = arg_str1(NULL, NULL, "load|save", ""),
+    .cmd = arg_str1(NULL, NULL, "CMD", "load|save"),
     .dst = arg_str0("f", NULL, "PATH", "history file [default history.txt]"),
     .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end = arg_end(sizeof(util_hist_args) / sizeof(void *))
@@ -1239,7 +1262,7 @@ static struct {
     arg_end_t *end;
 } net_ip_args = {
     .itf  = arg_str0(NULL, NULL, "IFACE", "sta|ap|eth"),
-    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off|ip|gw|nm|dft|list|scan"),
+    .cmd  = arg_str0(NULL, NULL, "CMD", "up|down|ip|gw|nm|dft|info|scan"),
     .ssid = arg_str0("s", NULL, "SSID", "set AP hostname"),
     .pass = arg_str0("p", NULL, "PASS", "set AP password"),
     .host = arg_str0("i", NULL, "IPV4", "set static IP address"),
@@ -1301,7 +1324,7 @@ static struct {
     arg_end_t *end;
 } net_pmap_args = {
     .cmd   = arg_str0(NULL, NULL, "CMD", "on|off|add|del|sync|load|dump"),
-    .proto = arg_str0("p", NULL, "tcp|udp", "default both"),
+    .proto = arg_str0("p", NULL, "PROTO", "tcp|udp|both (default both)"),
     .sport = arg_int0("s", NULL, "0~65535", "port of ESP32"),
     .daddr = arg_str0("h", NULL, "IPV4", "addr of client"),
     .dport = arg_int0("d", NULL, "0~65535", "port of client"),
@@ -1327,8 +1350,8 @@ static struct {
     arg_int_t *pkt;
     arg_end_t *end;
 } net_pcap_args = {
-    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
-    .itf  = arg_str0(NULL, NULL, "eth|wifi", "select interface [default eth]"),
+    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
+    .itf  = arg_str0(NULL, NULL, "IFACE", "eth|wifi (default eth)"),
     .pkt  = arg_int0(NULL, "num", "0~2^31", "stop after number of packets"),
     .end  = arg_end(sizeof(net_pcap_args) / sizeof(void *))
 };
@@ -1343,6 +1366,43 @@ static int net_pcap(int argc, char **argv) {
 }
 #endif
 
+#ifdef CONSOLE_NET_MQTT
+static struct {
+    arg_str_t *ctrl;
+    arg_str_t *url;
+    arg_str_t *tpc;
+    arg_str_t *data;
+    arg_int_t *qos;
+    arg_lit_t *ret;
+    arg_end_t *end;
+} net_mqtt_args = {
+    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off|pub|sub|unsub|load|dump"),
+    .url  = arg_str0("u", NULL, "URL", "MQTT broker URL schema://[user:pass@]host[:port][/path][#cid]"),
+    .tpc  = arg_str0("t", NULL, "TOPIC", "MQTT topic"),
+    .data = arg_str0("d", NULL, "DATA", "MQTT publish data to topic"),
+    .qos  = arg_int0("q", NULL, "QOS", "MQTT publish QoS level 0/1/2"),
+    .ret  = arg_lit0(NULL, "retain", "MQTT publish retain"),
+    .end  = arg_end(sizeof(net_mqtt_args) / sizeof(void *))
+};
+
+static int net_mqtt(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_mqtt_args);
+    const char *data = ARG_STR(net_mqtt_args.data, NULL);
+    mqtt_pub_t pub = {
+        .data = data,
+        .len = strlen(data ?: ""),
+        .qos = MIN(ARG_INT(net_mqtt_args.qos, 0), 2),
+        .retain = !!net_mqtt_args.ret->count
+    };
+    return mqtt_command(
+        ARG_STR(net_mqtt_args.ctrl, NULL),
+        ARG_STR(net_mqtt_args.url, NULL),
+        ARG_STR(net_mqtt_args.tpc, NULL),
+        &pub
+    );
+}
+#endif
+
 #ifdef CONSOLE_NET_MDNS
 static struct {
     arg_str_t *ctrl;
@@ -1352,7 +1412,7 @@ static struct {
     arg_int_t *tout;
     arg_end_t *end;
 } net_mdns_args = {
-    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
     .host = arg_str0("h", NULL, "HOST", "mDNS hostname to query"),
     .serv = arg_str0("s", NULL, "http|smb", "mDNS service to query"),
     .prot = arg_str0("p", NULL, "tcp|udp", "mDNS protocol to query"),
@@ -1380,9 +1440,9 @@ static struct {
     arg_int_t *intv;
     arg_end_t *end;
 } net_sntp_args = {
-    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
     .host = arg_str0("h", NULL, "HOST", "SNTP server name or address"),
-    .mode = arg_str0("m", NULL, "immed|smooth", "SNTP time sync mode"),
+    .mode = arg_str0("m", NULL, "MODE", "SNTP sync mode: immed|smooth"),
     .intv = arg_int0("i", NULL, "0~2^31", "interval between sync in ms"),
     .end  = arg_end(sizeof(net_sntp_args) / sizeof(void *))
 };
@@ -1513,7 +1573,7 @@ static struct {
     arg_dbl_t *idt;
     arg_end_t *end;
 } net_hbeat_args = {
-    .ctrl = arg_str0(NULL, NULL, "on|off", "enable / disable"),
+    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off|load|dump"),
     .hurl = arg_str0(NULL, "hurl", "HTTP", "endpoint to post device info"),
     .iurl = arg_str0(NULL, "iurl", "HTTP", "endpoint to post device data"),
     .hdt  = arg_dbl0(NULL, "hdt", "SEC", "duration of post info in sec"),
@@ -1549,6 +1609,9 @@ static esp_err_t register_net() {
 #endif
 #ifdef CONSOLE_NET_PCAP
         ESP_CMD_ARG(net, pcap, "Capture WiFi/ETH packets into pcap format"),
+#endif
+#ifdef CONSOLE_NET_MQTT
+        ESP_CMD_ARG(net, mqtt, "Manage MQTT client and subscription"),
 #endif
 #ifdef CONSOLE_NET_MDNS
         ESP_CMD_ARG(net, mdns, "Query / set mDNS hostname and service info"),
@@ -1676,7 +1739,7 @@ static int app_hid(int argc, char **argv) {
 #ifdef CONFIG_BASE_DEBUG
         if (HIDTool.dlen) {
             printf("HID Descriptor (%d Bytes):\n", HIDTool.dlen);
-            hexdump(HIDTool.desc, HIDTool.dlen, 80);
+            hexdump(stdout, HIDTool.desc, HIDTool.dlen, 80);
         }
 #endif
         return 0;
@@ -1771,17 +1834,23 @@ static struct {
     arg_str_t *tgt;
     arg_str_t *cmd;
     arg_int_t *tout;
+    arg_str_t *out;
+    arg_lit_t *ext;
     arg_end_t *end;
 } app_avc_args = {
     .tgt  = arg_str0(NULL, NULL, "1~4", "audio|video|all|cam"),
-    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off|print|{CFG}"),
+    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off|print|save|{CFG}"),
     .tout = arg_int0("t", NULL, "0~2^31", "capture task timeout in ms"),
+    .out  = arg_str0("o", NULL, "PATH", "save data as .wav|.avi"),
+    .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .end  = arg_end(sizeof(app_avc_args) / sizeof(void *))
 };
 
 static int app_avc(int argc, char **argv) {
     ARG_PARSE(argc, argv, &app_avc_args);
+    esp_err_t err = ESP_OK;
     uint32_t tout_ms = ARG_INT(app_avc_args.tout, 0);
+    const char *out = ARG_STR(app_avc_args.out, NULL);
     const char *cmd = ARG_STR(app_avc_args.cmd, NULL);
     const char *tgt = ARG_STR(app_avc_args.tgt, "3");
     const char *itpl = app_avc_args.tgt->hdr.glossary;
@@ -1789,21 +1858,30 @@ static int app_avc(int argc, char **argv) {
     uint8_t index = istr ? strncnt(itpl, "|", istr - itpl) + 1: tgt[0] - '0';
     if (index == IMAGE_TARGET) {
         static video_data_t frame;
-        esp_err_t err = ESP_OK;
         if (!cmd) {
             err = CAMERA_PRINT(stdout);
         } else if (strncnt(cmd, "{:=}", -1)) {
             err = CAMERA_LOADS(cmd) ?: CAMERA_PRINT(stdout);
         } else if (strtob(cmd)) {
             err = CAMERA_FETCH(frame);
-            if (!err) printf("Fetch image %p len %u", frame.data, frame.len);
+            if (!err) printf("Fetch image %p len %zu", frame.data, frame.len);
         } else {
             err = CAMERA_YIELD(frame);
-            if (!err) printf("Yield image %p len %u", frame.data, frame.len);
+            if (!err) printf("Yield image %p len %zu", frame.data, frame.len);
         }
-        return err;
+    } else {
+        FILE *ptr = stderr;
+        if (out) {
+            if (app_avc_args.ext->count) {
+                ptr = fopen(snorm(out), "w");
+            } else {
+                ptr = fopen(fjoin(2, Config.sys.DIR_DATA, out), "w");
+            }
+        }
+        err = avi_command(MIN(index, 3), cmd, tout_ms, ptr);
+        if (out) TRYNULL(ptr, fclose);
     }
-    return avi_command(MIN(index, 3), cmd, tout_ms, stderr);
+    return err;
 }
 #endif // CONSOLE_APP_AVC
 
@@ -1818,7 +1896,7 @@ static struct {
     arg_lit_t *ext;
     arg_end_t *end;
 } app_qrc_args = {
-    .cmd = arg_str1(NULL, NULL, "enc|dec", ""),
+    .cmd = arg_str1(NULL, NULL, "CMD", "enc|dec"),
     .txt = arg_str0("t", NULL, "STR", "text to be encoded in qrcode"),
     .bdr = arg_int0("b", NULL, "0~16", "padded border length"),
     .clr = arg_str0("c", NULL, "inv|ansi", "color to print qrcode"),
@@ -1855,7 +1933,6 @@ static int app_qrc(int argc, char **argv) {
             } else {
                 cfg.stream = fopen(fjoin(2, Config.sys.DIR_DATA, out), "w");
             }
-            if (!cfg.stream) return errval(errno);
         }
         if (strcasestr(fmt, "full")) cfg.flags |= QRENC_FULL;
         if (strcasestr(fmt, "mini")) cfg.flags |= QRENC_MINI;
@@ -1868,7 +1945,12 @@ static int app_qrc(int argc, char **argv) {
         err = avi_qrenc(&cfg);
         if (out) TRYNULL(cfg.stream, fclose);
     } else if (!strcasecmp(cmd, "dec")) {
-        err = ESP_ERR_NOT_SUPPORTED; // TODO fetch camera and qrdec
+        video_data_t frame;
+        err = CAMERA_FETCH(frame);
+        if (!err) {
+            err = avi_qrdec(&frame);
+            CAMERA_YIELD(frame);
+        }
     }
     return err;
 }

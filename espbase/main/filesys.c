@@ -8,7 +8,6 @@
 #include "drivers.h"            // for PIN_XXX
 #include "config.h"
 
-#include "cJSON.h"
 #include "esp_spiffs.h"
 #include "esp_vfs_fat.h"
 #include "diskio_wl.h"
@@ -116,7 +115,7 @@ static esp_err_t filesys_init(
             .max_files = 10,
             .allocation_unit_size = 16 * 1024,
         };
-#   if defined(CONFIG_BASE_SDFS_SPI)                // SDSPI
+#   if defined(CONFIG_BASE_SDFS_SPI)                    // SDSPI
         sdmmc_host_t host = SDSPI_HOST_DEFAULT();
         sdspi_device_config_t spi = {
             .host_id  = host.slot = NUM_SPI,
@@ -131,7 +130,7 @@ static esp_err_t filesys_init(
         };
         if (!( err = esp_vfs_fat_sdspi_mount(mp, &host, &spi, &mount, &card) ))
             gpio_usage(spi.gpio_cs, "SPI CS SDCard");
-#   elif defined(CONFIG_IDF_TARGET_ESP32S3)         // SDMMC - ESP32S3
+#   elif defined(CONFIG_IDF_TARGET_ESP32S3)             // SDMMC - ESP32S3
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         sdmmc_slot_config_t mmc = {
             .clk   = CONFIG_BASE_GPIO_MMC_CLK,
@@ -155,7 +154,7 @@ static esp_err_t filesys_init(
                 gpio_usage(dat[i], strdup(buf));
             }
         }
-#   else                                            // SDMMC - ESP32
+#   else                                                // SDMMC - ESP32
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         sdmmc_slot_config_t mmc = SDMMC_SLOT_CONFIG_DEFAULT();
         mmc.width = CONFIG_BASE_SDFS_MMC;
@@ -260,7 +259,8 @@ void filesys_print_info(filesys_type_t type) {
 #ifdef CONFIG_BASE_USE_SDFS
     if (info.type != FILESYS_SDCARD || !info.card) return;
     uint16_t mhz = info.card->max_freq_khz / 1000;
-    printf( // see sdmmc_card_print_info
+    // see sdmmc_card_print_info
+    printf(
         "Name: %s\n"
         "S/N:  %d\n"
         "VPID: 0x%04X:0x%04X\n"
@@ -300,9 +300,9 @@ char * filesys_norm_r(
         if (!startswith(path, prepend)) {
             snprintf(buf, PATH_MAX_LEN, "%s/%s", prepend, path);
         } else {
-            snprintf(buf, PATH_MAX_LEN, path);
+            strlcpy(buf, path, PATH_MAX_LEN);
         }
-    } else if (!startswith(path, prepend)) { // change mountpoint
+    } else if (!startswith(path, prepend)) {            // change mountpoint
         char *slash = strdup(strchr(path + 1, '/') ?: "");
         if (slash) {
             snprintf(buf, PATH_MAX_LEN, "%s/%s", prepend, slash);
@@ -315,9 +315,9 @@ char * filesys_norm_r(
     char *out, *inp, *prev;
     for (out = inp = buf; inp[0]; inp++) {
         if (IS_SEP(inp[0])) {
-            inp += strspn(inp, "\\/") - 1;          // skip joining slashes
-            if (inp[1] == '\0') break;              // trim the tail slash
-            if (inp[1] == '.') {                    // handle './' and '../'
+            inp += strspn(inp, "\\/") - 1;              // skip joining slashes
+            if (inp[1] == '\0') break;                  // trim tailing slash
+            if (inp[1] == '.') {                        // handle ./ and ../
                 if (IS_SEP(inp[2])) {
                     inp++; continue;
                 } else if (inp[2] == '.' && IS_SEP(inp[3])) {
@@ -327,7 +327,7 @@ char * filesys_norm_r(
                 }
             }
         }
-        *out++ = inp[0] == '\\' ? '/' : inp[0];     // escape backslash
+        *out++ = inp[0] == '\\' ? '/' : inp[0];         // escape backslash
     }
     *out = '\0';
     return buf;
@@ -351,7 +351,7 @@ static char * filesys_vjoin(
         va_copy(ap, argv);
     } else {
         argc -= idx + 1;
-        len = snprintf(path, sizeof(path), buf);
+        len = strlcpy(path, buf, sizeof(path));
     }
     while (argc--) {
         const char *chunk = va_arg(ap, const char *);
@@ -381,11 +381,11 @@ const char * filesys_join(filesys_type_t type, size_t argc, ...) {
 
 bool filesys_touch(filesys_type_t type, const char *path) {
     FILE *fd = fopen(filesys_norm(type, path), "a");
-    return fd && fclose(fd) == 0; // utime is not defined in ESP_IDF
+    return fd && fclose(fd) == 0;                       // utime is not defined
 }
 
 static const char * statperm(mode_t mode) {
-    static char buf[11]; // trwxrwxrwx
+    static char buf[11];                                // trwxrwxrwx
     mode_t match[] = {
         S_IFBLK, S_IFCHR, S_IFIFO, S_IFREG, S_IFDIR, S_IFLNK, S_IFSOCK
     };
@@ -419,13 +419,13 @@ void filesys_pstat(filesys_type_t type, const char *path) {
     case S_IFSOCK:  desc = "socket file"; break;
     default:        desc = "unknown";
     }
-    char tbuf[3][36]; // YYYY-mm-dd HH:MM:SS.MILLISECS TZONE
+    char tbuf[3][36];                   // YYYY-mm-dd HH:MM:SS.MILLISECS TZONE
     LOOPN(i, 3) {
         struct timespec *ts = &st.st_atim + i;
         struct tm *ptm = localtime(&ts->tv_sec);
         if (strftime(tbuf[i], 36, "%F %T.123456789 %z", ptm)) {
             sprintf(tbuf[i] + 20, "%09ld", ts->tv_nsec);
-            tbuf[i][29] = ' '; // fix null-terminator
+            tbuf[i][29] = ' ';                          // fix null-terminator
         } else {
             tbuf[i][0] = '\0';
         }
@@ -524,10 +524,10 @@ void filesys_walk(
     if (!strlen(filesys_norm_r(type, dirname, path))) return;
     struct stat st;
     struct dirent *ent;
-    size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 }; // for dir and non-dir
+    size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 };        // for dir and non-dir
     char **lst[2] = {NULL, NULL}, *slash; NOTUSED(slash);
     DIR *dir = opendir(dirname);
-    while (( ent = readdir(dir) )) {
+    while (dir && ( ent = readdir(dir) )) {
 #ifdef CONFIG_BASE_FFS_SPI
         if (!strcmp(ent->d_name, SPIFFS_SENTINEL)) continue;
         if (type == FILESYS_FLASH && ( slash = strchr(ent->d_name, '/') )) {
@@ -536,7 +536,7 @@ void filesys_walk(
                 if (!strncmp(lst[0][i], ent->d_name, dlen)) samedir = true;
             }
             if (samedir) continue;
-            ent->d_name[dlen] = '\0'; // keep tailing slash temporarily
+            ent->d_name[dlen] = '\0';                   // keep tailing slash
             ent->d_type = DT_DIR;
         }
 #endif
@@ -554,9 +554,9 @@ void filesys_walk(
             const char *fullpath = filesys_join(type, 2, dirname, basename);
 #ifdef CONFIG_BASE_FFS_SPI
             size_t len = strlen(basename);
-            if (basename[len - 1] == '/') { // it's SPIFFS directory
-                basename[len - 1] = '\0';   // remove tailing slash
-                memset(&st, 0, sizeof(st)); // generate fake stat data
+            if (basename[len - 1] == '/') {             // SPIFFS directory
+                basename[len - 1] = '\0';               // remove tailing slash
+                memset(&st, 0, sizeof(st));             // clear stat data
                 st.st_size = 4096;
                 st.st_mode = S_IFDIR | 0755;
             } else
@@ -577,10 +577,11 @@ exit:
 }
 
 static void print_files(const char *base, const struct stat *st, void *arg) {
-    char *utf8 = NULL, buf[13]; // MTH DD HH:MM\0
-    time_t ts = time(NULL);
+    char *utf8 = NULL, buf[13];                         // MTH DD HH:MM\0
+    time_t ts = time(0);
+    int year = localtime(&ts)->tm_year;                 // not thread-safe
     struct tm *ptm = localtime(&st->st_mtime);
-    if (localtime(&ts)->tm_year == ptm->tm_year) {
+    if (year == ptm->tm_year) {
         strftime(buf, sizeof(buf), "%b %d %H:%M", ptm);
     } else {
         strftime(buf, sizeof(buf), "%b %d  %Y", ptm);
@@ -590,7 +591,7 @@ static void print_files(const char *base, const struct stat *st, void *arg) {
         if (( utf8 = gbk2str(base) )) base = utf8;
         break;
     }
-    fprintf((FILE *)arg, "%s %8s %12s %s%s\n", // something like 'ls -alh'
+    fprintf((FILE *)arg, "%s %8s %12s %s%s\n",          // same like 'ls -alh'
             statperm(st->st_mode), format_size(st->st_size),
             buf, base, S_ISDIR(st->st_mode) ? "/" : "");
     TRYFREE(utf8);
@@ -617,11 +618,12 @@ char * filesys_listdir_json(filesys_type_t type, const char *path) {
     return json;
 }
 
-uint8_t * filesys_load(filesys_type_t type, const char *path, size_t *limit) {
+void * filesys_readfile(filesys_type_t type, const char *path, size_t *limit) {
     struct stat st;
-    uint8_t *buf = NULL;
+    void *buf = NULL;
     if (stat(path = filesys_norm(type, path), &st) || !st.st_size ||
-        (limit && st.st_size > *limit) || EMALLOC(buf, st.st_size)) return buf;
+        (limit && *limit && st.st_size > *limit) || EMALLOC(buf, st.st_size)
+    ) return buf;
     FILE *fd = fopen(path, "r");
     size_t len = fd ? fread(buf, 1, st.st_size, fd) : 0;
     if (len != st.st_size) {
@@ -637,8 +639,8 @@ uint8_t * filesys_load(filesys_type_t type, const char *path, size_t *limit) {
 static bool elf_init; // mute elf_loader loggings
 
 static esp_err_t load_elf(
-    filesys_type_t type, const char *path, size_t *len,
-    esp_elf_t *elf, uint8_t **buf
+    filesys_type_t type, const char *path,
+    size_t *len, esp_elf_t *elf, void **pbuf
 ) {
     if (!elf_init) {
         esp_log_level_set("ELF", ESP_LOG_WARN);
@@ -646,12 +648,12 @@ static esp_err_t load_elf(
     }
     esp_err_t err = esp_elf_init(elf);
     if (err) return err;
-    uint8_t *data = filesys_load(type, path, len);
+    void *data = filesys_readfile(type, path, len);
     if (!data) return ESP_ERR_INVALID_ARG;
-    if (( err = esp_elf_relocate(elf, data) ) || !buf) {
+    if (( err = esp_elf_relocate(elf, data) ) || !pbuf) {
         free(data);
     } else {
-        *buf = data;
+        *pbuf = data;
     }
     if (err) esp_elf_deinit(elf);
     return err;
@@ -669,8 +671,8 @@ esp_err_t filesys_execute(
 }
 
 esp_err_t filesys_readelf(filesys_type_t type, const char *path, int level) {
+    void *buf = NULL;
     size_t len = 10240;
-    uint8_t *buf = NULL;
     esp_elf_t elf;
     esp_err_t err = load_elf(type, path, &len, &elf, &buf);
     elf32_hdr_t *ehdr = (elf32_hdr_t *)buf;
@@ -700,7 +702,7 @@ esp_err_t filesys_readelf(filesys_type_t type, const char *path, int level) {
             0, "REL (relocatable)", "EXEC (executable)", "DYN (shared)", "CORE"
         };
         puts("ELF Header:");
-        K("Magic");     hexdumpl(ehdr->ident, sizeof(ehdr->ident), -1);
+        K("Magic");     hexdumpl(stdout, ehdr->ident, sizeof(ehdr->ident), -1);
         K("Class");     printf("%c%c%c%s\n", p[1], p[2], p[3], V(bits, p[4]));
         K("Data");      printf("%s-endian\n", V(endian, p[5]));
         K("Version");   printf("%d (%s)\n", p[6], V(version, p[6]));

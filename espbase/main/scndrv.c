@@ -166,9 +166,11 @@ static void scn_lvgl_init() {
     const esp_lcd_panel_dev_config_t dev_config = {
         .reset_gpio_num = ctx.rst,
         .bits_per_pixel = SCREEN_DEPTH,
+#   ifndef IDF_TARGET_V6
         .color_space    = SCREEN_DEPTH == 1
                             ? ESP_LCD_COLOR_SPACE_MONOCHROME
                             : ESP_LCD_COLOR_SPACE_RGB,
+#   endif
     };
 #   if defined(CONFIG_BASE_SCN_I2C)
     const esp_lcd_panel_io_i2c_config_t io_config = {

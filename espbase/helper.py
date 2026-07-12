@@ -103,7 +103,7 @@ def suffix(path, append, sext=None):
     return f'{base}-{append}{ext}'.replace('--', '-')
 
 
-def execute(cmd, **kwargs):
+def execute(*cmd, timeout=10, check=False, quiet=False, **kwargs):
     '''Run command with subprocess and get result'''
     kwargs.setdefault('bufsize', 1)
     kwargs.setdefault('encoding', 'utf8')
@@ -111,18 +111,17 @@ def execute(cmd, **kwargs):
     kwargs.setdefault('stderr', subprocess.STDOUT)
     kwargs.setdefault('shell', True)
     kwargs.setdefault('text', True)
-    check = kwargs.pop('check', False)
-    timeout = kwargs.pop('timeout', 10)
-    if not kwargs.pop('quiet', False):
+    cmd = ' '.join(map(str, cmd))
+    if not quiet:
         print(f'Executing command `{cmd}`')
     with subprocess.Popen(cmd, **kwargs) as proc:
         try:
-            output = proc.communicate(None, timeout)[0]
+            output = proc.communicate(timeout=timeout)[0]
         except Exception:
             proc.kill()
             return ''
-        if check and proc.returncode:
-            raise subprocess.CalledProcessError(proc.returncode, cmd)
+        if check and (rc := proc.poll()):
+            raise subprocess.CalledProcessError(rc, proc.args)
         return output.strip()
 
 
@@ -232,7 +231,9 @@ def process_nvs(args):
 def gencfg(args):
     data = {}
     name = project()
-    for path in filter(op.isfile, [args.tpl, fromroot('nvs_flash.local')]):
+    for path in filter(op.isfile, [
+        args.tpl, fromroot(op.splitext(args.tpl)[0] + '.local')
+    ]):
         for row in load_csv(path):
             data[row[0]] = row  # merge multiple csv files
     data = '\n'.join(','.join(line) for line in data.values()).format(**{
@@ -531,7 +532,7 @@ def prebuild(args):
     except StopIteration:
         pass
     except Exception as e:
-        print('Rebuild webpage failed', e)
+        print('-- Rebuild webpage failed', e)
     args.quiet = True
     gengbk(args)
     gendeps(args)
@@ -542,23 +543,25 @@ def postbuild(args):
         sys.path.append(op.join(IDF_PATH, 'components/esptool_py/esptool'))
         import esptool
     except Exception:
-        return print('`esptool` not found. Run esp-idf/export first')
+        return print('-- `esptool` not found. Run esp-idf/export first')
     chip = load_chip()
     if not chip:
-        return print('Chip target not set. Run idf.py set-target first')
+        return print('-- Chip target not set. Run idf.py set-target first')
     if not detools:
-        return print('`detools` not installed. Run pip install detools>=0.49')
+        return print('-- `detools` not found. Run pip install detools>=0.49')
     if not op.isfile(args.new):
-        return print(op.basename(args.new) + ' not found. Run idf.py build')
+        return print(f'-- {op.basename(args.new)} not found. Run idf.py build')
     if not op.isfile(args.old):
+        os.makedirs(op.dirname(args.old), exist_ok=True)
         shutil.copy(args.new, args.old)
-        return print('Firmware not updated. Skip')
+        return print('-- Firmware not updated. Skip')
     with open(args.new, 'rb') as fnew, open(args.old, 'rb') as fold:
         hashnew = hashlib.sha256(fnew.read()).hexdigest()[:8]
         hashold = hashlib.sha256(fold.read()).hexdigest()[:8]
         if hashnew == hashold:
-            return print('Firmware not updated. Skip')
+            return print('-- Firmware not updated. Skip')
     print(f'-- Running postbuild scripts ({__file__}) ...')
+    pathold, basenew = op.dirname(args.old), op.basename(args.new)
     argv_backup, stdout_backup = sys.argv[:], sys.stdout
     buf, sys.stdout = BytesIO(), StringIO()
     try:
@@ -572,8 +575,7 @@ def postbuild(args):
             detools.create_patch(fold, fnew, buf, compression='heatshrink')
             buf.seek(0)
             patch = buf.read()
-        pthfile = suffix(
-            args.new.replace(hashnew, ''), f'{hashold}-{hashnew}', 'bin')
+        pthfile = op.splitext(args.new)[0] + '.patch'
         with open(pthfile, 'wb') as f:
             f.write(struct.pack(
                 '<4s 32s I 24s',
@@ -581,13 +583,13 @@ def postbuild(args):
                 bytes.fromhex(hashimg), len(patch), b''
             ) + patch)
         if not args.patch and hashold not in args.old:
-            shutil.copy(args.old, suffix(args.old, hashold, 'bin'))
             shutil.copy(args.new, args.old)
+            shutil.copy(args.old, suffix(args.old, hashold, 'bin'))
         if not args.patch and hashnew not in args.new:
-            shutil.copy(args.new, suffix(args.new, hashnew, 'bin'))
-            shutil.copy(pthfile, suffix(args.new, 'patched', 'bin'))
+            shutil.copy(pthfile, op.join(pathold, suffix(basenew, f'{hashold}-{hashnew}', 'bin')))
+            shutil.copy(args.new, op.join(pathold, suffix(basenew, hashnew, 'bin')))
     except (SystemExit, Exception) as e:
-        return print('Calculate image info failed:', e, file=sys.stderr)
+        return print('-- Calculate image info failed:', e, file=sys.stderr)
     finally:
         sys.argv = argv_backup
         sys.stdout = stdout_backup
@@ -678,10 +680,10 @@ def size_components(quiet=False, files=False, **k):
         return print(op.basename(mapfile) + ' not found. Run idf.py build')
     tpl = [re.compile(i) for i in (r'lib(.*)\.a', r'lib_a-(.*)', r'(.*)\.obj')]
     try:
-        comps = json.loads(execute(' '.join([
-            sys.executable, idfsize, mapfile, '--json',
-            '--files' if files else '--archives'
-        ]), quiet=quiet))
+        comps = json.loads(execute(
+            sys.executable, f'"{idfsize}"', f'"{mapfile}"', '--format json',
+            '--files' if files else '--archives', quiet=quiet
+        ))
         for comp in list(comps):
             if not any(comps[comp].values()):
                 comps.pop(comp)
@@ -1325,7 +1327,7 @@ class Server(ThreadingMixIn, WSGIServer):
     '''
     Call stack of WSGI applications:
         1. WSGIServer.serve_forever()
-        2. WSGIServer.get_request() => ssl.wrap_socket()
+        2. WSGIServer.get_request() => ssl.SSLContext.wrap_socket()
         3. WSGIServer.process_request() => threading.Thread()
         4. WSGIServer.finish_request()
         5. WSGIRequestHandler.handle()
@@ -1350,9 +1352,8 @@ class Server(ThreadingMixIn, WSGIServer):
         self.base_environ['REMOTE_PORT'] = addr[1]
         self.base_environ['REMOTE_HOST'] = f'{addr[0]}:{addr[1]}'
         if client.recv(1, socket.MSG_PEEK) == b'\x16':  # TLS client hello
-            app = self.get_app()
-            if hasattr(app, 'ssl_opt'):
-                client = ssl.wrap_socket(client, **app.ssl_opt)
+            if hasattr(app := self.get_app(), 'ssl_ctx'):
+                client = app.ssl_ctx.wrap_socket(client, server_side=True)
             self.base_environ['HTTPS'] = 'yes'
         else:
             self.base_environ['HTTPS'] = 'no'
@@ -1482,7 +1483,8 @@ def webserver(args):
 
     app = bottle.Bottle()
     if op.exists(args.certfile):
-        app.ssl_opt = {'server_side': True, 'certfile': args.certfile}
+        app.ssl_ctx = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+        app.ssl_ctx.load_cert_chain(args.certfile)
     if not args.static:
         app.mount('/api/', api)
     app.route('/', 'GET', lambda: bottle.redirect('index.html'))
@@ -1525,14 +1527,14 @@ def make_parser():
         '--certfile', default=certpem,
         help=f'cert file for HTTPS server [default {relpath(certpem)}]')
     sparser.add_argument(
-        '--esphost', type=str, help='IP address of alive ESP board')
+        '--esphost', type=str, help='IP address of the alive ESP device')
     sparser.add_argument(
         '--static', action='count', help='only serve HTMLs without ESP32 API')
     sparser.add_argument(
         '--test', action='store_true', help='run API compatible test')
     sparser.add_argument(
         'root', nargs='?', default=distdir,
-        help=f'path to static files [default {relpath(distdir)}]')
+        help=f'path to serve static files [default {relpath(distdir)}]')
     sparser.set_defaults(func=webserver)
 
     sparser = subparsers.add_parser(
@@ -1544,7 +1546,7 @@ def make_parser():
     sparser.set_defaults(func=blame)
 
     sparser = subparsers.add_parser(
-        'search', help='Query mDNS (UDP multicast) to find alive ESP board')
+        'search', help='Query mDNS (UDP multicast) to find alive ESP devices')
     sparser.add_argument(
         '--all', action='store_true', help='print all founded mDNS records')
     sparser.add_argument(
@@ -1604,7 +1606,7 @@ def make_parser():
 
     name = project()
     binfile = fromroot('build', name + '.bin')
-    bakfile = fromroot('build', name + '.bak')
+    bakfile = fromroot('build', 'delta', name + '.bak')
     sparser = subparsers.add_parser(
         'postbuild', help='Generate delta firmware for OTA updation')
     sparser.add_argument(

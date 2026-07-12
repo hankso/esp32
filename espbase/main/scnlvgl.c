@@ -255,7 +255,7 @@ static void dump_font(const lv_font_t *font) {
 static lv_obj_t * create_img(const char *fn, lv_obj_t *node) {
 #if LV_USE_FS_POSIX && defined(CONFIG_BASE_USE_FFS)
     char path[2 + PATH_MAX_LEN] = { LV_FS_POSIX_LETTER, ':' };
-    snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
+    strlcpy(path + 2, fjoin(2, Config.sys.DIR_DATA, fn), PATH_MAX_LEN);
     lv_obj_t *img = lv_img_create(node ?: lv_disp_get_scr_act(ctx.disp));
     lv_image_set_src(img, path);
 #   ifdef LVGL9
@@ -275,7 +275,7 @@ static lv_obj_t * create_img(const char *fn, lv_obj_t *node) {
 static lv_font_t * create_font(const char *fn) {
 #if LV_USE_FS_POSIX && defined(CONFIG_BASE_USE_FFS)
     char path[2 + PATH_MAX_LEN] = { LV_FS_POSIX_LETTER, ':' };
-    snprintf(path + 2, PATH_MAX_LEN, fjoin(2, Config.sys.DIR_DATA, fn));
+    strlcpy(path + 2, fjoin(2, Config.sys.DIR_DATA, fn), PATH_MAX_LEN);
     if (ctx.font && ctx.font->user_data &&
         !memcmp(path, ctx.font->user_data, strlen(path))) return ctx.font;
     lv_font_t *font = lv_binfont_create(path);
@@ -720,6 +720,7 @@ static void cb_screen_event(lv_event_t *e) {
         LOGI("%p got button %d %d", root, btn, evt);
     }
     if (!strcasecmp(name ?: "", "viz tscn")) {
+        // TODO: get rid of CFG_UPDATE event
         int mode = -1;
         static char last[32] = "", *modes[] = {
             "REL", "REL.ROT1", "REL.ROT2", "REL.ROT3",
@@ -735,7 +736,7 @@ static void cb_screen_event(lv_event_t *e) {
         if (evt == BUTTON_SINGLE_CLICK) {
             config_set("app.tscn.mode", modes[MOD(mode, LEN(modes))]);
         } else if (evt == BUTTON_LONG_PRESS_START) {
-            snprintf(last, sizeof(last), Config.app.TSCN_MODE);
+            strlcpy(last, Config.app.TSCN_MODE, sizeof(last));
             if (config_set("app.tscn.mode", "REC")) last[0] = '\0';
         } else if (evt == BUTTON_LONG_PRESS_UP) {
             if (!config_set("app.tscn.mode", last)) last[0] = '\0';

@@ -29,7 +29,7 @@
 
 #define CHUNK_SIZE 2048
 
-#define send_str httpd_resp_sendstr // simple alias
+#define send_str httpd_resp_sendstr                 // simple alias
 
 static const char *TAG = "Server";
 static const char *ERROR_HTML =
@@ -66,8 +66,8 @@ static const char *MEDIA_HTML =
     "<style>img {cursor:pointer;min-width:320px;min-height:240px;}</style>"
 "</head>"
 "<body>"
-    "<img id=\"vp\" src=\"media?mjpg&still\"><br>"
-    "<audio id=\"ap\" preload=\"none\" src=\"media?wav\" controls "
+    "<img id=\"vp\" src=\"media?video=mjpg&still\"><br>"
+    "<audio id=\"ap\" preload=\"none\" src=\"media?audio=wav\" controls "
         "controlslist=\"nodownload noremoteplayback noplaybackrate\"></audio>"
     "<script>"
         "vp.addEventListener('click', e => {"
@@ -116,7 +116,7 @@ static void parse_params(char *buf, bool body, void **arg) {
         char *eql = strchr(tok, '=') ?: (tok + strlen(tok));
         char *key = strndup(tok, eql - tok);
         char *val = strlen(eql) > 1 ? strdup(eql + 1) : NULL;
-        if (!key) { TRYFREE(val); break; } // ESP_ERR_NO_MEM
+        if (!key) { TRYFREE(val); break; }          // ESP_ERR_NO_MEM
         for (ptr = *ctx;; ptr = ptr->next) {
             if (ptr && ptr->next && strncmp(ptr->key, tok, eql - tok)) continue;
             if (ptr && ptr->next) {
@@ -436,8 +436,8 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
                         parse_kvs(head + 20, "; ", LEN(keys), keys, vals);
                     }
                     crlf = strstr(head = crlf + slen, sep);
-                } else if (vals[1]) {                   // filename
-                    if (!vals[0]) vals[0] = vals[1];    // name
+                } else if (vals[1]) {               // filename
+                    vals[0] = vals[0] ?: vals[1];   // name
                     crlf = strstr(head += slen, sep);
                     state = PARSE_DATA;
                     idx = 0;
@@ -487,7 +487,7 @@ static esp_err_t parse_files(httpd_req_t *req, file_cb_t callback) {
     }
     TRYFREE(buf);
     TRYFREE(ctype);
-    return rc < 0 ? ESP_FAIL : ESP_OK; // HTTPD_SOCK_ERR_xxx < 0
+    return rc < 0 ? ESP_FAIL : ESP_OK;              // HTTPD_SOCK_ERR_xxx < 0
 #undef PARSE_BDARY
 #undef PARSE_HEADER
 #undef PARSE_DATA
@@ -542,7 +542,7 @@ static esp_err_t check_request(httpd_req_t *req) {
     if (ptr) {
         TRYNULL(ptr->next, free_params);
     } else if (!( err = ECALLOC(ptr, 1, sizeof(http_param_t)) )) {
-        ptr->key = strdup(""); // SENTINEL
+        ptr->key = strdup("");                      // SENTINEL
         req->sess_ctx = ptr;
     }
     if (!err) {
@@ -557,7 +557,7 @@ static esp_err_t check_request(httpd_req_t *req) {
             }
         }
     }
-    if (!err) { // parse POST body which size < CHUNK_SIZE
+    if (!err) {                                     // parse body < CHUNK_SIZE
         bool wanted = has_header(req, "Content-Type", CTYPE_UENC);
         size_t clen = req->content_len < CHUNK_SIZE ? req->content_len : 0;
         if (clen && wanted) {
@@ -723,7 +723,7 @@ static esp_err_t on_editor(httpd_req_t *req) {
         const char *url = get_param(req, "from", FROM_ANY) ?: "";
         if (strlen(url))       return redirect(req, url);
     } else                     return send_err(req, 405, NULL);
-    return send_str(req, NULL); // 200 OK
+    return send_str(req, NULL);                     // 200 OK
 }
 
 static esp_err_t on_config(httpd_req_t *req) {
@@ -775,7 +775,7 @@ static esp_err_t on_update(httpd_req_t *req) {
     CHECK_REQUEST(req);
     if (req->method == HTTP_GET) {
         if (!has_param(req, "raw", FROM_ANY) && get_static(Config.sys.DIR_HTML))
-            return redirect(req, "/updation"); // vue.js router
+            return redirect(req, "/updation");      // vue.js router
         return send_str(req, UPDATE_HTML);
     }
     log_param(req);
@@ -808,7 +808,7 @@ static esp_err_t on_static(httpd_req_t *req) {
         dirname = Config.sys.DIR_HTML;
     }
     char basename[strcspn(req->uri, "?#") + 1];
-    snprintf(basename, sizeof(basename), req->uri); // truncate and pad null
+    strlcpy(basename, req->uri, sizeof(basename));  // truncate and pad null
     if (startswith(basename, dirname)) dirname = NULL;
     const char *path = get_static(fjoin(2, dirname, basename));
     return path ? send_file(req, path, 0) : on_error(req, HTTPD_404_NOT_FOUND);
@@ -828,7 +828,7 @@ static UNUSED int socket_send_all(int fd, void *buf, size_t len) {
         buf += ret;
         len -= ret;
     }
-    if (len) ESP_LOGD(TAG, "%d remain = %d, ret = %d", fd, len, ret);
+    if (len || ret < 0) ESP_LOGD(TAG, "fd %d, len %d, ret %d", fd, len, ret);
     return MIN(ret, 0);
 }
 
@@ -853,11 +853,11 @@ exit:
 static http_media_t video_ctx;
 
 static void handle_video_streaming(void *arg) {
-    if (!video_ctx.fd) return;  // once
+    if (!video_ctx.fd) return;                      // once
     video_data_t *pkt = arg;
     notify_increase(pkt->task);
-    if (!pkt->mode) goto exit;  // VID_EVENT_START
-    if (!pkt->len) goto stop;   // VID_EVENT_STOP
+    if (!pkt->mode.fmt) goto exit;                  // VID_EVENT_START
+    if (!pkt->len) goto stop;                       // VID_EVENT_STOP
     static char bdary[51 + 14 + 1] =
         "--FRAME\r\n"
         "Content-Type: image/jpeg\r\n"
@@ -890,6 +890,7 @@ static void on_media_data(void *func, esp_event_base_t b, int32_t i, void *p) {
 #endif
 
 static esp_err_t on_media(httpd_req_t *req) {
+    // FIXME: cannot handle video and audio simultaneously
     CHECK_REQUEST(req);
     if (has_param(req, "video", FROM_ANY)) {
 #ifndef CONFIG_BASE_USE_CAM
@@ -927,7 +928,7 @@ static esp_err_t on_media(httpd_req_t *req) {
         video_ctx.stop = xTaskGetHandle("video") == NULL;
         video_ctx.once = has_param(req, "still", FROM_ANY);
         VIDEO_START(-1);
-        snprintf(video_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
+        strlcpy(video_ctx.addr, getaddrname(fd, false), ADDRSTRLEN);
         ESP_LOGI(TAG, "Video stream to %s started", video_ctx.addr);
 #endif
     } else if (has_param(req, "audio", FROM_ANY)) {
@@ -947,7 +948,7 @@ static esp_err_t on_media(httpd_req_t *req) {
         if (!audio_ctx.inst) return ESP_FAIL;
         audio_ctx.stop = xTaskGetHandle("audio") == NULL;
         AUDIO_START(-1);
-        snprintf(audio_ctx.addr, ADDRSTRLEN, getaddrname(fd, false));
+        strlcpy(audio_ctx.addr, getaddrname(fd, false), ADDRSTRLEN);
         ESP_LOGI(TAG, "Audio stream to %s started", audio_ctx.addr);
 #endif
     } else {
@@ -981,7 +982,7 @@ static void handle_websocket_message(void *arg) {
 
 static esp_err_t on_websocket(httpd_req_t *req) {
     esp_err_t err = ESP_OK;
-    if (req->method == HTTP_GET) return err; // handshake done
+    if (req->method == HTTP_GET) return err;        // handshake done
     httpd_ws_frame_t *pkt = NULL;
     if (( err = ECALLOC(pkt, 1, sizeof(httpd_ws_frame_t)) ) ||
         ( err = httpd_ws_recv_frame(req, pkt, 0) ) ||

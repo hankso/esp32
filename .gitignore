@@ -12,6 +12,7 @@ lerna-debug.log*
 dist
 build
 cache
+.cache
 coverage
 __pycache__
 node_modules

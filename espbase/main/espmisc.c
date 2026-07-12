@@ -12,7 +12,6 @@
 #include "nvs.h"
 #include "esp_mac.h"
 #include "esp_flash.h"
-#include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_chip_info.h"
 #include "esp_heap_caps.h"
@@ -20,8 +19,6 @@
 #include "esp_image_format.h"
 #include "bootloader_common.h"
 #include "soc/efuse_periph.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
 
 esp_err_t errval(int error) {
     switch (error) {
@@ -53,9 +50,9 @@ void reboot(void *arg) {
     reboot_ctx_t *ptr = (reboot_ctx_t *)arg;
     reboot_ctx_t ctx = *ptr;                            // local copy
     if (ctx.timeout_ms) {
-        uint32_t ts = pdTICKS_TO_MS(xTaskGetTickCount());
-        if (ctx.target_ms > ts) {
-            ESP_LOGW(T, "Will reboot in %s", format_time(ctx.target_ms - ts));
+        uint32_t now_ms = MSFPO();
+        if (ctx.target_ms > now_ms) {
+            ESP_LOGW(T, "Will reboot in %s", format_time(ctx.target_ms - now_ms));
             return;
         }
         if (xTaskGetCurrentTaskHandle() != ctx.task) {  // create or update
@@ -64,7 +61,7 @@ void reboot(void *arg) {
                 reboot, "reboot", 4096, &ctx, 20, (TaskHandle_t *)&ctx.task
             ) == pdPASS) {
                 ESP_LOGW(T, "Will reboot in %s", format_time(ctx.timeout_ms));
-                ptr->target_ms = ctx.target_ms = ts + ctx.timeout_ms;
+                ptr->target_ms = ctx.target_ms = now_ms + ctx.timeout_ms;
                 ptr->task = ctx.task;
                 return;
             }                                           // ERR_NO_MEM
@@ -84,8 +81,8 @@ void reboot(void *arg) {
 
 void msleep(uint32_t ms) { vTaskDelay(TIMEOUT(ms)); }
 
-uint64_t asleep(uint32_t ms, uint64_t next) {
-    uint64_t curr = xTaskGetTickCount();
+TickType_t asleep(uint32_t ms, TickType_t next) {
+    TickType_t curr = xTaskGetTickCount();
     if (curr < next) {
         vTaskDelay(next - curr);
     } else if (!next || (curr - next) > ms) {
@@ -112,8 +109,8 @@ size_t gbk2str_r(const char *src, char *dst, size_t dlen) {
     if (!fd) return 0;
     uint32_t unicode, used, slen = strlen(src), sidx = 0, didx = 0;
     while (sidx < slen && didx < dlen) {
-        if (!( used = gbk2unicode(fd, src + sidx, &unicode) )) break;
-        didx += snprintf(dst + didx, dlen - didx, unicode2str(unicode));
+        if (!( used = gbk2unicode(fd, (uint8_t *)src + sidx, &unicode) )) break;
+        didx += snprintf(dst + didx, dlen - didx, "%s", unicode2str(unicode));
         sidx += used;
     }
     TRYNULL(fd, fclose);
@@ -146,7 +143,7 @@ esp_err_t unicode_tricks(const unicode_trick_t *cfg) {
         if (loop && (i / iter) % 2) idx = iter - 1 - idx;
         const char *str = unicode2str(base | tpl[2 + idx]);
         fputc('\r', stream);
-        LOOPN(j, count) { fprintf(stream, str); }
+        LOOPN(j, count) { fputs(str, stream); }
         fflush(stream);
         msleep(intv);
     }
@@ -236,10 +233,10 @@ bool notify_wait_for(uint32_t target, uint32_t tout_ms, uint32_t wait_ms) {
     return val == target;
 }
 
-#define TASK_MAXID  29
-#define TASK_TIME   30
-#define TASK_TOTAL  31
-static uint32_t task_hist[TASK_TOTAL + 1];
+static struct {
+    #define TASK_MAXID 25
+    uint32_t values[TASK_MAXID + 1], lastms, total;
+} task_hist;
 
 static bool task_compare(tsort_t sort, TaskStatus_t *a, TaskStatus_t *b) {
     int aid = a->xCoreID > 1 ? -1 : a->xCoreID;
@@ -253,8 +250,8 @@ static bool task_compare(tsort_t sort, TaskStatus_t *a, TaskStatus_t *b) {
     case TSORT_NAME:  return rst ? rst < 0 : aid < bid;
     case TSORT_USAGE:
         if (a->xTaskNumber <= TASK_MAXID && b->xTaskNumber <= TASK_MAXID)
-            return (a->ulRunTimeCounter - task_hist[a->xTaskNumber]) <
-                   (b->ulRunTimeCounter - task_hist[b->xTaskNumber]);
+            return (a->ulRunTimeCounter - task_hist.values[a->xTaskNumber]) <
+                   (b->ulRunTimeCounter - task_hist.values[b->xTaskNumber]);
         return a->ulRunTimeCounter < b->ulRunTimeCounter;
     default:          return a->usStackHighWaterMark < b->usStackHighWaterMark;
     }
@@ -262,7 +259,7 @@ static bool task_compare(tsort_t sort, TaskStatus_t *a, TaskStatus_t *b) {
 
 void task_info(tsort_t sort) {
 #ifdef CONFIG_FREERTOS_USE_TRACE_FACILITY
-    uint32_t total = 0, curr = xTaskGetTickCount(), dt;
+    uint32_t total = 0, currms = MSFPO(), diff;
     uint16_t num = uxTaskGetNumberOfTasks();
     TaskStatus_t tmp, *tasks = pvPortMalloc(num * sizeof(TaskStatus_t));
     if (tasks == NULL) {
@@ -281,7 +278,7 @@ void task_info(tsort_t sort) {
         tmp = tasks[i]; tasks[i] = tasks[j]; tasks[j] = tmp;
     } }
     printf("S ID CPU Pri Name            StackHW Used %s\n",
-            format_time(pdTICKS_TO_MS(curr - task_hist[TASK_TIME])));
+           format_time(currms - task_hist.lastms));
     LOOPN(i, num) {
         printf(
             "%c %-2d %3d %3d %-15s %7s %3.0f%% ",
@@ -295,13 +292,13 @@ void task_info(tsort_t sort) {
         if (tasks[i].xTaskNumber > TASK_MAXID) {
             putchar('\n');
         } else {
-            dt = tasks[i].ulRunTimeCounter - task_hist[tasks[i].xTaskNumber];
-            task_hist[tasks[i].xTaskNumber] = tasks[i].ulRunTimeCounter;
-            printf("%5.0f%%\n", 1e2 * dt / (total - task_hist[TASK_TOTAL]));
+            diff = tasks[i].ulRunTimeCounter - task_hist.values[tasks[i].xTaskNumber];
+            task_hist.values[tasks[i].xTaskNumber] = tasks[i].ulRunTimeCounter;
+            printf("%5.0f%%\n", 1e2 * diff / (total - task_hist.total));
         }
     }
-    task_hist[TASK_TIME] = curr;
-    task_hist[TASK_TOTAL] = total;
+    task_hist.total = total;
+    task_hist.lastms = currms;
 exit:
     vPortFree(tasks);
 #else
@@ -340,8 +337,8 @@ void memory_info() {
         size_t total = tfree + info.total_allocated_bytes;
         printf("%-7s %8s ", names[i], format_size(total));
         printf("%8s ", format_size(tfree));
-        printf("%3d%% ", total ? 100 * info.total_allocated_bytes / total : 0);
-        printf("%3d%% ", tfree ? 100 * tfrag / tfree : 0);
+        printf("%3zu%% ", total ? 100 * info.total_allocated_bytes / total : 0);
+        printf("%3zu%% ", tfree ? 100 * tfrag / tfree : 0);
         printf("0x%08" PRIu32 "\n", caps[i]);
     }
 }

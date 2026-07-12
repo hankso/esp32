@@ -2,7 +2,7 @@
 set(REQUIRES_V4 app_update bootloader_support console esp32 esp_adc_cal esp_eth esp_hid esp_http_client esp_http_server esp_lcd fatfs json mdns nvs_flash sdmmc spi_flash spiffs tinyusb touch_element u8g2 usb wear_levelling
 )
 
-set(REQUIRES_V5 app_update bootloader_support console esp_adc esp_eth esp_hid esp_http_client esp_http_server esp_lcd esp_partition esp_psram esp_vfs_console fatfs json nvs_flash sdmmc spi_flash spiffs touch_element u8g2 usb wear_levelling)
+set(REQUIRES_V5 app_update bootloader_support console esp_adc esp_eth esp_hid esp_http_client esp_http_server esp_lcd esp_partition esp_psram esp_vfs_console fatfs http_parser json mqtt nvs_flash sdmmc spi_flash spiffs touch_element u8g2 usb wear_levelling)
 
 if(IDF_VERSION_MAJOR LESS 5)
     set(REQUIRES ${REQUIRES_V4})

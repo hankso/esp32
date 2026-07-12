@@ -12,12 +12,8 @@
 #ifdef CONFIG_BASE_USE_CONSOLE
 
 #include <sys/fcntl.h>
-#include "cJSON.h"
 #include "esp_console.h"
 #include "esp_task_wdt.h"
-#include "freertos/FreeRTOS.h"
-#include "freertos/task.h"
-#include "freertos/semphr.h"
 #include "linenoise/linenoise.h"
 
 #ifdef IDF_TARGET_V4
@@ -51,7 +47,7 @@ void console_register_prompt(const char *str, const char *ctx) {
         if (!strlen(ctx)) context[0] = '\0';
         else snprintf(context, sizeof(context), "> %s ", ctx);
     }
-    size_t slen = strlen(str ?: ""), smax = sizeof(prompt);
+    size_t slen = strlen(str ?: "");
     if (!slen) {
         if (str) prompt[0] = '\0';
         return;
@@ -59,13 +55,13 @@ void console_register_prompt(const char *str, const char *ctx) {
 #ifdef CONFIG_LOG_COLORS
     const char * color = LOG_COLOR(LOG_COLOR_PURPLE);
     slen += strlen(color) + strlen(LOG_RESET_COLOR) + 1;
-    if (!linenoiseIsDumbMode() && slen <= smax) {
+    if (!linenoiseIsDumbMode() && slen <= sizeof(prompt)) {
         snprintf(prompt, slen, "%s%s%s", color, str, LOG_RESET_COLOR);
         ESP_LOGI(TAG, "Using colorful prompt %s", prompt);
     } else
 #endif
     {
-        snprintf(prompt, smax, str);
+        strlcpy(prompt, str, sizeof(prompt));
     }
 }
 
@@ -152,7 +148,7 @@ void console_initialize() {
  *  pos: easy to set & unset, safe printing with buflen
  *  neg: `\r` does not work because STDOUT is always flushed
  *  e.g.:
- *      char *buf = (char *)calloc(1024, sizeof(char));
+ *      char *buf = calloc(1024, sizeof(char));
  *      setvbuf(stdout, buf, _IOFBF, 1024);
  *      printf("test string\n");
  *      setvbuf(stdout, NULL, _IONBF, 0);
@@ -312,12 +308,12 @@ char * console_handle_rpc(const char *json) {
         goto exit;
     }
     if (cJSON_GetArraySize(params)) {           // command with arguments
-        size_t size = 0; FILE *buf = open_memstream(&cmd, &size);
-        fprintf(buf, "%s", method->valuestring);
+        size_t size = 0; FILE *tmp = open_memstream(&cmd, &size);
+        fprintf(tmp, "%s", method->valuestring);
         for (cJSON *child = params->child; child; child = child->next) {
-            fprintf(buf, " %s", child->valuestring);
+            fprintf(tmp, " %s", child->valuestring);
         }
-        fclose(buf);
+        fclose(tmp);
     } else {                                    // command without arguments
         cmd = strdup(method->valuestring);
     }
@@ -327,7 +323,7 @@ char * console_handle_rpc(const char *json) {
     }
     ESP_LOGD(TAG, "Got RPC command: `%s`", cmd);
     tmp = console_handle_command(cmd, true, false);
-    ESP_LOGD(TAG, "Got RPC result: %s", tmp);
+    ESP_LOGD(TAG, "Got RPC result: `%s`", tmp ?: "");
     if (uid) ret = rpc_response(uid->valuestring, tmp ?: "");   // not notify
 exit:
     TRYNULL(obj, cJSON_Delete);

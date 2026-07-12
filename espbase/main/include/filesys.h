@@ -73,7 +73,7 @@ void filesys_walk(filesys_type_t, const char *, walk_cb_t, void *arg);
 void filesys_pstat(filesys_type_t, const char *);
 void filesys_listdir(filesys_type_t, const char *, FILE *stream);
 char * filesys_listdir_json(filesys_type_t, const char *); // need free
-uint8_t * filesys_load(filesys_type_t, const char *, size_t *); // need free
+void * filesys_readfile(filesys_type_t, const char *, size_t *); // need free
 esp_err_t filesys_readelf(filesys_type_t, const char *, int verbose); // 0-4
 esp_err_t filesys_execute(filesys_type_t, const char *, int argc, char **argv);
 
@@ -82,25 +82,25 @@ esp_err_t filesys_execute(filesys_type_t, const char *, int argc, char **argv);
 #define fjoinr(...)     filesys_join_r(FILESYS_FLASH, __VA_ARGS__)
 #define fnorm(...)      filesys_norm(FILESYS_FLASH, __VA_ARGS__)
 #define fjoin(...)      filesys_join(FILESYS_FLASH, __VA_ARGS__)
-#define fload(...)      filesys_load(FILESYS_FLASH, __VA_ARGS__)
 #define ftouch(...)     filesys_touch(FILESYS_FLASH, __VA_ARGS__)
 #define fmkdir(...)     filesys_mkdir(FILESYS_FLASH, __VA_ARGS__)
 #define frmdir(...)     filesys_rmdir(FILESYS_FLASH, __VA_ARGS__)
 #define fisdir(...)     filesys_isdir(FILESYS_FLASH, __VA_ARGS__)
 #define fisfile(...)    filesys_isfile(FILESYS_FLASH, __VA_ARGS__)
 #define fexists(...)    filesys_exists(FILESYS_FLASH, __VA_ARGS__)
+#define fload(...)      filesys_readfile(FILESYS_FLASH, __VA_ARGS__)
 
 #define snormr(...)     filesys_norm_r(FILESYS_SDCARD, __VA_ARGS__)
 #define sjoinr(...)     filesys_join_r(FILESYS_SDCARD, __VA_ARGS__)
 #define snorm(...)      filesys_norm(FILESYS_SDCARD, __VA_ARGS__)
 #define sjoin(...)      filesys_join(FILESYS_SDCARD, __VA_ARGS__)
-#define sload(...)      filesys_load(FILESYS_SDCARD, __VA_ARGS__)
 #define stouch(...)     filesys_touch(FILESYS_SDCARD, __VA_ARGS__)
 #define smkdir(...)     filesys_mkdir(FILESYS_SDCARD, __VA_ARGS__)
 #define srmdir(...)     filesys_rmdir(FILESYS_SDCARD, __VA_ARGS__)
 #define sisdir(...)     filesys_isdir(FILESYS_SDCARD, __VA_ARGS__)
 #define sisfile(...)    filesys_isfile(FILESYS_SDCARD, __VA_ARGS__)
 #define sexists(...)    filesys_exists(FILESYS_SDCARD, __VA_ARGS__)
+#define sload(...)      filesys_readfile(FILESYS_SDCARD, __VA_ARGS__)
 
 #ifdef __cplusplus
 }

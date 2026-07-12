@@ -38,7 +38,7 @@ menu "Project Config"
             bool "Custom ESP32 Board"
     endchoice
 
-    config BASE_IRAM
+    config BASE_IRAM # for ESP-IDF v4 & v5
         bool
         depends on BASE_USE_WIFI && BASE_USE_BT
         select RINGBUF_PLACE_FUNCTIONS_INTO_FLASH

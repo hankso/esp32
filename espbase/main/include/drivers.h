@@ -29,6 +29,11 @@
 #   undef CONFIG_BASE_USE_KNOB
 #endif
 
+#if defined(CONFIG_BASE_USE_TPAD) && !__has_include("touch_element/touch_element.h")
+#   warning "Run `idf.py add-dependency espressif/touch_element`"
+#   undef CONFIG_BASE_USE_TPAD
+#endif
+
 #define _I2C_NUMBER(num) I2C_NUM_##num
 #define I2C_NUMBER(num) _I2C_NUMBER(num)
 

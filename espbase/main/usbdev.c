@@ -29,12 +29,10 @@
 #endif
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-#   ifdef IDF_TARGET_V4
-#       include "freertos/FreeRTOS.h"
-#       include "freertos/task.h"
-#       include "freertos/queue.h"
-#       include "freertos/semphr.h"
-#   else
+#   if CONFIG_TINYUSB_HID_COUNT == 0
+#       error "Maybe not using esp-idf-kconfig v1. Must set CONFIG_TINYUSB_HID_COUNT=1"
+#   endif
+#   ifndef IDF_TARGET_V4
 #       include "class/hid/hid_device.h"
 #   endif
 #endif
@@ -163,7 +161,7 @@ static uint8_t const * config_desc() {
 }
 
 #ifdef IDF_TARGET_V4
-uint8_t const *tud_descriptor_configuration_cb(uint8_t i) { // overwrite weak
+uint8_t const *tud_descriptor_configuration_cb(uint8_t i) { // override weak
     return config_desc(); NOTUSED(i);
 }
 #endif
@@ -189,7 +187,7 @@ static tusb_desc_device_t desc_dev = {
 
     .idVendor = 0x0000,
     .idProduct = 0x0000,
-    .bcdDevice = CONFIG_TINYUSB_DESC_BCD_DEVICE,
+    .bcdDevice = 0x0100,
 
     .iManufacturer = 0x01,
     .iProduct = 0x02,
@@ -387,9 +385,9 @@ void tud_msc_inquiry_cb(
     uint8_t lun, uint8_t vid[8], uint8_t pid[16], uint8_t rev[4]
 ) {
     CHECK_LUN(lun,);
-    snprintf((char *)vid, 8, CONFIG_TINYUSB_DESC_MANUFACTURER_STRING);
-    snprintf((char *)pid, 16, CONFIG_TINYUSB_DESC_MSC_STRING);
-    snprintf((char *)rev, 4, Config.info.VER);
+    strlcpy((char *)vid, HIDTool.vendor, 8);
+    strlcpy((char *)pid, "MSC Device", 16);
+    strlcpy((char *)rev, Config.info.VER, 4);
 }
 
 bool tud_msc_test_unit_ready_cb(uint8_t lun) {
@@ -582,7 +580,7 @@ void tud_hid_report_complete_cb(uint8_t i, uint8_t const *r, uint16_t l) {
     return; NOTUSED(i); NOTUSED(r); NOTUSED(l);
 }
 
-uint8_t const *tud_hid_descriptor_report_cb(uint8_t i) { // overwrite weak
+uint8_t const *tud_hid_descriptor_report_cb(uint8_t i) { // override weak
     return HIDTool.desc; NOTUSED(i);
 }
 

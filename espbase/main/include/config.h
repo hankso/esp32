@@ -56,9 +56,11 @@ typedef struct {
 } config_web_t;
 
 typedef struct {
-    const char * MDNS_RUN;  // Enable mDNS service
+    const char * MQTT_RUN;  // Enable MQTT client
+    const char * MQTT_URL;  // MQTT server `schema://[user:pass@]host[:port][/path][#cid]`
+    const char * MDNS_RUN;  // Enable mDNS server
     const char * MDNS_HOST; // Register mDNS hostname
-    const char * SNTP_RUN;  // Enable SNTP service
+    const char * SNTP_RUN;  // Enable SNTP client
     const char * SNTP_HOST; // NTP server to sync time from
     const char * TSCN_MODE; // Select touchscreen mode
     const char * HID_MODE;  // Select gamepad layout
@@ -91,7 +93,7 @@ ESP_EVENT_DECLARE_BASE(CFG_EVENT);
 
 void config_initialize();
 esp_err_t config_loads(const char *);   // load Config from json
-char * config_dumps();                  // dump Config into json
+char * config_dumps();                  // dump Config into json (need free)
 void config_stats();                    // print configurations
 
 /* Get one config value by key or set one by key & value.
@@ -109,13 +111,15 @@ esp_err_t config_set(const char *key, const char *val);
 
 /* NVS helper functions (similar like Arduino-ESP32 library `Preference`) */
 esp_err_t config_nvs_open(void **ptr, const char *ns, bool ro);
-int config_nvs_read(void *hdl, const char *key, void *buf, size_t size);
-int config_nvs_write(void *hdl, const char *key, const void *val, size_t len);
 esp_err_t config_nvs_delete(void *hdl, const char *key); // remove or erase all
 esp_err_t config_nvs_close(void **ptr); // close NVS with auto commit
 esp_err_t config_nvs_load();            // NVS Flash => RAM Config
 esp_err_t config_nvs_dump();            // RAM Config => NVS Flash
 void config_nvs_list(bool all);         // print [all] entries in NVS
+void * config_nvs_jload(void *hdl, const char *key); // need cJSON_Delete
+int config_nvs_jdump(void *hdl, const char *key, void *obj);
+int config_nvs_read(void *hdl, const char *key, void *buf, size_t size);
+int config_nvs_write(void *hdl, const char *key, const void *data, size_t len);
 
 #ifdef __cplusplus
 }

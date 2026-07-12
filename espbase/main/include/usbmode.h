@@ -15,14 +15,14 @@
 
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
 #   if !defined(IDF_TARGET_V4) && !__has_include("tusb_msc_storage.h")
-#       warning "Run `idf.py add-dependency esp_tinyusb`"
+#       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
 #       undef CONFIG_BASE_USB_MSC_DEVICE
 #   endif
 #endif
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
 #   if !defined(IDF_TARGET_V4) && !__has_include("class/hid/hid_device.h")
-#       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
+#       warning "Run `idf.py add-dependency espressif/tinyusb`"
 #       undef CONFIG_BASE_USB_HID_DEVICE
 #   endif
 #endif
@@ -40,6 +40,11 @@
 #if defined(CONFIG_BASE_USB_HID_HOST) && !__has_include("usb/hid_host.h")
 #   warning "Run `idf.py add-dependency espressif/usb_host_hid`"
 #   undef CONFIG_BASE_USB_HID_HOST
+#endif
+
+#if defined(CONFIG_BASE_USB) && !__has_include("usb/usb_host.h")
+#   warning "Run `idf.py add-dependency espressif/usb`"
+#   undef CONFIG_BASE_USB
 #endif
 
 #ifdef __cplusplus

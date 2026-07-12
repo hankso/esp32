@@ -308,21 +308,30 @@ bool ota_updation_url(const char *url) {
         return false;
     }
     ESP_LOGI(TAG, "OTA Updation from URL `%s`", url);
-    char buf[512], *cert = NULL;
+
+    char buf[512], *cert = NULL, *end = NULL;
     esp_http_client_config_t config = {
         .url = url,
         .timeout_ms = 2000,
         .keep_alive_enable = true,
     };
+
 #   ifdef CONFIG_BASE_USE_FFS
     const char *fullpath = fjoin(2, Config.sys.DIR_DATA, "server.pem");
+    const char *stpl = "--BEGIN CERTIFICATE", *etpl = "END CERTIFICATE-----";
     config.cert_len = 4096;             // skip files larger than 4KB
-    config.cert_pem = cert = (char *)fload(fullpath, &config.cert_len);
-    if (( config.skip_cert_common_name_check = (cert != NULL) )) {
-        char *keypart = strstr(cert, "----BEGIN PRIVATE KEY");
-        if (keypart) *keypart = '\0';   // certfile and keyfile are combined
+    if (( cert = (char *)fload(fullpath, &config.cert_len) ) &&
+        ( config.cert_pem = strstr(cert, stpl) ) &&
+        ( end = strstr(config.cert_pem, etpl) )
+    ) {
+        config.cert_len = end + strlen(etpl) - config.cert_pem;
+        config.skip_cert_common_name_check = true;
+    } else {
+        config.cert_len = 0;
+        config.cert_pem = NULL;
     }
 #   endif
+
     esp_http_client_handle_t client = esp_http_client_init(&config);
     if (!client) {
         ctx.error = ESP_ERR_NO_MEM;
