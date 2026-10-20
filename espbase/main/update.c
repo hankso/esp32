@@ -7,7 +7,6 @@
 #include "update.h"
 #include "config.h"
 #include "filesys.h"            // for filesys_xxx
-#include "network.h"            // for wifi_sta_wait
 
 #include "esp_ota_ops.h"
 #include "esp_partition.h"
@@ -303,7 +302,7 @@ bool ota_updation_url(const char *url) {
 #else
     if (!ctx.target || ctx.handle) return false;
     if (!url) url = Config.app.OTA_URL;
-    if (!strlen(url)) {
+    if (!*url) {
         ctx.error = ESP_ERR_INVALID_ARG;
         return false;
     }

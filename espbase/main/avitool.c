@@ -17,8 +17,7 @@ ESP_EVENT_DEFINE_BASE(AVC_EVENT);
 #ifndef CONFIG_BASE_USE_AVC
 void avi_initialize() {}
 esp_err_t avi_command(int t, const char *c, uint32_t o, void *p) {
-    return ESP_ERR_NOT_SUPPORTED;
-    NOTUSED(t); NOTUSED(c); NOTUSED(o); NOTUSED(p);
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(t); NOTUSED(c); NOTUSED(o); NOTUSED(p);
 }
 #else // CONFIG_BASE_USE_AVC
 
@@ -254,7 +253,8 @@ static void cam_initialize() {
         cam_cfg.fb_location  = CAMERA_FB_IN_PSRAM;
     }
 #   endif
-    if (( err = esp_camera_init(&cam_cfg) )) {
+    PMLOCK(ESP_PM_APB_FREQ_MAX, "caminit") { err = esp_camera_init(&cam_cfg); }
+    if (err) {
         ESP_LOGE(TAG, "Camera init failed: %s", esp_err_to_name(err));
         return;
     }
@@ -635,6 +635,17 @@ esp_err_t avi_command(
     return ESP_OK;
 }
 
+void avi_initialize() {
+#ifdef CONFIG_BASE_USE_I2S
+    i2s_initialize();
+#endif
+#ifdef CONFIG_BASE_USE_CAM
+    cam_initialize();
+#endif
+}
+
+#endif // CONFIG_BASE_USE_AVC
+
 // QRCode codec
 
 #ifdef WITH_QRENC
@@ -674,23 +685,20 @@ esp_err_t avi_qrenc(qrenc_config_t *cfg) {
     bool inv = cfg->flags & QRENC_INV;
     bool dot = cfg->flags & QRENC_DOTS;
     bool ansi = cfg->flags & QRENC_ANSI;
-    uint8_t ixor = inv ? 0xFF : 0;
-    int size = qrcodegen_getSize(rst), tl = size / 3, th = size * 2 / 3;
-
-#   define MARKER(x, y)                                                     \
-    ( x < 0 || y < 0 || x >= size || y >= size ||                           \
-      (x < tl && y < tl) || (x < tl && y >= th) || (x >= th && y < tl) )
+    uint8_t ixor = inv ? 0xFF : 0, half = ixor & 0b11;
+    int size = qrcodegen_getSize(rst), tl = 8, th = size - tl - 1;
+    // 7px for finder and 1px for separator
+#   define SOLID(x, y)                                                      \
+        ( x < 0 || y < 0 || x >= size || y >= size ||                       \
+          (x < tl && y < tl) || (x < tl && y > th) || (x > th && y < tl) )
 #   define ANSIP(x, y, s)                                                   \
-    do {                                                                    \
-        if (ansi) {                                                         \
+        do {                                                                \
+            if (!ansi) { fputs(s, cfg->stream); break; }                    \
             uint8_t r = (x + cfg->bdr) * 255 / (size + 2 * cfg->bdr),       \
-                    g = (y + cfg->bdr) * 255 / (size + 2 * cfg->bdr);       \
-            fprintf(cfg->stream, "\x1b[38;2;%u;%u;%um%s\x1b[0m",            \
-                    r, (uint8_t)(cos((r + g) * M_2_PI / 1e3) * 255), g, s); \
-        } else {                                                            \
-            fputs(s, cfg->stream);                                          \
-        }                                                                   \
-    } while (0)
+                    g = (y + cfg->bdr) * 255 / (size + 2 * cfg->bdr),       \
+                    c = (uint8_t)(cos((r + g) * M_2_PI / 1e3) * 255);       \
+            fprintf(cfg->stream, "\x1b[38;2;%u;%u;%um%s\x1b[0m", r, c, g, s);\
+        } while (0)
 
     if (cfg->flags & QRENC_BMP) {                       // save as bmp
         uint8_t line = CMOD(size / 8, 4);
@@ -742,7 +750,7 @@ esp_err_t avi_qrenc(qrenc_config_t *cfg) {
                 const char *str = qrtpls[tpl];
                 if (!qrcodegen_getModule(rst, x, y) ^ inv) {
                     str = "  ";
-                } else if (MARKER(x, y)) {
+                } else if (SOLID(x, y)) {
                     str = qrtpls[2];
                 }
                 ANSIP(x, y, str);
@@ -752,16 +760,16 @@ esp_err_t avi_qrenc(qrenc_config_t *cfg) {
     } else {                                            // print half char
         for (int y = -cfg->bdr; y < size + cfg->bdr; y += 2) {
             for (int x = -cfg->bdr; x < size + cfg->bdr; x += 1) {
-                uint8_t idx = 0, tpl = !MARKER(x, y) && (dot ^ inv);
+                uint8_t idx = 0, tpl = (dot > inv) && !SOLID(x, y);
                 if (qrcodegen_getModule(rst, x, y))     idx |= BIT0;
                 if (qrcodegen_getModule(rst, x, y + 1)) idx |= BIT1;
-                ANSIP(x, y, qrtpls[tpl] + 4 * (idx ^ (ixor & 3)));
+                ANSIP(x, y, qrtpls[tpl] + 4 * (idx ^ half));
             }
             fputc('\n', cfg->stream);
         }
     }
 #   undef ANSIP
-#   undef MARKER
+#   undef SOLID
 exit:
     TRYFREE(rst);
     TRYFREE(tmp);
@@ -784,40 +792,44 @@ static struct {
 } qrdec;
 
 static void qrdec_task(void *stream) {
-    // quirc_end uses about 10KB stack, so run this in a separate task
-    quirc_end(qrdec.ctx);
-    // qrcode_code and qrcode_data will use about 12KB stack
-    struct quirc_code code;
-    struct quirc_data data;
+    if (!ACQUIRE(qrdec.mutex, 0)) vTaskDelete(NULL);
+    quirc_end(qrdec.ctx);                                       // ~2KB stack
     int found = quirc_count(qrdec.ctx);
     if (!found) {
         fprintf(stream, "qrdec found nothing on %ux%u\n", qrdec.hres, qrdec.vres);
-    } else LOOPN(i, found) {
-        quirc_extract(qrdec.ctx, i, &code);
-        quirc_decode_error_t err = quirc_decode(&code, &data);  // 8KB
+        goto exit;
+    }
+    struct quirc_code *code = malloc(sizeof(struct quirc_code));
+    struct quirc_data *data = malloc(sizeof(struct quirc_data));
+    if (code && data) LOOPN(i, found) {
+        quirc_extract(qrdec.ctx, i, code);
+        quirc_decode_error_t err = quirc_decode(code, data);    // >8KB stack
         if (err == QUIRC_ERROR_DATA_ECC) {
-            quirc_flip(&code);                                  // 4KB
-            err = quirc_decode(&code, &data);
+            quirc_flip(code);                                   // ~4KB stack
+            err = quirc_decode(code, data);
         }
         if (err) {
             fprintf(stream, "qrdec %d error: %s\n", i, quirc_strerror(err));
             continue;
         }
         // uint8_t *qrcode = &code.cell_bitmap - 1; qrcode[0] = code.size;
-        // should we print qrcode?
+        // should we print qrcode to stream like avi_qrenc?
         fprintf(stream,
             "qrdec %d: ver %d, ecl %c, eci %" PRIu32 ", mask %d, type %s\n",
-            i, data.version, "MLHQ"[data.ecc_level], data.eci, data.mask,
-            data.data_type == QUIRC_DATA_TYPE_NUMERIC ? "NUMERIC" :
-            data.data_type == QUIRC_DATA_TYPE_ALPHA ? "ALPHA" :
-            data.data_type == QUIRC_DATA_TYPE_BYTE ? "BINARY" :
-            data.data_type == QUIRC_DATA_TYPE_KANJI ? "KANJI" : "UNKNOWN");
-        if (data.data_type == QUIRC_DATA_TYPE_BYTE) {
-            hexdumpc(stream, data.payload, data.payload_len);
+            i, data->version, "MLHQ"[data->ecc_level], data->eci, data->mask,
+            data->data_type == QUIRC_DATA_TYPE_NUMERIC ? "NUMERIC" :
+            data->data_type == QUIRC_DATA_TYPE_ALPHA ? "ALPHA" :
+            data->data_type == QUIRC_DATA_TYPE_BYTE ? "BINARY" :
+            data->data_type == QUIRC_DATA_TYPE_KANJI ? "KANJI" : "UNKNOWN");
+        if (data->data_type == QUIRC_DATA_TYPE_BYTE) {
+            hexdumpc(stream, data->payload, data->payload_len);
         } else {
-            fprintf(stream, "%s\n", (const char *)data.payload);
+            fprintf(stream, "%s\n", (const char *)data->payload);
         }
     }
+    TRYFREE(code);
+    TRYFREE(data);
+exit:
     RELEASE(qrdec.mutex);
     vTaskDelete(NULL);
 }
@@ -880,19 +892,28 @@ static esp_err_t frame2grey(video_data_t *frame, uint8_t *dst) {
 
 esp_err_t avi_qrdec(video_data_t *frame) {
     if (!frame || !frame->data) return ESP_ERR_INVALID_ARG;
-    if (!qrdec.mutex && !( qrdec.mutex = MUTEX() )) return ESP_ERR_NO_MEM;
     if (!qrdec.ctx && !( qrdec.ctx = quirc_new() )) return ESP_ERR_NO_MEM;
+    if (!qrdec.mutex) {
+        if (!( qrdec.mutex = MUTEX() )) return ESP_ERR_NO_MEM;
+        RELEASE(qrdec.mutex);
+    } else if (!ACQUIRE(qrdec.mutex, 0)) return ESP_ERR_INVALID_STATE; // busy
+    esp_err_t err = ESP_OK;
     if (frame->mode.width != qrdec.hres || frame->mode.height != qrdec.vres) {
-        if (quirc_resize(qrdec.ctx, frame->mode.width, frame->mode.height))
-            return ESP_ERR_NO_MEM;
-        qrdec.hres = frame->mode.width;
-        qrdec.vres = frame->mode.height;
+        if (quirc_resize(qrdec.ctx, frame->mode.width, frame->mode.height)) {
+            err = ESP_ERR_NO_MEM;
+        } else {
+            qrdec.hres = frame->mode.width;
+            qrdec.vres = frame->mode.height;
+        }
     }
-    esp_err_t err = frame2grey(frame, quirc_begin(qrdec.ctx, NULL, NULL));
+    if (!err) err = frame2grey(frame, quirc_begin(qrdec.ctx, NULL, NULL));
+    RELEASE(qrdec.mutex);
     if (err) return err;
-    if (!xTaskCreate(qrdec_task, "qrdec", 24 * 1024, stdout, 5, NULL))
+    // quirc uses about 12KB of stack memory, so run this in a separate task
+    if (xTaskCreate(qrdec_task, "qrdec", 12 * 1024, stdout, 5, NULL) != pdPASS)
         return ESP_ERR_NO_MEM;
-    if (!ACQUIRE(qrdec.mutex, 5000)) return ESP_ERR_TIMEOUT;
+    if (!ACQUIRE(qrdec.mutex, 5000)) return ESP_ERR_TIMEOUT; // wait
+    RELEASE(qrdec.mutex);
     return ESP_OK;
 }
 #else // WITH_QRDEC
@@ -900,14 +921,3 @@ esp_err_t avi_qrdec(video_data_t *f) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(f);
 }
 #endif // WITH_QRDEC
-
-void avi_initialize() {
-#ifdef CONFIG_BASE_USE_I2S
-    i2s_initialize();
-#endif
-#ifdef CONFIG_BASE_USE_CAM
-    cam_initialize();
-#endif
-}
-
-#endif // CONFIG_BASE_USE_AVC

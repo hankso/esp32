@@ -135,8 +135,8 @@ def load_csv(iterable):
     ), skipinitialspace=True)
 
 
-def load_chip():
-    with open(fromroot('build/sdkconfig'), encoding='utf8') as f:
+def load_chip(args):
+    with open(fromroot(args.bdir, 'sdkconfig'), encoding='utf8') as f:
         for line in f:
             chip = findone(r'CONFIG_IDF_TARGET="(\w+)"', line)
             if chip:
@@ -210,10 +210,13 @@ def process_nvs(args):
         except ImportError:
             import nvs_partition_gen as generate
         import esptool
-        if op.isdir(op.dirname(op.abspath(args.pack))):
+
+        if not args.pack:
+            dist = tempfile.mktemp() + '.bin'
+        elif op.isabs(args.pack):
             dist = args.pack
         else:
-            dist = tempfile.mktemp() + '.bin'
+            dist = fromroot(args.bdir, args.pack)
         sys.argv[1:] = ['generate', args.output, dist, args.size]
         generate.main()
         if args.flash:
@@ -275,7 +278,7 @@ def gbk2str(g):
 
 
 def gengbk(args):
-    output = fromroot('files', 'data', 'gbktable.bin')
+    output = fromroot('data', 'etc', 'gbktable.bin')
     with open(output, 'wb') as f:
         for idx in range(gbk2idx(0xFE50)):
             try:
@@ -289,7 +292,7 @@ def font_output(args):
     if args.output:
         output = args.output
     elif args.bin:
-        output = fromroot('files', 'data', 'chinese')
+        output = fromroot('data', 'etc', 'chinese')
     else:
         output = fromroot('main', 'scnfont.c')
     dirname, basename = op.split(output)
@@ -379,7 +382,7 @@ ESP_IDF_COMMON = '''
     esp_common esp_event esp_gdbstub esp_hw_support esp_ipc esp_netif esp_pm
     esp_ringbuf esp_rom esp_system esp_timer esp_wifi espcoredump esptool_py
     freertos hal heap log lwip main mbedtls newlib partition_table soc efuse
-    tcpip_adapter vfs wpa_supplicant xtensa
+    tcpip_adapter vfs xtensa
 '''.split()
 
 ESP_IDF_SKIP = 'arduino arduino-esp32 linux'.split()
@@ -519,8 +522,8 @@ def prebuild(args):
         for path in lst:
             os.unlink(path)
     try:
-        srcdir = fromroot('webpage')
-        dstdir = fromroot('files', 'www')
+        srcdir = fromroot('web')
+        dstdir = fromroot('data', 'www')
         rebuild = f'pnpm run -C "{srcdir}" build'
         last_build = op.getmtime(dstdir) + 10
         for root, dirs, files in walk_exclude(srcdir):
@@ -532,7 +535,7 @@ def prebuild(args):
     except StopIteration:
         pass
     except Exception as e:
-        print('-- Rebuild webpage failed', e)
+        print('-- Rebuild web page failed', e)
     args.quiet = True
     gengbk(args)
     gendeps(args)
@@ -544,13 +547,18 @@ def postbuild(args):
         import esptool
     except Exception:
         return print('-- `esptool` not found. Run esp-idf/export first')
-    chip = load_chip()
+    chip = load_chip(args)
     if not chip:
         return print('-- Chip target not set. Run idf.py set-target first')
     if not detools:
         return print('-- `detools` not found. Run pip install detools>=0.49')
+    if not args.new:
+        args.new = fromroot(args.bdir, project() + '.bin')
     if not op.isfile(args.new):
         return print(f'-- {op.basename(args.new)} not found. Run idf.py build')
+    if not args.old:
+        dirname, basename = op.split(args.new)
+        args.old = op.join(dirname, 'delta', op.splitext(basename)[0] + '.bak')
     if not op.isfile(args.old):
         os.makedirs(op.dirname(args.old), exist_ok=True)
         shutil.copy(args.new, args.old)
@@ -638,7 +646,7 @@ def sdkconfig(args):
     mapping = {
         op.basename(path)[10:]: path.replace('\\', '/') for path in
         glob.glob(fromroot('sdkconfig*')) +
-        glob.glob(fromroot('build/sdkconfig*'))
+        glob.glob(fromroot(args.bdir, 'sdkconfig*'))
     }
     mapping.setdefault('local', fromroot('sdkconfig.local'))
     try:
@@ -671,9 +679,8 @@ def sdkconfig(args):
         print(line, 'is set but has no effect')
 
 
-def size_components(quiet=False, files=False, **k):
+def size_components(mapfile, quiet=False, files=False, **k):
     idfsize = op.join(IDF_PATH, 'tools', 'idf_size.py')
-    mapfile = fromroot('build', project() + '.map')
     if not op.isfile(idfsize):
         return print('idf_size.py not found. Run esp-idf/export first')
     if not op.isfile(mapfile):
@@ -749,7 +756,8 @@ def sort_components(comps, sort='flash_total', **k):
 
 def blame(args):
     try:
-        comps = size_components(quiet=args.quiet, files=args.files)
+        mapfile = fromroot(args.bdir, project() + '.map')
+        comps = size_components(mapfile, quiet=args.quiet, files=args.files)
         order, comps = sort_components(comps, sort=args.sort)
         assert len(comps)
     except Exception:
@@ -1104,7 +1112,7 @@ def on_board():
             print(name + ':', fobj.file.read())
             continue
         with suppress(Exception):
-            fobj.save(fromroot('build', 'snapshot.jpg'), overwrite=True)
+            fobj.save(fromroot('snapshot.jpg'), overwrite=True)
 
 
 def static_factory(_root):
@@ -1503,15 +1511,17 @@ def make_parser():
     parser.set_defaults(func=lambda args: parser.print_help())
     parser.add_argument(
         '-q', '--quiet', action='store_true', help='be slient on CLI')
+    parser.add_argument(
+        '-b', '-B', dest='bdir', default='build', help='set build directory')
     subparsers = parser.add_subparsers(
         prog='', title='Supported Commands are', metavar='')
 
-    certpem = fromroot('files', 'data', 'server.pem')
+    certpem = fromroot('data', 'etc', 'server.pem')
     distdir = [
         p for p in [
-            fromroot('webpage', 'dist'),
-            fromroot('files', 'www'),
-            fromroot('files'),
+            fromroot('web', 'dist'),
+            fromroot('data', 'www'),
+            fromroot('data'),
             fromroot()
         ] if op.isdir(p) and os.listdir(p)
     ][0]
@@ -1560,7 +1570,6 @@ def make_parser():
     sparser.set_defaults(func=search)
 
     nvsfile = fromroot('nvs_flash.csv')
-    nvsdist = fromroot('build', 'nvs.bin')
     sparser = subparsers.add_parser(
         'gencfg', help='Generate configuration from NVS partition template')
     sparser.add_argument(
@@ -1570,8 +1579,8 @@ def make_parser():
         '--tpl', default=nvsfile,
         help=f'render nvs text from template [default {relpath(nvsfile)}]')
     sparser.add_argument(
-        '--pack', default=nvsdist,
-        help=f'encode nvs text into binary [default {relpath(nvsdist)}]')
+        '--pack', nargs='?', const='nvs.bin',
+        help='encode nvs text into binary [default $BDIR/nvs.bin]')
     sparser.add_argument(
         '--size', type=str, help='nvs partition size [auto]')
     sparser.add_argument(
@@ -1604,17 +1613,14 @@ def make_parser():
         'prebuild', help='Generate GBK and deps and build HTML pages')
     sparser.set_defaults(func=prebuild)
 
-    name = project()
-    binfile = fromroot('build', name + '.bin')
-    bakfile = fromroot('build', 'delta', name + '.bak')
     sparser = subparsers.add_parser(
         'postbuild', help='Generate delta firmware for OTA updation')
     sparser.add_argument(
-        '--new', default=binfile,
-        help=f'firmware to upgrade to [default {relpath(binfile)}]')
+        'new', nargs='?',
+        help='firmware to upgrade to [default $BDIR/$PROJ.bin]')
     sparser.add_argument(
-        '--old', default=bakfile,
-        help=f'firmware to upgrade from [default {relpath(bakfile)}]')
+        'old', nargs='?',
+        help='firmware to upgrade from [default $BDIR/delta/$PROJ.bak]')
     sparser.add_argument(
         '--patch', action='store_true',
         help='only generate patch and skip firmware backup etc.')

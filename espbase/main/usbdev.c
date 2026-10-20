@@ -37,13 +37,23 @@
 #   endif
 #endif
 
+#ifdef CONFIG_BASE_USB_NCM_DEVICE
+#   if !CONFIG_TINYUSB_NET_MODE_NCM
+#       error "Maybe not using esp-idf-kconfig v1. Must set CONFIG_TINYUSB_NET_MODE_NCM=y"
+#   endif
+#   include "esp_mac.h"
+#   include "esp_wifi.h"
+#   include "tinyusb_net.h"
+#   include "esp_private/wifi.h"
+#   include "../include_private/usb_descriptors.h"
+#endif
+
 #define NUM_DISK 1 // currently only one endpoint is supported
 
 static const char *TAG = "USBDevice";
 
 static filesys_info_t info[NUM_DISK];
-static bool mounted = false, inited = false;
-static bool cdc_enabled = false, msc_enabled = false, hid_enabled = false;
+static bool mounted = false, inited = false, enabled[USB_MODE_MAX];
 
 /*
  * Helper functions
@@ -53,7 +63,7 @@ void usbdev_status(usbmode_t mode) {
     printf("inited: %s, mounted: %s\n",
             inited ? "true" : "false", mounted ? "true" : "false");
 #ifdef CONFIG_BASE_USB_CDC_DEVICE
-    if (mode == CDC_DEVICE) {
+    if (mode == CDC_DEV) {
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_SERIAL
         puts("Running as CDC serial device");
 #   endif
@@ -63,7 +73,7 @@ void usbdev_status(usbmode_t mode) {
     }
 #endif
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
-    if (mode == MSC_DEVICE) {
+    if (mode == MSC_DEV) {
         LOOPN(i, NUM_DISK) {
             if (info[i].pdrv == FF_DRV_NOT_USED) {
                 printf("Disk[%d]: not mouned / supported\n", i);
@@ -75,7 +85,10 @@ void usbdev_status(usbmode_t mode) {
     }
 #endif
 #ifdef CONFIG_BASE_USB_HID_DEVICE
-    if (mode == HID_DEVICE) puts("Running as HID keybd & mouse device");
+    if (mode == HID_DEV) puts("Running as HID keybd & mouse device");
+#endif
+#ifdef CONFIG_BASE_USB_NCM_DEVICE
+    if (mode == NCM_DEV) puts("Running as NCM device");
 #endif
 }
 
@@ -100,15 +113,6 @@ bool usbdev_interest(const void *arg) {
     );
 }
 
-static bool usbdev_reconnect() {
-    bool ret = tud_disconnect();
-    if (ret) {
-        msleep(100);
-        ret = tud_connect();
-    }
-    return ret;
-}
-
 /*
  * USB Descriptor hacks
  */
@@ -118,106 +122,171 @@ static bool usbdev_reconnect() {
 // see esp_tinyusb/usb_descriptors.c
 // see idf-v4.4-tinyusb-hid.patch
 
-static uint8_t const * config_desc() {
-    static uint8_t buf[
-        TUD_CONFIG_DESC_LEN +
-        CFG_TUD_CDC * TUD_CDC_DESC_LEN +
-        CFG_TUD_MSC * TUD_MSC_DESC_LEN +
-        CFG_TUD_HID * TUD_HID_DESC_LEN
-    ];
-    size_t total = TUD_CONFIG_DESC_LEN;
-    uint8_t itf = 0;
-    if (cdc_enabled) {                  // stridx, EPN, size, EPO, EPI, size
-        uint8_t c[] = { TUD_CDC_DESCRIPTOR(itf, 4, 0x81, 8, 0x02, 0x82, 64) };
-        memcpy(buf + total, c, sizeof(c));
-        itf += 2; // for ITF_NUM_CDC & ITF_NUM_CDC_DATA
-        total += sizeof(c);
-    }
-    if (msc_enabled) {                  // stridx, EPO, EPI, size
-        uint8_t m[] = { TUD_MSC_DESCRIPTOR(itf, 5, 0x03, 0x83, 64) };
-        memcpy(buf + total, m, sizeof(m));
-        itf += 1; // for ITF_NUM_MSC
-        total += sizeof(m);
-    }
-#ifdef CONFIG_BASE_USB_HID_DEVICE
-    size_t blen = CFG_TUD_HID_EP_BUFSIZE, rlen = HIDTool.dlen;
-#else
-    size_t blen = 0, rlen = 0;
+enum {
+    STRID_LANGID = 0,
+    STRID_MAFACT,
+    STRID_PRODUCT,
+    STRID_SERIAL,
+#if CFG_TUD_CDC
+    STRID_CDC,
 #endif
-    if (hid_enabled) {                  // stridx, proto,   EPI, size, poll
-        uint8_t h[] = { TUD_HID_DESCRIPTOR(itf, 6, 0, rlen, 0x84, blen, 10 ) };
-        memcpy(buf + total, h, sizeof(h));
-        itf += 1; // for ITF_NUM_HID
-        total += sizeof(h);
-        // SUBCLASS=0, PROTO=0 for mixture of mouse & keyboard
+#if CFG_TUD_MSC
+    STRID_MSC,
+#endif
+#if CFG_TUD_HID
+    STRID_HID,
+#endif
+#if CFG_TUD_NCM
+    STRID_NET,
+    STRID_MAC,
+#endif
+    STRID_MAX,
+};
+
+static tusb_desc_device_t desc_dev = {
+    .bLength            = sizeof(desc_dev),
+    .bDescriptorType    = TUSB_DESC_DEVICE,
+    .bcdUSB             = 0x0200,
+#if CFG_TUD_CDC
+    // Use Interface Association Descriptor (IAD) for CDC
+    // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
+    .bDeviceClass       = TUSB_CLASS_MISC,
+    .bDeviceSubClass    = MISC_SUBCLASS_COMMON,
+    .bDeviceProtocol    = MISC_PROTOCOL_IAD,
+#else
+    .bDeviceClass       = 0x00,
+    .bDeviceSubClass    = 0x00,
+    .bDeviceProtocol    = 0x00,
+#endif
+    .bMaxPacketSize0    = CFG_TUD_ENDPOINT0_SIZE,
+    .idVendor           = 0x0000,               // TBD
+    .idProduct          = 0x0000,               // TBD
+    .bcdDevice          = 0x0100,               // TBD
+    .iManufacturer      = STRID_MAFACT,
+    .iSerialNumber      = STRID_SERIAL,
+    .iProduct           = STRID_PRODUCT,
+    .bNumConfigurations = 0x01
+};
+
+static const char *desc_str[STRID_MAX] = {
+    [STRID_LANGID]  = (char[]){ 0x09, 0x04 },   // language English (0x0409)
+    [STRID_MAFACT]  = "",                       // TBD
+    [STRID_SERIAL]  = "",                       // TBD
+    [STRID_PRODUCT] = "",                       // TBD
+#if CFG_TUD_CDC
+    [STRID_CDC]     = "CDC Device",
+#endif
+#if CFG_TUD_MSC
+    [STRID_MSC]     = "MSC Device",
+#endif
+#if CFG_TUD_HID
+    [STRID_HID]     = "HID Device",
+#endif
+#if CFG_TUD_NCM
+    [STRID_NET]     = "NCM Device",
+#endif
+};
+
+static uint8_t const * desc_cfg() {
+    // USB mode is changed dynamically at runtime as well as descriptor.
+    // So do not use default one in esp-tinyusb/usb_descriptors.c
+    static uint8_t buf[
+        TUD_CONFIG_DESC_LEN
+#ifdef CFG_TUD_CDC
+        + CFG_TUD_CDC * TUD_CDC_DESC_LEN
+#endif
+#ifdef CFG_TUD_MSC
+        + CFG_TUD_MSC * TUD_MSC_DESC_LEN
+#endif
+#ifdef CFG_TUD_HID
+        + CFG_TUD_HID * TUD_HID_DESC_LEN
+#endif
+#ifdef CFG_TUD_NCM
+        + CFG_TUD_NCM * TUD_CDC_NCM_DESC_LEN
+#endif
+    ];
+    uint8_t itf = 0, *ptr = buf + TUD_CONFIG_DESC_LEN;
+#if CFG_TUD_CDC
+    if (enabled[CDC_DEV]) {
+        uint8_t epn = 0x80 | (itf + 1), epo = itf + 2, epi = 0x80 | epo, c[] = {
+            TUD_CDC_DESCRIPTOR(itf, STRID_CDC, epn, 8, epo, epi, 64)
+        };
+        ptr = mempcpy(ptr, c, sizeof(c));
+        itf += 2; // for EPNUM_CDC_NOTIF & EPNUM_CDC_DATA(out, in)
     }
-    uint8_t desc[] = {
-        TUD_CONFIG_DESCRIPTOR(
-            1, itf, 0, total, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 500
-        )
+#endif
+#if CFG_TUD_MSC
+    if (enabled[MSC_DEV]) {
+        uint8_t epo = itf + 1, epi = 0x80 | epo, m[] = {
+            TUD_MSC_DESCRIPTOR(itf, STRID_MSC, epo, epi, 64)
+        };
+        ptr = mempcpy(ptr, m, sizeof(m));
+        itf += 1; // for EPNUM_MSC_DATA(out, in)
+    }
+#endif
+#if CFG_TUD_HID
+    if (enabled[HID_DEV]) {
+        size_t size = CFG_TUD_HID_EP_BUFSIZE, desc = HIDTool.dlen;
+        uint8_t epi = 0x80 | (itf + 1), boot = 0, itv = 10, h[] = {
+            TUD_HID_DESCRIPTOR(itf, STRID_HID, boot, desc, epi, size, itv )
+        }; // SUBCLASS=0, PROTO=0 for mixture of mouse & keyboard
+        ptr = mempcpy(ptr, h, sizeof(h));
+        itf += 1; // for ITF_NUM_HID_DATA(in)
+    }
+#endif
+#if CFG_TUD_NCM
+    if (enabled[NCM_DEV]) {
+        uint8_t epn = 0x80 | (itf + 1), epo = itf + 2, epi = 0x80 | epo, n[] = {
+            TUD_CDC_NCM_DESCRIPTOR(itf, STRID_NET, STRID_MAC, epn, 64, epo, epi, 64, CFG_TUD_NET_MTU)
+        };
+        ptr = mempcpy(ptr, n, sizeof(n));
+        itf += 2; // for ITF_NUM_NET_NOTIF & ITF_NUM_NET_DATA(out, in)
+    }
+#endif
+    uint8_t desc[] = {      // ncfg, nitf, stridx, size, attribute, power in mA
+        TUD_CONFIG_DESCRIPTOR(desc_dev.bNumConfigurations, itf, STRID_LANGID, ptr - buf, TUSB_DESC_CONFIG_ATT_REMOTE_WAKEUP, 500)
     };
     memcpy(buf, desc, sizeof(desc));
     return buf;
 }
 
+static bool usbdev_reconnect() {
+    bool ret = tud_disconnect();
+    if (ret) {
+#ifndef IDF_TARGET_V4
+        desc_cfg(); // update config descriptor
+#endif
+        msleep(100);
+        ret = tud_connect();
+    }
+    return ret;
+}
+
 #ifdef IDF_TARGET_V4
 uint8_t const *tud_descriptor_configuration_cb(uint8_t i) { // override weak
-    return config_desc(); NOTUSED(i);
+    return desc_cfg(); NOTUSED(i);
 }
 #endif
-
-static tusb_desc_device_t desc_dev = {
-    .bLength = sizeof(desc_dev),
-    .bDescriptorType = TUSB_DESC_DEVICE,
-    .bcdUSB = 0x0200,
-
-#if CFG_TUD_CDC
-    // Use Interface Association Descriptor (IAD) for CDC
-    // As required by USB Specs IAD's subclass must be common class (2) and protocol must be IAD (1)
-    .bDeviceClass = TUSB_CLASS_MISC,
-    .bDeviceSubClass = MISC_SUBCLASS_COMMON,
-    .bDeviceProtocol = MISC_PROTOCOL_IAD,
-#else
-    .bDeviceClass = 0x00,
-    .bDeviceSubClass = 0x00,
-    .bDeviceProtocol = 0x00,
-#endif
-
-    .bMaxPacketSize0 = CFG_TUD_ENDPOINT0_SIZE,
-
-    .idVendor = 0x0000,
-    .idProduct = 0x0000,
-    .bcdDevice = 0x0100,
-
-    .iManufacturer = 0x01,
-    .iProduct = 0x02,
-    .iSerialNumber = 0x03,
-
-    .bNumConfigurations = 0x01
-};
-
-static const char *desc_str[] = {
-    (char[]){ 0x09, 0x04 },                     // 0: language English (0x0409)
-    "",                                         // 1: Manufacturer
-    "",                                         // 2: Product
-    "",                                         // 3: Serial
-    "CDC Device",                               // 4: CDC Interface
-    "MSC Device",                               // 5: MSC Interface
-    "HID Device",                               // 6: HID Interface
-};
 
 static esp_err_t usbd_common_init() {
     if (inited) return ESP_OK;
     LOOPN(i, NUM_DISK) { info[i].pdrv = FF_DRV_NOT_USED; }
 
-    desc_dev.idVendor                   = HIDTool.vid;
-    desc_dev.idProduct                  = HIDTool.pid;
-    desc_dev.bcdDevice                  = HIDTool.ver;
-    desc_str[desc_dev.iManufacturer]    = HIDTool.vendor;
-    desc_str[desc_dev.idProduct]        = Config.info.NAME;
-    desc_str[desc_dev.iSerialNumber]    = HIDTool.serial;
+    desc_dev.idVendor       = HIDTool.vid;
+    desc_dev.idProduct      = HIDTool.pid;
+    desc_dev.bcdDevice      = HIDTool.ver;
+    desc_str[STRID_MAFACT]  = HIDTool.vendor;
+    desc_str[STRID_PRODUCT] = Config.info.NAME;
+    desc_str[STRID_SERIAL]  = HIDTool.serial;
+    LOOP(i, 1, STRID_MAX) {
+        if (!desc_str[i]) {
+            desc_str[i] = "";
+        } else if (strlen(desc_str[i])) {
+            ESP_LOGI(TAG, "Desc[%d] %s", i, desc_str[i]);
+        }
+    }
 
-    tinyusb_config_t tusb_conf = {
+    tinyusb_config_t tusb_cfg = {
         .external_phy = false,
 #ifdef IDF_TARGET_V4
         .descriptor = &desc_dev,
@@ -225,14 +294,11 @@ static esp_err_t usbd_common_init() {
 #else
         .device_descriptor = &desc_dev,
         .string_descriptor = desc_str,
-        .string_descriptor_count = LEN(desc_str),
-        .configuration_descriptor = config_desc(),
+        .string_descriptor_count = STRID_MAX,
+        .configuration_descriptor = desc_cfg(),
 #endif
     };
-    esp_err_t err = tinyusb_driver_install(&tusb_conf);
-    LOOP(i, 1, err ? 0 : LEN(desc_str)) {
-        ESP_LOGI(TAG, "Desc[%d] %s", i, desc_str[i]);
-    }
+    esp_err_t err = tinyusb_driver_install(&tusb_cfg);
     inited = !err;
     return err;
 }
@@ -310,9 +376,9 @@ static void cdc_device_cb(int itf, cdcacm_event_t *event) {
 #   endif
 
 esp_err_t cdc_device_init(usbmode_t prev) {
-    if (cdc_enabled) return ESP_OK;
+    if (enabled[CDC_DEV]) return ESP_OK;
     esp_err_t err = usbd_common_init();
-    tinyusb_config_cdcacm_t acm_conf = {
+    tinyusb_config_cdcacm_t acm_cfg = {
         .usb_dev = TINYUSB_USBDEV_0,
         .cdc_port = TINYUSB_CDC_ACM_0,
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_SERIAL
@@ -325,18 +391,20 @@ esp_err_t cdc_device_init(usbmode_t prev) {
         .callback_line_coding_changed = cdc_device_cb,
 #   endif
     };
-    if (!err) err = tusb_cdc_acm_init(&acm_conf);
+    if (!err) err = tusb_cdc_acm_init(&acm_cfg);
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_CONSOLE
     if (!err) err = esp_tusb_init_console(TINYUSB_CDC_ACM_0);
 #   endif
-    if (!err && ISDEV(prev)) usbdev_reconnect();
-    cdc_enabled = !err;
+    if (!err) {
+        enabled[CDC_DEV] = true;
+        if (ISDEV(prev)) usbdev_reconnect();
+    }
     return err;
 }
 
 esp_err_t cdc_device_exit(usbmode_t next) {
     esp_err_t err = ESP_OK;
-    if (!cdc_enabled) return err;
+    if (!enabled[CDC_DEV]) return err;
 #   ifdef CONFIG_BASE_USB_CDC_DEVICE_CONSOLE
     if (!err) err = esp_tusb_deinit_console(TINYUSB_CDC_ACM_0);
 #   endif
@@ -344,7 +412,7 @@ esp_err_t cdc_device_exit(usbmode_t next) {
     if (!err) err = tusb_cdc_acm_deinit(TINYUSB_CDC_ACM_0);
 #   endif
     if (!err && !ISDEV(next)) err = usbd_common_exit();
-    cdc_enabled = false;
+    enabled[CDC_DEV] = false;
     return err;
 }
 
@@ -359,7 +427,7 @@ esp_err_t cdc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
  * USBMode: MSC Device
  */
 
-// see esp-idf-5.2/examples/peripherals/usb/device/tusb_msc
+// see esp-idf-5.4/examples/peripherals/usb/device/tusb_msc
 // see esp-iot-solution/examples/usb/device/usb_msc_wireless_disk
 
 #ifdef CONFIG_BASE_USB_MSC_DEVICE
@@ -478,7 +546,7 @@ int32_t tud_msc_scsi_cb(
 
 esp_err_t msc_device_init(usbmode_t prev) {
     esp_err_t err = ESP_OK;
-    if (msc_enabled) return err;
+    if (enabled[MSC_DEV]) return err;
     if (
         !filesys_get_info(FILESYS_SDCARD, info + 0) && (
             !filesys_get_info(FILESYS_FLASH, info + NUM_DISK - 1)
@@ -491,33 +559,33 @@ esp_err_t msc_device_init(usbmode_t prev) {
 #   ifndef IDF_TARGET_V4
     LOOPN(i, err ? 0 : NUM_DISK) {
         if (info[i].type == FILESYS_SDCARD) {
-            const tinyusb_msc_sdmmc_config_t conf = {
+            const tinyusb_msc_sdmmc_config_t cfg = {
                 .card = info[i].card
             };
-            err = tinyusb_msc_storage_init_sdmmc(&conf);
+            err = tinyusb_msc_storage_init_sdmmc(&cfg);
         } else {
-            const tinyusb_msc_spiflash_config_t conf = {
+            const tinyusb_msc_spiflash_config_t cfg = {
                 .wl_handle = info[i].wlhdl
             };
-            err = tinyusb_msc_storage_init_spiflash(&conf);
+            err = tinyusb_msc_storage_init_spiflash(&cfg);
         }
     }
     if (!err) err = tinyusb_msc_storage_mount("/usb");
 #   endif
-    if (!err && ISDEV(prev)) usbdev_reconnect();
-    msc_enabled = !err;
+    if (!err) {
+        enabled[MSC_DEV] = true;
+        if (ISDEV(prev)) usbdev_reconnect();
+    }
     return err;
 }
 
 esp_err_t msc_device_exit(usbmode_t next) {
-    esp_err_t err = ESP_OK;
-    if (!msc_enabled) return err;
+    if (!enabled[MSC_DEV]) return ESP_OK;
 #   ifndef IDF_TARGET_V4
     tinyusb_msc_storage_deinit();
 #   endif
-    if (!err && !ISDEV(next)) err = usbd_common_exit();
-    msc_enabled = false;
-    return err;
+    enabled[MSC_DEV] = false;
+    return ISDEV(next) ? ESP_OK : usbd_common_exit();
 }
 
 #else // CONFIG_BASE_USB_MSC_DEVICE
@@ -531,7 +599,7 @@ esp_err_t msc_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
  * USBMode: HID Device
  */
 
-// see esp-idf-5.2/examples/peripherals/usb/device/tusb_hid
+// see esp-idf-5.4/examples/peripherals/usb/device/tusb_hid
 // see esp-iot-solution/examples/usb/device/usb_hid_device
 
 #ifdef CONFIG_BASE_USB_HID_DEVICE
@@ -545,7 +613,7 @@ static struct {
 } hid = { NULL, NULL, NULL };
 
 static bool send_report(const hid_report_t *rpt, bool intask, TickType_t tout) {
-    if (!hid_enabled || !HID_VALID_REPORT(rpt)) return false;
+    if (!enabled[HID_DEV] || !HID_VALID_REPORT(rpt)) return false;
 #ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
     if (!intask) return hid.queue && xQueueSend(hid.queue, rpt, tout);
 #endif
@@ -608,13 +676,13 @@ static void hid_device_task(void *arg) {
 #endif
 
 esp_err_t hid_device_init(usbmode_t prev) {
-    if (hid_enabled) return ESP_OK;
+    if (enabled[HID_DEV]) return ESP_OK;
     esp_err_t err = usbd_common_init();
 #ifdef IDF_TARGET_V4
     if (!err && (
 #   ifdef CONFIG_BASE_USB_HID_DEVICE_TASK
         !( hid.queue = xQueueCreate(10, sizeof(hid_report_t)) ) ||
-        !xTaskCreate(hid_device_task, "USB-HID", 4096, NULL, 5, &hid.task) ||
+        xTaskCreate(hid_device_task, "USB-HID", 4096, NULL, 5, &hid.task) != pdPASS ||
         !xTaskNotifyGive(hid.task)
 #   else
         !( hid.semphr = xSemaphoreCreateBinary() )
@@ -626,19 +694,21 @@ esp_err_t hid_device_init(usbmode_t prev) {
         TRYNULL(hid.semphr, vSemaphoreDelete);
     }
 #endif
-    if (!err && ISDEV(prev)) usbdev_reconnect();
-    hid_enabled = !err;
+    if (!err) {
+        enabled[HID_DEV] = true;
+        if (ISDEV(prev)) usbdev_reconnect();
+    }
     return err;
 }
 
 esp_err_t hid_device_exit(usbmode_t next) {
-    if (!hid_enabled) return ESP_OK;
+    if (!enabled[HID_DEV]) return ESP_OK;
 #ifdef IDF_TARGET_V4
     TRYNULL(hid.task, vTaskDelete);
     TRYNULL(hid.queue, vQueueDelete);
     TRYNULL(hid.semphr, vSemaphoreDelete);
 #endif
-    hid_enabled = false;
+    enabled[HID_DEV] = false;
     return ISDEV(next) ? ESP_OK : usbd_common_exit();
 }
 
@@ -648,5 +718,81 @@ esp_err_t hid_device_init() { return ESP_ERR_NOT_SUPPORTED; }
 esp_err_t hid_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
 
 #endif // CONFIG_BASE_USB_HID_DEVICE
+
+/*
+ * USBMode: NCM Device
+ */
+
+// see esp-idf-5.4/examples/peripherals/usb/device/tusb_ncm
+// see esp-iot-solution/examples/usb/device/usb_ncm_device
+#ifdef CONFIG_BASE_USB_NCM_DEVICE
+
+static void ncm_cb_free(void *eb, void *ctx) {
+    esp_wifi_internal_free_rx_buffer(eb);
+}
+
+static esp_err_t ncm_cb_send(void *buf, uint16_t len, void *eb) {
+    if (tinyusb_net_send_sync(buf, len, eb, portMAX_DELAY))
+        esp_wifi_internal_free_rx_buffer(eb);
+    return ESP_OK;
+}
+
+static esp_err_t ncm_cb_recv(void *buf, uint16_t len, void *ctx) {
+    if (*(bool *)ctx) esp_wifi_internal_tx(ESP_IF_WIFI_STA, buf, len);
+    return ESP_OK;
+}
+
+static void ncm_cb_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
+    if (id == WIFI_EVENT_STA_DISCONNECTED) {
+        *(bool *)arg = false;
+        esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, NULL);
+    } else  if (id == WIFI_EVENT_STA_CONNECTED) {
+        *(bool *)arg = true;
+        esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, ncm_cb_send);
+    }
+}
+
+esp_err_t ncm_device_init(usbmode_t prev) {
+    static bool sta_connected = false;
+    if (enabled[NCM_DEV]) return ESP_OK;
+    if (tusb_get_mac_string_id() != STRID_MAC) {
+        ESP_LOGE(TAG, "NCM: STRID_MAC does not match, see esp-tinyusb/usb_descriptors.c");
+        return ESP_ERR_NOT_SUPPORTED;
+    }
+    esp_err_t err = usbd_common_init();
+    tinyusb_net_config_t cfg = {
+        .on_recv_callback = ncm_cb_recv,
+        .free_tx_buffer = ncm_cb_free,
+        .user_context = &sta_connected,
+    };
+    esp_read_mac(cfg.mac_addr, ESP_MAC_WIFI_STA);
+    if (!err) {
+        err = tinyusb_net_init(TINYUSB_USBDEV_0, &cfg);
+        if (err == ESP_ERR_INVALID_STATE) err = ESP_OK; // initialized
+    }
+    if (!err) err = REGEVT(WIFI, ncm_cb_wifi);
+    if (!err) {
+        enabled[NCM_DEV] = true;
+        if (ISDEV(prev)) usbdev_reconnect();
+    }
+    return err;
+}
+
+esp_err_t ncm_device_exit(usbmode_t next) {
+    esp_err_t err = ESP_OK;
+    if (!enabled[NCM_DEV]) return err;
+    if (!err) err = esp_wifi_internal_reg_rxcb(ESP_IF_WIFI_STA, NULL);
+    if (!err) err = UREGEVT(WIFI, ncm_cb_wifi);
+    if (!err && !ISDEV(next)) err = usbd_common_exit();
+    enabled[NCM_DEV] = false;
+    return err;
+}
+
+#else // CONFIG_BASE_USB_NCM_DEVICE
+
+esp_err_t ncm_device_init() { return ESP_ERR_NOT_SUPPORTED; }
+esp_err_t ncm_device_exit() { return ESP_ERR_NOT_SUPPORTED; }
+
+#endif // CONFIG_BASE_USB_NCM_DEVICE
 
 #endif // CONFIG_BASE_USE_USB

@@ -7,6 +7,7 @@
 
 #include "console.h"
 #include "drivers.h"            // for UART_NUM_XXX
+#include "filesys.h"            // for PATH_MAX_LEN
 #include "config.h"
 
 #ifdef CONFIG_BASE_USE_CONSOLE
@@ -36,32 +37,41 @@
 
 static const char *TAG = "Console";
 
-static char prompt[32] = "$ ", context[32];
+static char prompt[PATH_MAX_LEN + 32] = "$ ", context[32];
 
 static void *mutex = NULL;
 
 void console_register_commands();                   // see commands.cpp
 
 void console_register_prompt(const char *str, const char *ctx) {
-    if (ctx) {
-        if (!strlen(ctx)) context[0] = '\0';
-        else snprintf(context, sizeof(context), "> %s ", ctx);
+    size_t slen = strlen(str ?: ""), clen = strlen(ctx ?: "");
+    if (clen + 3 >= sizeof(context)) {
+        ESP_LOGE(TAG, "Context %s is too long for %d", ctx, sizeof(context));
+    } else if (clen) {
+        snprintf(context, sizeof(context), "> %s ", ctx);
+    } else if (ctx) {
+        context[0] = '\0';
     }
-    size_t slen = strlen(str ?: "");
-    if (!slen) {
-        if (str) prompt[0] = '\0';
-        return;
-    }
+    char *pwd = getenv("PWD") ?: "/";
+    size_t tlen = strlen(pwd) + slen + 3;
 #ifdef CONFIG_LOG_COLORS
-    const char * color = LOG_COLOR(LOG_COLOR_PURPLE);
-    slen += strlen(color) + strlen(LOG_RESET_COLOR) + 1;
-    if (!linenoiseIsDumbMode() && slen <= sizeof(prompt)) {
-        snprintf(prompt, slen, "%s%s%s", color, str, LOG_RESET_COLOR);
-        ESP_LOGI(TAG, "Using colorful prompt %s", prompt);
-    } else
+    const char *c1 = LOG_COLOR(LOG_COLOR_PURPLE), *c2 = LOG_COLOR(LOG_COLOR_BLUE);
+    tlen += strlen(c1) + strlen(c2) + strlen(LOG_RESET_COLOR) * 2;
 #endif
-    {
-        strlcpy(prompt, str, sizeof(prompt));
+    if (tlen >= sizeof(prompt)) {
+        ESP_LOGE(TAG, "Prompt %s is too long for %d", prompt, sizeof(prompt));
+    } else if (slen) {
+#ifdef CONFIG_LOG_COLORS
+        if (!linenoiseIsDumbMode()) {
+            snprintf(prompt, sizeof(prompt), "%s%s%s:%s%s%s$ ",
+                     c1, str, LOG_RESET_COLOR, c2, pwd, LOG_RESET_COLOR);
+        } else
+#endif
+        {
+            snprintf(prompt, sizeof(prompt), "%s:%s$ ", str, pwd);
+        }
+    } else if (str) {
+        prompt[0] = '\0';
     }
 }
 
@@ -94,11 +104,11 @@ void console_initialize() {
     usb_serial_jtag_vfs_set_tx_line_endings(ESP_LINE_ENDINGS_CRLF);
     fcntl(fileno(stdout), F_SETFL, 0);              // non-blocking mode
     fcntl(fileno(stdin), F_SETFL, 0);
-    usb_serial_jtag_driver_config_t conf = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    usb_serial_jtag_driver_config_t usb_cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
 #   ifndef IDF_TARGET_V4
     if (!usb_serial_jtag_is_driver_installed())
 #   endif
-        usb_serial_jtag_driver_install(&conf);
+        usb_serial_jtag_driver_install(&usb_cfg);
     usb_serial_jtag_vfs_use_driver();
 #elif defined(CONFIG_ESP_CONSOLE_USB_CDC)
     esp_vfs_dev_cdcacm_set_rx_line_endings(ESP_LINE_ENDINGS_CR);
@@ -121,17 +131,14 @@ void console_initialize() {
         ESP_LOGW(TAG, "Line editing, history and console color are disabled.");
         ESP_LOGW(TAG, "Try using IDF-Monitor / PuTTY / SecureCRT.");
     }
-    esp_console_config_t console_config = {
-        .max_cmdline_args = 8,
-        .max_cmdline_length = 256,
+    esp_console_config_t cfg = ESP_CONSOLE_CONFIG_DEFAULT();
 #if CONFIG_LOG_COLORS
-        .hint_bold = atoi(LOG_COLOR_CYAN),
-        .hint_color = atoi(LOG_COLOR_CYAN),
+    cfg.hint_color = cfg.hint_bold = atoi(LOG_COLOR_CYAN);
 #endif
-    };
-    ESP_ERROR_CHECK( esp_console_init(&console_config) );
+    ESP_ERROR_CHECK( esp_console_init(&cfg) );
     console_register_prompt(Config.sys.PROMPT, "");
     console_register_commands();
+    if (!EMPTY(Config.sys.HISTORY)) console_history_command("load", NULL);
 
     if (( mutex = MUTEX() )) {
         RELEASE(mutex);
@@ -293,9 +300,9 @@ static char * rpc_response(const char *id, const char *result) {
     return json;
 }
 
-char * console_handle_rpc(const char *json) {
+char * console_handle_jsonrpc(const char *json, int len) {
     char *ret = NULL, *cmd = NULL, *tmp = NULL;
-    cJSON *obj = cJSON_Parse(json),
+    cJSON *obj = cJSON_ParseWithLength(json, len == -1 ? strlen(json) : len),
           *uid = cJSON_GetObjectItem(obj, "id"),
           *method = cJSON_GetObjectItem(obj, "method"),
           *params = cJSON_GetObjectItem(obj, "params");
@@ -308,12 +315,12 @@ char * console_handle_rpc(const char *json) {
         goto exit;
     }
     if (cJSON_GetArraySize(params)) {           // command with arguments
-        size_t size = 0; FILE *tmp = open_memstream(&cmd, &size);
-        fprintf(tmp, "%s", method->valuestring);
+        size_t size = 0; FILE *stream = open_memstream(&cmd, &size);
+        fprintf(stream, "%s", method->valuestring);
         for (cJSON *child = params->child; child; child = child->next) {
-            fprintf(tmp, " %s", child->valuestring);
+            fprintf(stream, " %s", child->valuestring);
         }
-        fclose(tmp);
+        fclose(stream);
     } else {                                    // command without arguments
         cmd = strdup(method->valuestring);
     }
@@ -332,11 +339,34 @@ exit:
     return ret;
 }
 
+esp_err_t console_history_command(const char *cmd, const char *hist) {
+    if (!hist) hist = Config.sys.HISTORY;
+    filesys_type_t type = filesys_get_type(hist);
+    if (!cmd) {
+        printf("History file: %s (%d)\n", hist, filesys_isfile(type, hist));
+    } else if (!strcasecmp(cmd, "load")) {
+        if (!filesys_isfile(type, hist)) return ESP_ERR_INVALID_ARG;
+        return linenoiseHistoryLoad(hist) != 0;
+    } else if (!strcasecmp(cmd, "dump")) {
+        if (EMPTY(hist)) return ESP_ERR_INVALID_ARG;
+        return linenoiseHistorySave(hist) != 0;
+    } else if (!strtob(cmd)) {
+        return config_set("sys.history", "");
+    } else if (filesys_isfile(type, hist)) {
+        return config_set("sys.history", hist);
+    } else {
+        return ESP_ERR_INVALID_STATE;
+    }
+    return ESP_OK;
+}
+
 #else // CONFIG_BASE_USE_CONSOLE
 
 void console_initialize() {}
 
-void console_register_prompt(const char *s) { NOTUSED(s); }
+void console_register_prompt(const char *s, const char *c) {
+    NOTUSED(s); NOTUSED(c);
+}
 
 char * console_handle_command(const char *c, bool p, bool h) {
     return NULL; NOTUSED(c); NOTUSED(h);
@@ -348,6 +378,12 @@ void console_handle_loop(void *a) { return; NOTUSED(a); }
 
 void console_loop_begin(int x) { return; NOTUSED(x); }
 
-char * console_handle_rpc(const char *j) { return NULL; NOTUSED(j); }
+char * console_handle_jsonrpc(const char *j, int l) {
+    return NULL; NOTUSED(j); NOTUSED(l);
+}
+
+esp_err_t console_history_command(const char *c, const char *h) {
+    NOTUSED(c); NOTUSED(h); return ESP_ERR_NOT_SUPPORTED;
+}
 
 #endif // CONFIG_BASE_USE_CONSOLE

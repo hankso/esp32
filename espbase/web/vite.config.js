@@ -30,7 +30,7 @@ export default defineConfig(({ command, mode }) => {
             info['SOURCE'] = `${execSync('git describe --tags --always')}`
         } catch {}
     }
-    let dist = resolve(__dirname, '..', 'files', 'www')
+    let dist = resolve(__dirname, '..', 'data', 'www')
     if (!statSync(dist, { throwIfNoEntry: false })?.isDirectory())
         dist = './dist'
     return {

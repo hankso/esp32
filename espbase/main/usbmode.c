@@ -34,9 +34,9 @@ static esp_err_t serial_jtag_init() {
 #   ifndef IDF_TARGET_V4
     if (usb_serial_jtag_is_driver_installed()) return ESP_OK;
 #   endif
-    usb_serial_jtag_driver_config_t conf = \
+    usb_serial_jtag_driver_config_t cfg = \
         USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    esp_err_t err = usb_serial_jtag_driver_install(&conf);
+    esp_err_t err = usb_serial_jtag_driver_install(&cfg);
     return err == ESP_ERR_INVALID_STATE ? ESP_OK : err;
 #endif
 }
@@ -70,6 +70,8 @@ esp_err_t msc_device_init();
 esp_err_t msc_device_exit();
 esp_err_t hid_device_init();
 esp_err_t hid_device_exit();
+esp_err_t ncm_device_init();
+esp_err_t ncm_device_exit();
 
 static const struct {
     usbmode_t mode;
@@ -77,9 +79,10 @@ static const struct {
     esp_err_t (*exit)(usbmode_t next);
 } modes[] = {
     { SERIAL_JTAG,  serial_jtag_init,   serial_jtag_exit },
-    { CDC_DEVICE,   cdc_device_init,    cdc_device_exit },
-    { MSC_DEVICE,   msc_device_init,    msc_device_exit },
-    { HID_DEVICE,   hid_device_init,    hid_device_exit },
+    { CDC_DEV,      cdc_device_init,    cdc_device_exit },
+    { MSC_DEV,      msc_device_init,    msc_device_exit },
+    { HID_DEV,      hid_device_init,    hid_device_exit },
+    { NCM_DEV,      ncm_device_init,    ncm_device_exit },
     { CDC_HOST,     cdc_host_init,      cdc_host_exit },
     { MSC_HOST,     msc_host_init,      msc_host_exit },
     { HID_HOST,     hid_host_init,      hid_host_exit },
@@ -89,12 +92,13 @@ static const char * usbmode_str(usbmode_t mode) {
     if (mode == -1 && state >= 0) mode = state;
     switch (mode) {
     CASESTR(SERIAL_JTAG, 0);
-    CASESTR(CDC_DEVICE, 0);
     CASESTR(CDC_HOST, 0);
-    CASESTR(MSC_DEVICE, 0);
     CASESTR(MSC_HOST, 0);
-    CASESTR(HID_DEVICE, 0);
     CASESTR(HID_HOST, 0);
+    CASESTR(CDC_DEV, 0);
+    CASESTR(MSC_DEV, 0);
+    CASESTR(HID_DEV, 0);
+    CASESTR(NCM_DEV, 0);
     default: if (mode != -1) return "Unknown";
     }
     esp_err_t err = -state;
@@ -150,7 +154,7 @@ void usbmode_initialize() {
         usbmode_switch(modes[i].mode, false);
         return;
     }
-    if (!strlen(Config.sys.USB_MODE)) {
+    if (EMPTY(Config.sys.USB_MODE)) {
         ESP_LOGW(TAG, "Software blocked");
         state = -ESP_ERR_USBMODE_DISABLED;
     } else {

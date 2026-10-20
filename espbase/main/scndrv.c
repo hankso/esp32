@@ -66,17 +66,17 @@ static struct {
 static uint8_t u8g2_gpio_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     switch (msg) {
     case U8X8_MSG_GPIO_AND_DELAY_INIT: {
-        gpio_config_t conf = {
+        gpio_config_t cfg = {
             .pin_bit_mask   = 0,
             .mode           = GPIO_MODE_OUTPUT,
             .pull_up_en     = GPIO_PULLUP_DISABLE,
             .pull_down_en   = GPIO_PULLDOWN_ENABLE,
             .intr_type      = GPIO_INTR_DISABLE,
         };
-        if (ctx.cs != GPIO_NUM_NC)  conf.pin_bit_mask |= BIT(ctx.cs);
-        if (ctx.dc != GPIO_NUM_NC)  conf.pin_bit_mask |= BIT(ctx.dc);
-        if (ctx.rst != GPIO_NUM_NC) conf.pin_bit_mask |= BIT(ctx.rst);
-        if (conf.pin_bit_mask) return gpio_config(&conf);
+        if (ctx.cs != GPIO_NUM_NC)  cfg.pin_bit_mask |= BIT(ctx.cs);
+        if (ctx.dc != GPIO_NUM_NC)  cfg.pin_bit_mask |= BIT(ctx.dc);
+        if (ctx.rst != GPIO_NUM_NC) cfg.pin_bit_mask |= BIT(ctx.rst);
+        if (cfg.pin_bit_mask) return gpio_config(&cfg);
     }   break;
     case U8X8_MSG_GPIO_CS:
         if (ctx.cs != GPIO_NUM_NC)  { gpio_set_level(ctx.cs, arg); } break;
@@ -107,13 +107,13 @@ static uint8_t u8g2_spi_cb(u8x8_t *u8x8, uint8_t msg, uint8_t arg, void *ptr) {
     case U8X8_MSG_BYTE_SET_DC:
         if (ctx.dc != GPIO_NUM_NC) { gpio_set_level(ctx.dc, arg); } break;
     case U8X8_MSG_BYTE_INIT: {
-        const spi_device_interface_config_t conf = {
+        const spi_device_interface_config_t cfg = {
             .mode           = ctx.mode,
             .clock_speed_hz = ctx.speed,
             .spics_io_num   = ctx.cs,
             .queue_size     = 100,
         };
-        return spi_bus_add_device(ctx.bus, &conf, &spi_hdl);
+        return spi_bus_add_device(ctx.bus, &cfg, &spi_hdl);
     }
     case U8X8_MSG_BYTE_SEND: {
         spi_transaction_t trans = { .length = 8 * arg, .tx_buffer = ptr };

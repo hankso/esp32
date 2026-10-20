@@ -75,7 +75,7 @@ static void ble_hidh_cb(void *a, esp_event_base_t b, int32_t id, void *data) {
     }
 }
 
-static const esp_hidh_config_t conf = {
+static const esp_hidh_config_t hid_cfg = {
     .event_stack_size = 4096,
     .callback = ble_hidh_cb,
     .callback_arg = NULL,
@@ -86,7 +86,7 @@ esp_err_t ble_hidh_init(btmode_t prev) {
     esp_err_t err = bt_common_init(ESP_BT_MODE_BLE, !ISBLE(prev));
     if (!err)
         err = esp_ble_gattc_register_callback(esp_hidh_gattc_event_handler);
-    if (!err) esp_hidh_init(&conf);
+    if (!err) esp_hidh_init(&hid_cfg);
     hid_enabled = !err;
     return err;
 }

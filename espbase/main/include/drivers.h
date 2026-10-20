@@ -194,7 +194,7 @@ esp_err_t smbus_write_byte(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t val)
 esp_err_t smbus_write_word(uint8_t bus, uint8_t addr, uint16_t reg, uint16_t val);
 esp_err_t smbus_read_byte(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t *val);
 esp_err_t smbus_read_word(uint8_t bus, uint8_t addr, uint16_t reg, uint16_t *val);
-esp_err_t smbus_clearbits(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t mask);
+esp_err_t smbus_clrbits(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t mask);
 esp_err_t smbus_setbits(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t mask);
 esp_err_t smbus_toggle(uint8_t bus, uint8_t addr, uint16_t reg, uint8_t bit);
 esp_err_t smbus_dump(uint8_t bus, uint8_t addr, uint16_t reg, size_t num);
@@ -213,10 +213,10 @@ uint8_t i2c_detect(uint8_t bus);
 #define RT_WAIT1(r, m, ms)  { (8 << 16) | (r), (m) | ((ms) << 16) } // any
 #define RT_WAIT2(r, m, ms)  { (9 << 16) | (r), (m) | ((ms) << 16) } // all
 #define RT_SLEEP(ms)        { 0xFF << 16, (ms) }
-#define RT_FIND_OPT(arr, o) ({ smbus_regval_t *p = (arr);                     \
-                               while (p && (p->reg >> 16) != (o)) p++; p; })
+#define RT_FIND_OPT(arr, o) ({ smbus_regval_t *p = (arr);                   \
+                               while (p && (p->reg >> 16) != (o)) { p++; } p; })
 #define RT_FIND_REG(arr, r) ({ smbus_regval_t *p = (arr);                     \
-                               while (p && (p->reg & 0xFFFF) != (r)) p++; p; })
+                               while (p && (p->reg & 0xFFFF) != (r)) { p++; } p; })
 typedef struct {
     uint32_t reg, val;
 } smbus_regval_t;

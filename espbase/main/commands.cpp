@@ -44,7 +44,7 @@
 #define CONSOLE_UTIL_LOGGING        //  596 Bytes
 #if defined(CONFIG_BASE_USE_FFS) || defined(CONFIG_BASE_USE_SDFS)
 #   define CONSOLE_UTIL_LSFS        //  512 Bytes
-#   define CONSOLE_UTIL_HISTORY     //  806 Bytes
+#   define CONSOLE_UTIL_HIST        //  806 Bytes
 #endif
 
 #define CONSOLE_DRV_GPIO            //  700 Bytes
@@ -92,8 +92,11 @@
 #   define CONSOLE_NET_TSYNC        // 7888 Bytes
 #   define CONSOLE_NET_HBEAT        //  160 Bytes
 #endif
-#if defined(CONFIG_BASE_USE_WIFI) && defined(CONFIG_ESP_WIFI_FTM_ENABLE)
-#   define CONSOLE_NET_FTM          // 1860 Bytes
+#ifdef CONFIG_BASE_USE_WIFI
+#   define CONSOLE_NET_NOW          //15568 Bytes
+#   ifdef CONFIG_ESP_WIFI_FTM_ENABLE
+#       define CONSOLE_NET_FTM      // 1860 Bytes
+#   endif
 #endif
 
 #if defined(CONFIG_BASE_USE_BT) \
@@ -251,24 +254,26 @@ static int sys_reboot(int argc, char **argv) {
 #endif
 
 #ifdef CONSOLE_SYS_SLEEP
-static const char * const wakeup_reason_list[] = {
-    "Undefined", "All", "EXT0", "EXT1", "Timer",
-    "Touchpad", "ULP", "GPIO", "UART", "WiFi",
-    "CoCPU", "CoCPU-Crash", "BT", "VAD",
-};
-
 static struct {
     arg_str_t *mode;
+    arg_str_t *wake;
     arg_int_t *tout;
     arg_int_t *pin;
     arg_int_t *lvl;
     arg_end_t *end;
 } sys_sleep_args = {
-    .mode = arg_str0(NULL, NULL, "MODE", "light|deep [default light]"),
+    .mode = arg_str0(NULL, NULL, "MODE", "light|deep|pm [default light]"),
+    .wake = arg_str0(NULL, NULL, "WAKE", "BT|ULP|VAD|TPAD|WIFI"),
     .tout = arg_int0("t", NULL, "0~2^31", "wakeup timeout in ms [default 0]"),
     .pin  = arg_intn("p", NULL, NULL, 0, 8, "wakeup from GPIO[s]"),
     .lvl  = arg_intn("l", NULL, "0|1", 0, 8, "GPIO level[s] to detect"),
     .end  = arg_end(sizeof(sys_sleep_args) / sizeof(void *))
+};
+
+static const char * const wakeup_reason_list[] = {
+    "Undefined", "All", "EXT0", "EXT1", "Timer",
+    "Touchpad", "ULP", "GPIO", "UART", "WiFi",
+    "CoCPU", "CoCPU-Crash", "BT", "VAD",
 };
 
 static esp_err_t enable_gpio_light_wakeup() {
@@ -327,54 +332,83 @@ static esp_err_t enable_gpio_deep_wakeup() {
 
 static int sys_sleep(int argc, char **argv) {
     ARG_PARSE(argc, argv, &sys_sleep_args);
-    const char *mode = ARG_STR(sys_sleep_args.mode, "light");
+    const char *mode = ARG_STR(sys_sleep_args.mode, ""),
+               *wake = ARG_STR(sys_sleep_args.wake, "");
     uint32_t tout_ms = ARG_INT(sys_sleep_args.tout, 0);
     if (tout_ms) {
         fprintf(stderr, "Use timer wakeup, timeout: %" PRIu32 "ms\n", tout_ms);
         uint64_t tout_us = (uint64_t)tout_ms * 1000;
         ESP_ERROR_CHECK( esp_sleep_enable_timer_wakeup(tout_us) );
     }
-    bool light = true;
-    if (!strcasecmp(mode, "deep")) {
-        light = false;
-    } else if (strcasecmp(mode, "light")) {
-        ESP_LOGE(TAG, "Unsupported sleep mode: %s", mode);
-        return ESP_ERR_INVALID_ARG;
-    }
-    esp_err_t err;
-    if (light) {
+    esp_err_t err = ESP_OK;
+    if (!strcasecmp(mode, "pm")) {
+#   ifndef CONFIG_PM_ENABLE
+        err = ESP_ERR_NOT_SUPPORTED;
+#   else
+        esp_pm_config_t cfg;
+        if (( err = esp_pm_get_configuration(&cfg) )) return err;
+        if (!sys_sleep_args.wake->count) {
+            printf("CPU %d ~ %d MHZ, light sleep %sabled\n",
+                    cfg.min_freq_mhz, cfg.max_freq_mhz,
+                    cfg.light_sleep_enable ? "en" : "dis");
+            err = esp_pm_dump_locks(stdout);
+        } else {
+            cfg.light_sleep_enable = strtob(wake);
+            err = esp_pm_configure(&cfg);
+        }
+#   endif
+    } else if (!strcasecmp(mode, "deep")) {
+        if (!( err = enable_gpio_deep_wakeup() )) {
+            fputs("Turn to deep sleep mode\n", stderr);
+            err = esp_deep_sleep_try_to_start();
+        }
+    } else {
+#   ifdef CONFIG_BASE_USE_BT
+        if (!strcasecmp(wake, "BT") && ( err = esp_sleep_enable_bt_wakeup() ))
+            ESP_LOGW(TAG, "BT wakeup: %s", esp_err_to_name(err));
+#   endif
+#   ifdef SOC_ULP_SUPPORTED
+        if (!strcasecmp(wake, "ULP") && ( err = esp_sleep_enable_ulp_wakeup() ))
+            ESP_LOGW(TAG, "ULP wakeup: %s", esp_err_to_name(err));
+#   endif
+#   ifdef SOC_LP_VAD_SUPPORTED
+        if (!strcasecmp(wake, "VAD") && ( err = esp_sleep_enable_vad_wakeup() ))
+            ESP_LOGW(TAG, "VAD wakeup: %s", esp_err_to_name(err));
+#   endif
+#   if CONFIG_BASE_USE_TPAD && SOC_TOUCH_SENSOR_SUPPORTED
+        if (!strcasecmp(wake, "TPAD") && ( err = esp_sleep_enable_touchpad_wakeup() ))
+            ESP_LOGW(TAG, "TPAD wakeup: %s", esp_err_to_name(err));
+#   endif
+#   ifdef CONFIG_BASE_USE_WIFI
+        if (!strcasecmp(wake, "WIFI") && ( err = esp_sleep_enable_wifi_wakeup() ))
+            ESP_LOGW(TAG, "WIFI wakeup: %s", esp_err_to_name(err));
+#   endif
 #   ifdef CONFIG_BASE_USE_UART
         fprintf(stderr, "Use UART wakeup, num: %d\n", NUM_UART);
         ESP_ERROR_CHECK( uart_set_wakeup_threshold(NUM_UART, 3) );
         ESP_ERROR_CHECK( esp_sleep_enable_uart_wakeup(NUM_UART) );
 #   endif
         if (( err = enable_gpio_light_wakeup() )) return err;
-    } else {
-        if (( err = enable_gpio_deep_wakeup() )) return err;
-    }
-
-    fprintf(stderr, "Turn to %s sleep mode\n", mode);
-    fflush(stderr); fsync(fileno(stderr));
+        fputs("Turn to light sleep mode\n", stderr);
+        fflush(stderr); fsync(fileno(stderr));
 #   ifdef CONFIG_BASE_USE_UART
-    uart_tx_wait_idle(NUM_UART);
+        uart_tx_wait_idle(NUM_UART);
 #   endif
-    if (light) {
-        esp_light_sleep_start();
-    } else {
-        esp_deep_sleep_start(); // no-return (see console_register_commands)
-    }
+        if (( err = esp_light_sleep_start() )) return err;
 #   ifdef IDF_TARGET_V6
-    uint32_t causes = esp_sleep_get_wakeup_causes();
-    LOOPN(i, LEN(wakeup_reason_list)) {
-        if (!bitread(causes, i)) continue;
-        fprintf(stderr, "Woken up from sleep by %s\n", wakeup_reason_list[i]);
-    }
+        uint32_t causes = esp_sleep_get_wakeup_causes();
+        LOOPN(i, LEN(wakeup_reason_list)) {
+            if (!bitread(causes, i)) continue;
+            fprintf(stderr, "Woken up from sleep by %s\n", wakeup_reason_list[i]);
+        }
 #   else
-    esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
-    fprintf(stderr, "Woken up from sleep by %s\n",
-            cause < LEN(wakeup_reason_list) ? wakeup_reason_list[cause] : "Unknown");
+        esp_sleep_wakeup_cause_t cause = esp_sleep_get_wakeup_cause();
+        fprintf(stderr, "Woken up from sleep by %s\n",
+                cause < LEN(wakeup_reason_list) ? wakeup_reason_list[cause] : "Unknown");
 #   endif
-    return esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+        err = esp_sleep_disable_wakeup_source(ESP_SLEEP_WAKEUP_ALL);
+    }
+    return err;
 }
 #endif // CONSOLE_SYS_SLEEP
 
@@ -425,16 +459,18 @@ static int sys_update(int argc, char **argv) {
 
 #ifdef CONSOLE_SYS_EXEC
 static struct {
-    arg_lit_t *ext;
     arg_lit_t *hdr;
+    arg_lit_t *list;
+    arg_str_t *func;
     arg_str_t *path;
     arg_lit_t *sep;
     arg_str_t *argv;
     arg_end_t *end;
 } sys_exec_args = {
-    .ext  = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
     .hdr  = arg_litn("h", "header", 0, 4, "print ELF header and exit"),
-    .path = arg_str1(NULL, NULL, "PATH", "ELF file to run"),
+    .list = arg_litn("l", "list", 0, 2, "list ELF module / symbols"),
+    .func = arg_str0("s", NULL, "SYMBOL", "function to call"),
+    .path = arg_str0(NULL, NULL, "PATH", "ELF file to run"),
     .sep  = arg_lit0(NULL, "", NULL), // add '--' seperator to arg_print_syntax
     .argv = arg_strn(NULL, NULL, "ARGV", 0, 10, "args MUST be after '--'"),
     .end  = arg_end(sizeof(sys_exec_args) / sizeof(void *))
@@ -444,19 +480,33 @@ static esp_err_t sys_exec(int argc, char **argv) {
     ARG_PARSE(argc, argv, &sys_exec_args);
     int eargc = sys_exec_args.argv->count + 1;
     char **eargv = NULL;
+    const char *func = ARG_STR(sys_exec_args.func, NULL);
     const char *path = ARG_STR(sys_exec_args.path, NULL);
-    filesys_type_t type = FILESYS_TYPE(sys_exec_args.ext->count);
+    const char *full = filesys_join(FILESYS_VFS, 2, getenv("PWD"), path);
+    filesys_type_t type = filesys_get_type(full);
     esp_err_t err = ESP_OK;
     if (sys_exec_args.hdr->count) {
-        filesys_readelf(type, path, sys_exec_args.hdr->count);
-    } else if (!( err = ECALLOC(eargv, eargc, sizeof(char *)) )) {
+        err = filesys_readelf(type, path, sys_exec_args.hdr->count);
+    } else if (sys_exec_args.list->count) {
+        err = filesys_dllist(true, sys_exec_args.list->count > 1);
+    } else if (path && !( err = ECALLOC(eargv, eargc, sizeof(char *)) )) {
         const char *basename = strrchr(path, '/');
         LOOPN(i, eargc) {
             eargv[i] = i ? strdup(sys_exec_args.argv->sval[i - 1]) :
                            strdup(basename ? basename + 1 : path);
             if (!eargv[i]) { err = ESP_ERR_NO_MEM; break; }
         }
-        if (!err) err = filesys_execute(type, path, eargc, eargv);
+        if (!err) {
+            if (!func) {
+                err = filesys_execute(type, path, eargc, eargv);
+            } else {
+                err = filesys_dlcall(type, path, func, eargc - 1, eargv + 1);
+                if (err <= 0) {
+                    printf("dlcall %s rc=%d\n", func, -err);
+                    err = ESP_OK;
+                }
+            }
+        }
         LOOPN(i, eargc) { TRYFREE(eargv[i]); }
         free(eargv);
     }
@@ -536,7 +586,7 @@ static struct {
     arg_lit_t *now;
     arg_end_t *end;
 } drv_usb_args = {
-    .mode = arg_str0(NULL, NULL, "0~6|CMH|S", "specify USB mode"),
+    .mode = arg_str0(NULL, NULL, "0~7|SCMHcmhn", "specify USB mode"),
     .now  = arg_lit0(NULL, "now", "reboot right now if needed"),
     .end  = arg_end(sizeof(drv_usb_args) / sizeof(void *))
 };
@@ -544,7 +594,7 @@ static struct {
 static int drv_usb(int argc, char **argv) {
     ARG_PARSE(argc, argv, &drv_usb_args);
     const char *mode = ARG_STR(drv_usb_args.mode, NULL);
-    int idx = stridx(mode, "CcMmHhS");
+    int idx = stridx(mode, "SCMHcmhn");
     esp_err_t err = ESP_OK;
     if (!mode) {
         usbmode_status();
@@ -946,15 +996,15 @@ static int util_lsmem(int argc, char **argv) {
 #ifdef CONSOLE_UTIL_LSFS
 static struct {
     arg_str_t *dir;
-    arg_lit_t *ext;
     arg_lit_t *stat;
+    arg_lit_t *norm;
     arg_lit_t *info;
     arg_lit_t *vfs;
     arg_end_t *end;
 } util_lsfs_args = {
     .dir  = arg_str0(NULL, NULL, "PATH", NULL),
-    .ext  = arg_lit0("d", "sdcard", "use SDCard instead of Flash"),
     .stat = arg_lit0(NULL, "stat", "print stat of specified file"),
+    .norm = arg_lit0(NULL, "norm", "print normalized path"),
     .info = arg_lit0(NULL, "info", "print info of specified FS"),
     .vfs  = arg_lit0(NULL, "vfs", "print info of virtual FS"),
     .end  = arg_end(sizeof(util_lsfs_args) / sizeof(void *))
@@ -963,24 +1013,59 @@ static struct {
 static int util_lsfs(int argc, char **argv) {
     ARG_PARSE(argc, argv, &util_lsfs_args);
     const char *path = ARG_STR(util_lsfs_args.dir, "/");
-    filesys_type_t type = FILESYS_TYPE(util_lsfs_args.ext->count);
-    if (util_lsfs_args.info->count) {
-        filesys_print_info(type);
-    } else if (util_lsfs_args.vfs->count) {
+    const char *full = filesys_join(FILESYS_VFS, 2, getenv("PWD"), path);
+    filesys_type_t type = filesys_get_type(full);
+    if (util_lsfs_args.vfs->count) {
 #   ifdef IDF_TARGET_V4
         return ESP_ERR_NOT_SUPPORTED;
 #   else
         esp_vfs_dump_fds(stdout);
         esp_vfs_dump_registered_paths(stdout);
 #   endif
+    } else if (util_lsfs_args.info->count) {
+        filesys_print_info(type);
+    } else if (util_lsfs_args.norm->count) {
+        printf("norm %s to %s\n", path, full);
     } else if (util_lsfs_args.stat->count) {
-        filesys_pstat(type, path);
+        filesys_pstat(type, full);
     } else {
-        filesys_listdir(type, path, stdout);
+        filesys_listdir(type, full, stdout);
     }
     return ESP_OK;
 }
 #endif // CONSOLE_UTIL_LSFS
+
+#ifdef CONSOLE_UTIL_HIST
+static struct {
+    arg_str_t *cmd;
+    arg_str_t *dst;
+    arg_end_t *end;
+} util_hist_args = {
+    .cmd = arg_str0(NULL, NULL, "CMD", "on|off|load|dump"),
+    .dst = arg_str0(NULL, NULL, "PATH", "history file"),
+    .end = arg_end(sizeof(util_hist_args) / sizeof(void *))
+};
+
+static int util_hist(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &util_hist_args);
+    const char *path = ARG_STR(util_hist_args.dst, Config.sys.HISTORY);
+    if (EMPTY(path)) path = "history.txt";
+    filesys_path_t full;
+    filesys_join_r(FILESYS_VFS, full, 2, getenv("PWD"), path);
+    filesys_type_t type = filesys_get_type(full);
+    if (type == FILESYS_VFS) {
+        const char *base = strrchr(full, '/');
+        if (base) base += 1; else base = full;
+#ifdef CONFIG_BASE_USE_FFS
+        strlcpy(full, fjoin(2, Config.sys.DIR_DATA, base), sizeof(full));
+#elif CONFIG_BASE_USE_SDFS
+        strlcpy(full, snorm(base), sizeof(full));
+#endif
+        type = filesys_get_type(full);
+    }
+    return console_history_command(ARG_STR(util_hist_args.cmd, NULL), full);
+}
+#endif // CONSOLE_UTIL_HIST
 
 #ifdef CONSOLE_UTIL_CONFIG
 static struct {
@@ -1041,7 +1126,7 @@ static int util_config(int argc, char **argv) {
             }
             printf("Set `%s` to `%s` %s\n", key, val, esp_err_to_name(err));
         } else {
-            val = !env ? config_get(key) : getenv(key);
+            val = env ? getenv(key) : config_get(key);
             printf("Get `%s` is `%s`\n", key, val ?: "(notset)");
         }
     } else if (util_config_args.load->count) {
@@ -1129,45 +1214,6 @@ static int util_logging(int argc, char **argv) {
 }
 #endif // CONSOLE_UTIL_LOGGING
 
-#ifdef CONSOLE_UTIL_HISTORY
-static struct {
-    arg_str_t *cmd;
-    arg_str_t *dst;
-    arg_lit_t *ext;
-    arg_end_t *end;
-} util_hist_args = {
-    .cmd = arg_str1(NULL, NULL, "CMD", "load|save"),
-    .dst = arg_str0("f", NULL, "PATH", "history file [default history.txt]"),
-    .ext = arg_lit0("d", "sdcard", "target SDCard instead of Flash"),
-    .end = arg_end(sizeof(util_hist_args) / sizeof(void *))
-};
-
-static int util_hist(int argc, char **argv) {
-    ARG_PARSE(argc, argv, &util_hist_args);
-    esp_err_t err = ESP_ERR_INVALID_ARG;
-    const char *cmd = ARG_STR(util_hist_args.cmd, "");
-    const char *dst = ARG_STR(util_hist_args.dst, "history.txt");
-    bool save = false;
-    if (!strcasecmp(cmd, "save")) {
-        save = true;
-    } else if (strcasecmp(cmd, "load")) {
-        printf("Invalid command: `%s`\n", cmd);
-        return err;
-    }
-    filesys_type_t type = FILESYS_TYPE(util_hist_args.ext->count);
-    const char *dir = type == FILESYS_FLASH ? Config.sys.DIR_DATA : NULL;
-    const char *path = filesys_join(type, 2, dir, dst);
-    if (!save && !filesys_exists(type, path)) {
-        printf("History file `%s` does not exist\n", path);
-        err = ESP_ERR_INVALID_ARG;
-    } else {
-        err = save ? linenoiseHistorySave(path) : linenoiseHistoryLoad(path);
-        printf("History file `%s` %s %s\n", path, cmd, err ? "fail" : "done");
-    }
-    return err;
-}
-#endif // CONSOLE_UTIL_HISTORY
-
 static esp_err_t register_util() {
     const esp_console_cmd_t cmds[] = {
 #ifdef CONSOLE_UTIL_DATETIME
@@ -1191,14 +1237,14 @@ static esp_err_t register_util() {
 #ifdef CONSOLE_UTIL_LSFS
         ESP_CMD_ARG(util, lsfs, "List file system directories and files"),
 #endif
+#ifdef CONSOLE_UTIL_HIST
+        ESP_CMD_ARG(util, hist, "Dump / load console history from flash"),
+#endif
 #ifdef CONSOLE_UTIL_CONFIG
         ESP_CMD_ARG(util, config, "Set / get / load / save / list configs"),
 #endif
 #ifdef CONSOLE_UTIL_LOGGING
         ESP_CMD_ARG(util, logging, "Set / get ESP logging level"),
-#endif
-#ifdef CONSOLE_UTIL_HISTORY
-        ESP_CMD_ARG(util, hist, "Dump / load console history from flash"),
 #endif
     };
     return register_commands(cmds, LEN(cmds));
@@ -1283,19 +1329,74 @@ static int net_ip(int argc, char **argv) {
 }
 #endif // CONSOLE_NET_IP
 
+#ifdef CONSOLE_NET_NOW
+static struct {
+    arg_str_t *cmd;
+    arg_str_t *mac;
+    arg_str_t *msg;
+    arg_int_t *num;
+    arg_str_t *key;
+    arg_str_t *ps;
+    arg_str_t *lr;
+    arg_lit_t *ap;
+    arg_end_t *end;
+} net_now_args = {
+    .cmd = arg_str0(NULL, NULL, "CMD", "on|off|add|del|pmk|send|cast"),
+    .mac = arg_str0(NULL, NULL, "MAC", "address XX:XX:XX:XX:XX:XX"),
+    .msg = arg_str0("m", NULL, "MSG", "message to send"),
+    .num = arg_int0("n", NULL, "NUM", "count of broadcast packets"),
+    .key = arg_str0("k", NULL, "KEY", "16-byte master key"),
+    .ps  = arg_str0(NULL, "ps", "y|n", "power save mode"),
+    .lr  = arg_str0(NULL, "lr", "y|n", "LongRange protocol"),
+    .ap  = arg_lit0(NULL, "ap", "use AP instead of STA"),
+    .end = arg_end(sizeof(net_now_args) / sizeof(void *))
+};
+
+static int net_now(int argc, char **argv) {
+    ARG_PARSE(argc, argv, &net_now_args);
+    const char *key = ARG_STR(net_now_args.key, NULL);
+    const char *ps = ARG_STR(net_now_args.ps, NULL);
+    const char *lr = ARG_STR(net_now_args.lr, NULL);
+    now_param_t param = {
+        .mac = "", .lmk = "",
+        .apifidx = net_now_args.ap->count ? 1 : -1,
+        .channel = -1,
+        .encrypt = key ? 1 : -1,
+        .powersave = ps ? strtob(ps) : -1,
+        .longrange = lr ? strtob(lr) : -1,
+        .broadcast = ARG_INT(net_now_args.num, -1),
+    };
+    if (key) {
+        if (strlen(key) != sizeof(param.lmk)) return ESP_ERR_INVALID_SIZE;
+        memcpy(param.lmk, key, sizeof(param.lmk));
+    }
+    if (net_now_args.mac->count && sscanf(
+        net_now_args.mac->sval[0],
+        "%02hhx:%02hhx:%02hhx:%02hhx:%02hhx:%02hhx",
+        param.mac + 0, param.mac + 1, param.mac + 2,
+        param.mac + 3, param.mac + 4, param.mac + 5
+    ) != 6) return ESP_ERR_INVALID_ARG;
+    return now_command(
+        ARG_STR(net_now_args.cmd, NULL),
+        &param,
+        ARG_STR(net_now_args.msg, NULL)
+    );
+}
+#endif // CONSOLE_NET_NOW
+
 #ifdef CONSOLE_NET_FTM
 static struct {
     arg_str_t *ssid;
     arg_int_t *npkt;
     arg_lit_t *rep;
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_int_t *base;
     arg_end_t *end;
 } net_ftm_args = {
     .ssid = arg_str0(NULL, NULL, "SSID", "initiator target AP hostname"),
     .npkt = arg_int0("n", NULL, "0~32|64", "initiator frame count"),
-    .rep  = arg_lit0(NULL, "resp", "control responder"),
-    .ctrl = arg_str0("c", NULL, "on|off", "responder enable / disable"),
+    .rep  = arg_lit0(NULL, "rep", "control responder"),
+    .cmd  = arg_str0("c", NULL, "on|off", "responder enable / disable"),
     .base = arg_int0("o", NULL, "NUM", "responder T1 offset in cm"),
     .end  = arg_end(sizeof(net_ftm_args) / sizeof(void *))
 };
@@ -1304,7 +1405,7 @@ static int net_ftm(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ftm_args);
     if (net_ftm_args.rep->count) {
         return ftm_respond(
-            ARG_STR(net_ftm_args.ctrl, NULL),
+            ARG_STR(net_ftm_args.cmd, NULL),
             ARG_INT(net_ftm_args.base, 0));
     } else {
         return ftm_request(
@@ -1345,21 +1446,21 @@ static int net_pmap(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_PCAP
 static struct {
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_str_t *itf;
     arg_int_t *pkt;
     arg_end_t *end;
 } net_pcap_args = {
-    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
-    .itf  = arg_str0(NULL, NULL, "IFACE", "eth|wifi (default eth)"),
-    .pkt  = arg_int0(NULL, "num", "0~2^31", "stop after number of packets"),
-    .end  = arg_end(sizeof(net_pcap_args) / sizeof(void *))
+    .cmd = arg_str0(NULL, NULL, "CMD", "on|off"),
+    .itf = arg_str0(NULL, NULL, "IFACE", "eth|wifi (default eth)"),
+    .pkt = arg_int0(NULL, "num", "0~2^31", "stop after number of packets"),
+    .end = arg_end(sizeof(net_pcap_args) / sizeof(void *))
 };
 
 static int net_pcap(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_pcap_args);
     return pcap_command(
-        ARG_STR(net_pcap_args.ctrl, NULL),
+        ARG_STR(net_pcap_args.cmd, NULL),
         ARG_STR(net_pcap_args.itf, NULL),
         ARG_INT(net_pcap_args.pkt, -1)
     );
@@ -1368,34 +1469,34 @@ static int net_pcap(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_MQTT
 static struct {
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_str_t *url;
     arg_str_t *tpc;
-    arg_str_t *data;
+    arg_str_t *msg;
     arg_int_t *qos;
     arg_lit_t *ret;
     arg_end_t *end;
 } net_mqtt_args = {
-    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off|pub|sub|unsub|load|dump"),
-    .url  = arg_str0("u", NULL, "URL", "MQTT broker URL schema://[user:pass@]host[:port][/path][#cid]"),
-    .tpc  = arg_str0("t", NULL, "TOPIC", "MQTT topic"),
-    .data = arg_str0("d", NULL, "DATA", "MQTT publish data to topic"),
-    .qos  = arg_int0("q", NULL, "QOS", "MQTT publish QoS level 0/1/2"),
-    .ret  = arg_lit0(NULL, "retain", "MQTT publish retain"),
-    .end  = arg_end(sizeof(net_mqtt_args) / sizeof(void *))
+    .cmd = arg_str0(NULL, NULL, "CMD", "on|off|pub|sub|unsub|load|dump"),
+    .url = arg_str0("u", NULL, "URL", "MQTT broker URL schema://[user:pass@]host[:port][/path][#cid]"),
+    .tpc = arg_str0("t", NULL, "TOPIC", "MQTT topic"),
+    .msg = arg_str0("m", NULL, "MSG", "MQTT publish data to topic"),
+    .qos = arg_int0("q", NULL, "QOS", "MQTT publish QoS level 0/1/2"),
+    .ret = arg_lit0(NULL, "retain", "MQTT publish retain"),
+    .end = arg_end(sizeof(net_mqtt_args) / sizeof(void *))
 };
 
 static int net_mqtt(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_mqtt_args);
-    const char *data = ARG_STR(net_mqtt_args.data, NULL);
+    const char *msg = ARG_STR(net_mqtt_args.msg, NULL);
     mqtt_pub_t pub = {
-        .data = data,
-        .len = strlen(data ?: ""),
+        .msg = msg,
+        .len = strlen(msg ?: ""),
         .qos = MIN(ARG_INT(net_mqtt_args.qos, 0), 2),
         .retain = !!net_mqtt_args.ret->count
     };
     return mqtt_command(
-        ARG_STR(net_mqtt_args.ctrl, NULL),
+        ARG_STR(net_mqtt_args.cmd, NULL),
         ARG_STR(net_mqtt_args.url, NULL),
         ARG_STR(net_mqtt_args.tpc, NULL),
         &pub
@@ -1405,14 +1506,14 @@ static int net_mqtt(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_MDNS
 static struct {
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_str_t *host;
     arg_str_t *serv;
     arg_str_t *prot;
     arg_int_t *tout;
     arg_end_t *end;
 } net_mdns_args = {
-    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
+    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off"),
     .host = arg_str0("h", NULL, "HOST", "mDNS hostname to query"),
     .serv = arg_str0("s", NULL, "http|smb", "mDNS service to query"),
     .prot = arg_str0("p", NULL, "tcp|udp", "mDNS protocol to query"),
@@ -1423,7 +1524,7 @@ static struct {
 static int net_mdns(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_mdns_args);
     return mdns_command(
-        ARG_STR(net_mdns_args.ctrl, NULL),
+        ARG_STR(net_mdns_args.cmd, NULL),
         ARG_STR(net_mdns_args.host, NULL),
         ARG_STR(net_mdns_args.serv, NULL),
         ARG_STR(net_mdns_args.prot, NULL),
@@ -1434,13 +1535,13 @@ static int net_mdns(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_SNTP
 static struct {
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_str_t *host;
     arg_str_t *mode;
     arg_int_t *intv;
     arg_end_t *end;
 } net_sntp_args = {
-    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off"),
+    .cmd = arg_str0(NULL, NULL, "CMD", "on|off"),
     .host = arg_str0("h", NULL, "HOST", "SNTP server name or address"),
     .mode = arg_str0("m", NULL, "MODE", "SNTP sync mode: immed|smooth"),
     .intv = arg_int0("i", NULL, "0~2^31", "interval between sync in ms"),
@@ -1450,7 +1551,7 @@ static struct {
 static int net_sntp(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_sntp_args);
     return sntp_command(
-        ARG_STR(net_sntp_args.ctrl, NULL),
+        ARG_STR(net_sntp_args.cmd, NULL),
         ARG_STR(net_sntp_args.host, NULL),
         ARG_STR(net_sntp_args.mode, NULL),
         ARG_INT(net_sntp_args.intv, 0)
@@ -1465,7 +1566,7 @@ static struct {
     arg_int_t *size;
     arg_int_t *npkt;
     arg_lit_t *stop;
-    arg_lit_t *dry;
+    arg_lit_t *test;
     arg_end_t *end;
 } net_ping_args = {
     .host = arg_str1(NULL, NULL, "HOST", "target hostname or IP address"),
@@ -1473,14 +1574,26 @@ static struct {
     .size = arg_int0("l", NULL, "LEN", "number of data bytes to be sent"),
     .npkt = arg_int0("n", NULL, "NUM", "stop after sending num packets"),
     .stop = arg_lit0(NULL, "stop", "stop currently running ping session"),
-    .dry  = arg_lit0(NULL, "dryrun", "print IP address and stop"),
+    .test = arg_lit0("t", "test", "parse IP address and stop"),
     .end  = arg_end(sizeof(net_ping_args) / sizeof(void *))
 };
 
 static int net_ping(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_ping_args);
     const char *host = ARG_STR(net_ping_args.host, "");
-    if (net_ping_args.dry->count) return network_parse_host(host, NULL);
+    if (net_ping_args.test->count) {
+#define PALN(a) printf("0x%06X\n", address_like_numeric(a))
+        CENTER("192.168.1.1", '-', 80);         PALN("192.168.1.1");
+        CENTER("10.0.0.1:65535", '-', 80);      PALN("10.0.0.1:65535");
+        CENTER("2001:db8::1", '-', 80);         PALN("2001:db8::1");
+        CENTER("[fe80::1]:54321", '-', 80);     PALN("[fe80::1]:54321");
+        CENTER("[::ffff:1.2.3.4]:5", '-', 80);  PALN("[::ffff:1.2.3.4]:5");
+        CENTER("STDIN:http", '-', 80);          parse_address(host, "80", 0);
+        CENTER("NULL:https", '-', 80);          parse_address(NULL, "443", 0);
+        CENTER("localhost:NULL", '-', 80);      parse_address("localhost", 0, 0);
+        CENTER("10.0.0.1:ssh", '-', 80);        parse_address("10.0.0.1", "22", 0);
+        return ESP_OK;
+    }
     return ping_command(
         host,
         ARG_INT(net_ping_args.intv, 0),
@@ -1501,6 +1614,7 @@ static struct {
     arg_int_t *tout;
     arg_lit_t *udp;
     arg_lit_t *stop;
+    arg_lit_t *ver3;
     arg_end_t *end;
 } net_iperf_args = {
     .serv = arg_lit0("s", NULL, "run in server mode"),
@@ -1511,6 +1625,7 @@ static struct {
     .tout = arg_int0("t", NULL, "0~255", "session timeout in seconds"),
     .udp  = arg_lit0("u", "udp", "use UDP rather than TCP"),
     .stop = arg_lit0(NULL, "stop", "stop currently running iperf"),
+    .ver3 = arg_lit0("3", NULL, "try iperf3 (default port 5201)"),
     .end  = arg_end(sizeof(net_iperf_args) / sizeof(void *))
 };
 
@@ -1519,7 +1634,7 @@ static int net_iperf(int argc, char **argv) {
     const char *host = net_iperf_args.serv->count ? NULL : "";
     return iperf_command(
         ARG_STR(net_iperf_args.host, host),
-        ARG_INT(net_iperf_args.port, 0),
+        ARG_INT(net_iperf_args.port, net_iperf_args.ver3->count ? 5201 : 0),
         ARG_INT(net_iperf_args.size, 0),
         ARG_INT(net_iperf_args.intv, 1),
         ARG_INT(net_iperf_args.tout, 0),
@@ -1533,7 +1648,7 @@ static int net_iperf(int argc, char **argv) {
 static struct {
     arg_lit_t *serv;
     arg_str_t *host;
-    arg_int_t *port;
+    arg_str_t *port;
     arg_int_t *tout;
     arg_lit_t *stat;
     arg_lit_t *stop;
@@ -1541,7 +1656,7 @@ static struct {
 } net_tsync_args = {
     .serv = arg_lit0("s", NULL, "run in server mode"),
     .host = arg_str0("c", NULL, "HOST", "run in client mode"),
-    .port = arg_int0("p", NULL, "PORT", "specify port number"),
+    .port = arg_str0("p", NULL, "PORT", "specify port number"),
     .tout = arg_int0("t", NULL, "0~2^31", "task timeout in ms"),
     .stat = arg_lit0(NULL, "stat", "print service summary"),
     .stop = arg_lit0(NULL, "stop", "stop currently running task"),
@@ -1551,13 +1666,13 @@ static struct {
 static int net_tsync(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_tsync_args);
     if (net_tsync_args.stat->count) {
-        timesync_server_status();
+        timesync_status(net_tsync_args.serv->count);
         return ESP_OK;
     }
     const char *host = net_tsync_args.serv->count ? NULL : "";
     return tsync_command(
         ARG_STR(net_tsync_args.host, host),
-        ARG_INT(net_tsync_args.port, 0),
+        ARG_STR(net_tsync_args.port, NULL),
         ARG_INT(net_tsync_args.tout, 0),
         net_tsync_args.stop->count
     );
@@ -1566,14 +1681,14 @@ static int net_tsync(int argc, char **argv) {
 
 #ifdef CONSOLE_NET_HBEAT
 static struct {
-    arg_str_t *ctrl;
+    arg_str_t *cmd;
     arg_str_t *hurl;
     arg_str_t *iurl;
     arg_dbl_t *hdt;
     arg_dbl_t *idt;
     arg_end_t *end;
 } net_hbeat_args = {
-    .ctrl = arg_str0(NULL, NULL, "CMD", "on|off|load|dump"),
+    .cmd  = arg_str0(NULL, NULL, "CMD", "on|off|load|dump"),
     .hurl = arg_str0(NULL, "hurl", "HTTP", "endpoint to post device info"),
     .iurl = arg_str0(NULL, "iurl", "HTTP", "endpoint to post device data"),
     .hdt  = arg_dbl0(NULL, "hdt", "SEC", "duration of post info in sec"),
@@ -1584,7 +1699,7 @@ static struct {
 static int net_hbeat(int argc, char **argv) {
     ARG_PARSE(argc, argv, &net_hbeat_args);
     return hbeat_command(
-        ARG_STR(net_hbeat_args.ctrl, NULL),
+        ARG_STR(net_hbeat_args.cmd, NULL),
         ARG_STR(net_hbeat_args.hurl, NULL),
         ARG_STR(net_hbeat_args.iurl, NULL),
         ARG_DBL(net_hbeat_args.hdt, -1),
@@ -1600,6 +1715,9 @@ static esp_err_t register_net() {
 #endif
 #ifdef CONSOLE_NET_IP
         ESP_CMD_ARG(net, ip, "Manage network interfaces"),
+#endif
+#ifdef CONSOLE_NET_NOW
+        ESP_CMD_ARG(net, now, "Manage ESP-NOW protocol"),
 #endif
 #ifdef CONSOLE_NET_FTM
         ESP_CMD_ARG(net, ftm, "RTT Fine Timing Measurement between STA & AP"),
@@ -1889,6 +2007,8 @@ static int app_avc(int argc, char **argv) {
 static struct {
     arg_str_t *cmd;
     arg_str_t *txt;
+    arg_int_t *max;
+    arg_int_t *ecl;
     arg_int_t *bdr;
     arg_str_t *clr;
     arg_str_t *fmt;
@@ -1898,6 +2018,8 @@ static struct {
 } app_qrc_args = {
     .cmd = arg_str1(NULL, NULL, "CMD", "enc|dec"),
     .txt = arg_str0("t", NULL, "STR", "text to be encoded in qrcode"),
+    .max = arg_int0("m", NULL, "1~40", "max qrcode version"),
+    .ecl = arg_int0("e", NULL, "0~3", "error correction level"),
     .bdr = arg_int0("b", NULL, "0~16", "padded border length"),
     .clr = arg_str0("c", NULL, "inv|ansi", "color to print qrcode"),
     .fmt = arg_str0("f", NULL, "FMT", "dots|mini|full"),
@@ -1914,13 +2036,16 @@ static int app_qrc(int argc, char **argv) {
         const char *clr = ARG_STR(app_qrc_args.clr, "");
         const char *fmt = ARG_STR(app_qrc_args.fmt, "");
         const char *out = ARG_STR(app_qrc_args.out, NULL);
-        qrenc_config_t cfg;
-        memset(&cfg, 0, sizeof(cfg));
-        cfg.data = ARG_STR(app_qrc_args.txt, Config.info.NAME);
-        cfg.bdr = ARG_INT(app_qrc_args.bdr, 0);
-        if (!out) {
-            cfg.stream = stdout;
-        } else {
+        qrenc_config_t cfg = {
+            .flags = 0,
+            .stream = stdout,
+            .data = ARG_STR(app_qrc_args.txt, Config.info.NAME),
+            .dlen = 0,
+            .max = (uint8_t)ARG_INT(app_qrc_args.max, 0),
+            .ecl = (uint8_t)ARG_INT(app_qrc_args.ecl, 0),
+            .bdr = (uint8_t)ARG_INT(app_qrc_args.bdr, 0),
+        };
+        if (out) {
             if (endswith(out, ".bmp")) {
                 cfg.flags |= QRENC_BMP;
             } else if (endswith(out, ".svg")) {
@@ -2055,6 +2180,20 @@ static esp_err_t register_app() {
  * Register commands
  */
 
+static int cli_cd(int c, char **v) {
+    const char *pwd = "/";
+    if (c > 1) {
+        pwd = filesys_join(FILESYS_VFS, 2, getenv("PWD"), v[1]);
+        if (strcmp(pwd, "/") && !filesys_exists(filesys_get_type(pwd), pwd)) {
+            printf("%s: no such file or directory\n", pwd);
+            return ESP_ERR_INVALID_ARG;
+        }
+    }
+    setenv("PWD", pwd, true);
+    console_register_prompt(Config.sys.PROMPT, NULL);
+    return ESP_OK;
+}
+
 static int cli_cls(int c, char **v) { linenoiseClearScreen(); return ESP_OK; }
 
 static int cli_ctx(int c, char **v) {
@@ -2064,6 +2203,7 @@ static int cli_ctx(int c, char **v) {
 
 static esp_err_t register_cli() {
     const esp_console_cmd_t cmds[] = {
+        ESP_CMD(cli, cd, "Change working directory"),
         ESP_CMD(cli, cls, "Clean screen"),
         ESP_CMD(cli, ctx, "Command prefix context"),
     };

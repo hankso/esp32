@@ -106,7 +106,7 @@ void btmode_initialize() {
         btmode_switch(modes[i].mode, false);
         return;
     }
-    if (!strlen(Config.sys.BT_MODE)) {
+    if (EMPTY(Config.sys.BT_MODE)) {
         ESP_LOGW(TAG, "Software blocked");
         state = -ESP_ERR_BTMODE_DISABLED;
     } else {

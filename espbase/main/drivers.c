@@ -19,6 +19,11 @@
 
 #ifdef CONFIG_BASE_USE_BTN
 #   include "iot_button.h"
+#   if __has_include("button_types.h")
+#       define IOT_BUTTON_V2
+#       include "button_adc.h"
+#       include "button_gpio.h"
+#   endif
 #endif
 
 #ifdef CONFIG_BASE_USE_KNOB
@@ -858,7 +863,7 @@ esp_err_t smbus_regtable(uint8_t b, uint8_t a, smbus_regval_t *p, size_t len) {
         case 1: err = smbus_write_word(b, a, reg, vh); break;
         case 2: err = smbus_read_byte(b, a, reg, &vo); p->val = vo; break;
         case 3: err = smbus_read_word(b, a, reg, &vh); p->val = vh; break;
-        case 4: err = smbus_clearbits(b, a, reg, vo); break;
+        case 4: err = smbus_clrbits(b, a, reg, vo); break;
         case 5: err = smbus_setbits(b, a, reg, vo); break;
         case 6: err = smbus_toggle(b, a, reg, vo); break;
         case 7: FALLTH; case 8: FALLTH; case 9:
@@ -879,7 +884,7 @@ esp_err_t smbus_regtable(uint8_t b, uint8_t a, smbus_regval_t *p, size_t len) {
     return err;
 }
 
-esp_err_t smbus_clearbits(uint8_t b, uint8_t a, uint16_t reg, uint8_t mask) {
+esp_err_t smbus_clrbits(uint8_t b, uint8_t a, uint16_t reg, uint8_t mask) {
     uint8_t val = 0;
     esp_err_t err = smbus_read_byte(b, a, reg, &val);
     return err ?: smbus_write_byte(b, a, reg, val & ~mask);
@@ -1224,7 +1229,7 @@ static const char * usage_table[GPIO_PIN_COUNT] = {
 const char * gpio_usage(gpio_num_t pin, const char *usage) {
     if (pin < 0 || pin >= GPIO_PIN_COUNT) return NULL;
     const char *current = usage_table[pin];
-    if (!strlen(usage ?: "")) return current;
+    if (EMPTY(usage)) return current;
     if (current && !startswith(current, "Strapping")) {
         ESP_LOGW(TAG, "GPIO %d already used as %s", pin, current);
     } else {
@@ -1262,7 +1267,7 @@ static esp_err_t gpio_get_io_config(gpio_num_t pin, gpio_io_config_t *cfg) {
 
 esp_err_t gpio_reconfig(gpio_num_t pin, const char *str) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    if (!strlen(str ?: "") || !GPIO_IS_VALID_GPIO(pin)) return err;
+    if (EMPTY(str) || !GPIO_IS_VALID_GPIO(pin)) return err;
     char *dup = strupr(strdup(str)), *save = NULL;
     for (str = strtok_r(dup, ",", &save); str; str = strtok_r(0, "|", &save)) {
         if (startswith(str, "MODE:")) {
@@ -1293,6 +1298,24 @@ esp_err_t gpio_reconfig(gpio_num_t pin, const char *str) {
 }
 
 #ifdef CONFIG_BASE_USE_BTN
+#   ifdef IOT_BUTTON_V2
+typedef enum {
+    BUTTON_TYPE_GPIO,
+    BUTTON_TYPE_ADC,
+} button_type_t;
+
+typedef struct {
+    button_type_t type;
+    union {
+        button_gpio_config_t gpio_button_config;
+        button_adc_config_t adc_button_config;
+    };
+} button_cfg_t;
+#   else
+#       define button_cfg_t                 button_config_t
+#       define iot_button_get_pressed_time  iot_button_get_ticks_time
+#   endif
+
 static UNUSED button_handle_t btn[2];
 
 static UNUSED void cb_button(void *arg, void *data) {
@@ -1302,13 +1325,13 @@ static UNUSED void cb_button(void *arg, void *data) {
     switch (val >> 8) {
     case BUTTON_PRESS_DOWN:
         ESP_LOGD(T, "%d press", pin);
-#   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
+#   ifdef CONFIG_BASE_BTN_INPUT
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_D);
 #   endif
         break;
     case BUTTON_PRESS_UP:
-        ESP_LOGD(T, "%d release[%" PRIu32 "]", pin, iot_button_get_ticks_time(arg));
-#   if defined(CONFIG_BASE_BTN_INPUT) && !defined(CONFIG_BASE_BOARD_S3NL191)
+        ESP_LOGD(T, "%d release[%" PRIu32 "]", pin, iot_button_get_pressed_time(arg));
+#   ifdef CONFIG_BASE_BTN_INPUT
         if (pin == PIN_BTN) hid_report_sdial(HID_TARGET_ALL, SDIAL_U);
 #   endif
         break;
@@ -1325,20 +1348,44 @@ static UNUSED void cb_button(void *arg, void *data) {
 }
 
 static UNUSED button_handle_t button_init(
-    button_config_t *cfg, gpio_num_t pin, button_cb_t cb
+    button_cfg_t *cfg, gpio_num_t pin, button_cb_t cb
 ) {
+#   ifdef IOT_BUTTON_V2
+    esp_err_t err = ESP_OK;
+    button_handle_t hdl = NULL;
+    button_config_t btn_cfg = { 0 };
+    if (cfg->type == BUTTON_TYPE_GPIO) {
+#       ifdef CONFIG_PM_ENABLE
+        cfg->gpio_button_config.enable_power_save = true;
+#       endif
+        err = iot_button_new_gpio_device(&btn_cfg, &cfg->gpio_button_config, &hdl);
+    } else if (cfg->type == BUTTON_TYPE_ADC) {
+        err = iot_button_new_adc_device(&btn_cfg, &cfg->adc_button_config, &hdl);
+    }
+#   else
     button_handle_t hdl = iot_button_create(cfg);
+    esp_err_t err = hdl ? ESP_OK : ESP_FAIL;
+#   endif
     if (!hdl) {
-        ESP_LOGE(TAG, "bind to GPIO%d failed", pin);
+        ESP_LOGE(TAG, "bind to GPIO%d failed: %s", pin, esp_err_to_name(err));
     } else LOOPN(event, BUTTON_EVENT_MAX) {
         if (event == BUTTON_MULTIPLE_CLICK) {
+#   ifdef IOT_BUTTON_V2
+            button_event_args_t arg = { .multiple_clicks.clicks = 3 };
+            iot_button_register_cb(hdl, event, &arg, cb, (void *)pin);
+#   else
             button_event_config_t evt = {
                 .event = event,
                 .event_data.multiple_clicks.clicks = 3,
             };
             iot_button_register_event_cb(hdl, evt, cb, (void *)pin);
+#   endif
         } else {
+#   ifdef IOT_BUTTON_V2
+            iot_button_register_cb(hdl, event, NULL, cb, (void *)pin);
+#   else
             iot_button_register_cb(hdl, event, cb, (void *)pin);
+#   endif
         }
     }
     return hdl;
@@ -1381,7 +1428,7 @@ static void cb_knob(void *arg, void *data) {
 static void gpio_initialize() {
 #ifdef CONFIG_BASE_USE_BTN
 #   ifdef CONFIG_BASE_BTN_INPUT
-    button_config_t btn_cfg = {
+    button_cfg_t btn_cfg = {
         .type = BUTTON_TYPE_GPIO,
         .gpio_button_config = {
             .gpio_num = PIN_BTN,
@@ -1393,7 +1440,7 @@ static void gpio_initialize() {
 #   ifdef CONFIG_BASE_BTN_GPIO0
     const char *usage = gpio_usage(GPIO_NUM_0, NULL);
     if (!usage || startswith(usage, "Strapping")) {
-        button_config_t io0_cfg = {
+        button_cfg_t io0_cfg = {
             .type = BUTTON_TYPE_GPIO,
             .gpio_button_config = { .gpio_num = GPIO_NUM_0 },
         };
@@ -1408,10 +1455,15 @@ static void gpio_initialize() {
     }
 #   endif
 #   ifdef CONFIG_BASE_ADC_JOYSTICK
-    button_config_t adc_cfg = {
+    button_cfg_t adc_cfg = {
         .type = BUTTON_TYPE_ADC,
 #       ifndef IDF_TARGET_V4
-        .adc_button_config = { .adc_handle = adc.hdl },
+        .adc_button_config = {
+            .adc_handle = adc.hdl,
+#           ifdef IOT_BUTTON_V2
+            .unit_id = adc.unit,
+#           endif
+        },
 #       endif
     };
     LOOPN(i, LEN(adc.chans)) {

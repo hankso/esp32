@@ -31,6 +31,7 @@
 #define CONCAT(a, b)        CONCAT_(a, b)
 #define STR_(x)             #x
 #define STR(x)              STR_(x)
+#define EMPTY(s)            ( !(s) || !*(s) )
 #define CASESTR(x, l)       case x: return #x + l
 #define CASESTRV(v, x, l)   case x: (v) = #x + l; break
 #define SIZEOF(s, a)        sizeof(((s *)0)->a)
@@ -50,6 +51,13 @@
         for (typeof(*(a)) *_##v = (a), v = *_##v; _##v < (a) + (n); v = *++_##v)
 #define ITERP(v, a)         ITERPN(v, (a), LEN((a)))
 #define ITERV(v, a)         ITERVN(v, (a), LEN((a)))
+
+#define CENTER(m, c, n)                                                     \
+        do {                                                                \
+            const char *s = (m) ?: "";                                      \
+            int p = n - 2 - strlen(s), h = p / 2;                           \
+            LPCHR((c), h); printf(" %s ", s); LPCHRN((c), p - h);           \
+        } while (0)
 
 // May be defined somewhere
 
@@ -74,7 +82,7 @@
 #ifndef CDIV
 #   define CDIV(a, b)       ({ typeof(a) A_ = (a), B_ = (b);                \
                                B_ ? (A_ + B_ - 1) / B_ : 0; })
-#   define CMOD(a, b)       ( CDIV(a, b) * b )
+#   define CMOD(a, b)       ( CDIV(a, b) * b ) // TODO: (a + b - 1) & ~(b - 1)
 #endif
 
 #ifndef MAX
@@ -111,7 +119,7 @@ static inline size_t parse_all(const char *str, int *arr, size_t arrlen) {
 }
 
 static inline bool parse_f64(const char *str, double *ptr) {
-    if (!strlen(str ?: "")) return false;
+    if (EMPTY(str)) return false;
     char *endptr;
     double val = strtod(str, &endptr);
     if (endptr == str) return false;
@@ -120,7 +128,7 @@ static inline bool parse_f64(const char *str, double *ptr) {
 }
 
 static inline bool parse_f32(const char *str, float *ptr) {
-    if (!strlen(str ?: "")) return false;
+    if (EMPTY(str)) return false;
     char *endptr;
     float val = strtof(str, &endptr);
     if (endptr == str) return false;
@@ -129,7 +137,7 @@ static inline bool parse_f32(const char *str, float *ptr) {
 }
 
 static inline bool parse_s64(const char *str, int64_t *ptr) {
-    if (!strlen(str ?: "")) return false;
+    if (EMPTY(str)) return false;
     char *endptr;
     int64_t val = strtoll(str, &endptr, 0);
     if (endptr == str) return false;
@@ -165,13 +173,19 @@ static inline bool parse_u8(const char *str, uint8_t *ptr) {
     return true;
 }
 
+static inline char *strrstr(const char *str, const char *sub) {
+    const char *last = NULL, *found;
+    while (sub && ( found = strstr(str, sub) )) { str = (last = found) + 1; }
+    return (char *)last;
+}
+
 static inline bool strtob(const char *str) {
-    if (!strlen(str ?: "")) return false;
+    if (EMPTY(str)) return false;
     return strspn(str, "1yY") == 1 || !strcasecmp(str, "on");
 }
 
 static inline size_t strncnt(const char *str, const char *wants, size_t slen) {
-    if (!strlen(wants ?: "")) return 0;
+    if (EMPTY(wants)) return false;
     size_t cnt = 0, idx = 0, len = strnlen(str ?: "", slen);
     while (idx < len) { if (strchr(wants, str[idx++])) cnt++; }
     return cnt;

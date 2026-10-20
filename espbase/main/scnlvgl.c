@@ -861,7 +861,7 @@ extern int lvgl_ui_cmd(scn_cmd_t cmd, const void *data) {
         }
     }   break;
     case SCN_FONT: {
-        if (!data || !strlen((const char *)data)) return ERR_INVALID_ARG;
+        if (!data || !*(const char *)data) return ERR_INVALID_ARG;
         if (!lv_display_get_theme(ctx.disp)) return ERR_INVALID_STATE;
         lv_font_t *font = create_font(data);
         if (!font) return ERR_NOT_FOUND;

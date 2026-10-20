@@ -24,6 +24,9 @@
 #   if __has_include("led_indicator.h")
 #       define WITH_IND
 #       include "led_indicator.h"
+#       include "led_indicator_ledc.h"
+#       include "led_indicator_gpio.h"
+#       include "led_indicator_strips.h"
 #   else
 #       warning "Run `idf.py add-dependency espressif/led_indicator`"
 #       include "led_strip.h"
@@ -111,39 +114,42 @@ static const blink_step_t * LED_BLINK_LIST[] = {
     [LED_BLINK_FLOWING]             = flowing_blink,
     [LED_BLINK_MAX]                 = NULL,
 };
+#   else // CONFIG_BASE_LED_MODE_RMT
+#       include "led_indicator_blink_default.h"
+#       define LED_BLINK_LIST   default_led_indicator_blink_lists
+#       define LED_BLINK_MAX    DEFAULT_BLINK_LIST_NUM
 #   endif // CONFIG_BASE_LED_MODE_RMT
 
 static led_indicator_handle_t led_handle;
 
 void led_initialize() {
+    esp_err_t err = ESP_OK;
+    const led_indicator_config_t led_cfg = {
+        .blink_lists    = LED_BLINK_LIST,
+        .blink_list_num = LED_BLINK_MAX,
+    };
 #   if defined(CONFIG_BASE_LED_MODE_GPIO)
-    led_indicator_gpio_config_t gpio_conf = {
-        .is_active_level_high = 1,
-        .gpio_num = PIN_LED
+    led_indicator_gpio_config_t gpio_cfg = {
+        .is_active_level_high   = 1,
+        .gpio_num               = PIN_LED
     };
-    led_indicator_config_t led_conf = {
-        .mode = LED_GPIO_MODE,
-        .led_indicator_gpio_config = &gpio_conf,
-    };
+    err = led_indicator_new_gpio_device(&led_cfg, &gpio_cfg, &led_handle);
 #   elif defined(CONFIG_BASE_LED_MODE_LEDC)
-    led_indicator_ledc_config_t ledc_conf = {
-        .is_active_level_high = 1,
-        .timer_inited = false,
-        .timer_num = LED_TMR,
-        .gpio_num = PIN_LED,
-        .channel = LED_CH,
+    led_indicator_ledc_config_t ledc_cfg = {
+        .is_active_level_high   = 1,
+        .timer_inited           = false,
+        .timer_num              = LED_TMR,
+        .gpio_num               = PIN_LED,
+        .channel                = LED_CH,
     };
-    led_indicator_config_t led_conf = {
-        .mode = LED_LEDC_MODE,
-        .led_indicator_ledc_config = &ledc_conf,
-    };
+    err = led_indicator_new_ledc_device(&led_cfg, &ledc_cfg, &led_handle);
 #   elif defined(CONFIG_BASE_LED_MODE_RMT)
-    led_indicator_strips_config_t rmt_conf = {
+    led_indicator_strips_config_t rmt_cfg = {
         .led_strip_cfg = {
             .strip_gpio_num = PIN_LED,
             .max_leds = CONFIG_BASE_LED_NUM,
-            .led_pixel_format = LED_PIXEL_FORMAT_GRB,
             .led_model = LED_MODEL_WS2812,
+            .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
             .flags.invert_out = false,
         },
         .led_strip_driver = LED_STRIP_RMT,
@@ -157,18 +163,13 @@ void led_initialize() {
             .flags.with_dma = false,
         },
     };
-    led_indicator_config_t led_conf = {
-        .mode = LED_STRIPS_MODE,
-        .led_indicator_strips_config = &rmt_conf,
-        .blink_lists = LED_BLINK_LIST,
-        .blink_list_num = LED_BLINK_MAX,
-    };
+    err = led_indicator_new_strips_device(&led_cfg, &rmt_cfg, &led_handle);
 #   else // CONFIG_LED_MODE_XXX
     ESP_LOGW(TAG, "disabled by CONFIG_LED_MODE_XXX");
     return;
 #   endif // CONFIG_LED_MODE_XXX
-    if (!( led_handle = led_indicator_create(&led_conf) )) {
-        ESP_LOGW(TAG, "initialize indicator failed");
+    if (err) {
+        ESP_LOGW(TAG, "initialize indicator failed: %s", esp_err_to_name(err));
 #   ifdef CONFIG_BASE_LED_MODE_GPIO
     } else {
         gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT);
@@ -201,21 +202,21 @@ void led_initialize() {
     gpio_reset_pin(PIN_LED);
     gpio_set_direction(PIN_LED, GPIO_MODE_INPUT_OUTPUT);
 #   elif defined(CONFIG_BASE_LED_MODE_LEDC)
-    ledc_timer_config_t timer_conf = {
+    ledc_timer_config_t timer_cfg = {
         .speed_mode         = local.mode,
         .timer_num          = local.timer,
         .duty_resolution    = LED_RES,
         .freq_hz            = 5000,
         .clk_cfg            = LEDC_AUTO_CLK
     };
-    ledc_channel_config_t ch_conf = {
+    ledc_channel_config_t ch_cfg = {
         .gpio_num           = PIN_LED,
         .speed_mode         = local.mode,
         .channel            = local.channel,
         .timer_sel          = local.timer,
         .duty               = 0,
     };
-    if (ledc_timer_config(&timer_conf) || ledc_channel_config(&ch_conf)) {
+    if (ledc_timer_config(&timer_cfg) || ledc_channel_config(&ch_cfg)) {
         ESP_LOGE(TAG, "initialize ledc failed");
         return;
     }
@@ -226,15 +227,15 @@ void led_initialize() {
         ESP_LOGE(TAG, "initialize led_color failed");
         return;
     }
-    led_strip_config_t strip_conf = {
+    led_strip_config_t strip_cfg = {
         .strip_gpio_num = PIN_LED,
         .max_leds = CONFIG_BASE_LED_NUM,
-        .led_pixel_format = LED_PIXEL_FORMAT_GRB,
         .led_model = LED_MODEL_WS2812,
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
         .flags.invert_out = false,
     };
-    led_strip_rmt_config_t rmt_conf = { .rmt_channel = 0 };
-    if (led_strip_new_rmt_device(&strip_conf, &rmt_conf, &local.strip)) {
+    led_strip_rmt_config_t rmt_cfg = { .rmt_channel = 0 };
+    if (led_strip_new_rmt_device(&strip_cfg, &rmt_cfg, &local.strip)) {
         ESP_LOGE(TAG, "initialize led_strip failed");
         TRYFREE(local.color);
         return;

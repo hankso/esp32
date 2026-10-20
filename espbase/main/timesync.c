@@ -110,16 +110,16 @@ struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout) {
  * See more about specification at https://github.com/hankso/timesync
  */
 
-#ifndef MUTEX
+#ifdef ESP_PLATFORM
+#   define LOG(L, ...)          ESP_LOG##L(__VA_ARGS__)
+#else
+#   define LOG(L, T, F, ...)    fprintf(stderr, T ": " F "\n", ##__VA_ARGS__)
 #   if defined(TIMESYNC_THREAD_SAFE)
 #       include "pthread.h"
 #       define MUTEX()          PTHREAD_MUTEX_INITIALIZER
 #       define ACQUIRE(s, t)    ( (s) ? pthread_mutex_lock(&(s)) : 0 )
 #       define RELEASE(s)       ( (s) ? pthread_mutex_unlock(&(s)) : 0 )
 #   endif
-#   define LOG(L, T, F, ...)    fprintf(stderr, T ": " F "\n", ##__VA_ARGS__)
-#else
-#   define LOG(L, ...)          ESP_LOG##L(__VA_ARGS__)
 #endif
 
 static void * mutex = NULL;
@@ -133,25 +133,128 @@ static void log_error(const char *tag, const int sock, const char *msg) {
     }
 }
 
+int address_like_numeric(const char *s) {
+#   define HAS_IPV4 0xFF0000
+#   define HAS_IPV6 0x00FF00
+#   define HAS_PORT 0x0000FF
+    size_t slen = strlen(s ?: "");
+    if (!slen) return false;
+    int num = 0, hex = 0, dot = 0, col = 0, bra = 0;
+    for (const char *p = s; *p; p++) {
+             if (*p == '.') dot++;
+        else if (*p == ':') col++;
+        else if (*p == '[' || *p == ']') bra++;
+        else if ('0' <= *p && *p <= '9') num++;
+        else if ('a' <= *p && *p <= 'f') hex++;
+        else if ('A' <= *p && *p <= 'F') hex++;
+        else return false;
+    }
+    if (dot) {
+        if (dot != 3 || num < 4) return false;
+        if (col == 1 && (num + dot + col) == slen)
+            return HAS_IPV4 | HAS_PORT;
+        if ((num + dot) == slen) return HAS_IPV4;
+    }
+    if (col) {
+        if (col < 2 || col > 8) return false;
+        if (bra == 2) {
+            const char *end = strrchr(s, ']');
+            if (end && end[1] == ':' && end[2])
+                return (dot ? HAS_IPV4 : 0) | HAS_IPV6 | HAS_PORT;
+        }
+        return HAS_IPV6 | (dot ? HAS_IPV4 : 0);
+    }
+    return false;
+}
+
+#ifdef ESP_PLATFORM
+const char * gai_strerror(int err) {
+    switch (err) {
+    case EAI_NONAME: return "Name or service not known";
+    case EAI_SERVICE: return "Service not supported";
+    case EAI_FAMILY: return "Family not supported";
+    case EAI_MEMORY: return "Memory allocation failed";
+    default: return "Failed";
+    }
+}
+#endif
+
+const char * format_address(struct sockaddr *addr, socklen_t slen) {
+    static char buf[ADDRSTRLEN];
+    if (!addr || !slen) return "";
+    buf[0] = '\0';
+    char port[NI_MAXSERV];
+#ifndef ESP_PLATFORM
+    if (!getnameinfo(
+        addr, slen, buf, sizeof(buf), port, sizeof(port),
+        NI_NUMERICHOST | NI_NUMERICSERV
+    )) { /* success */ } else
+#endif
+    if (addr->sa_family == AF_INET) {
+        struct sockaddr_in *sin = (struct sockaddr_in *)addr;
+        snprintf(port, sizeof(port), "%d", ntohs(sin->sin_port));
+        inet_ntop(AF_INET, &sin->sin_addr, buf, sizeof(buf));
+    } else if (addr->sa_family == AF_INET6) {
+        struct sockaddr_in6 *sin6 = (struct sockaddr_in6 *)addr;
+        snprintf(port, sizeof(port), "%d", ntohs(sin6->sin6_port));
+        inet_ntop(AF_INET6, &sin6->sin6_addr, buf, sizeof(buf));
+    }
+    strlcat(buf, ":", sizeof(buf));
+    strlcat(buf, port, sizeof(buf));
+    return buf;
+}
+
+int parse_address(const char *host, const char *port, struct sockaddr_storage *addr) {
+    // host == NULL: AI_PASSIVE ? INADDR_ANY : INADDR_LOOPBACK
+    struct addrinfo *ptr, *rst = NULL, hint = {
+        .ai_flags = host ? AI_CANONNAME : AI_PASSIVE,
+        .ai_family = AF_UNSPEC,
+#ifdef ESP_PLATFORM
+        .ai_socktype = SOCK_STREAM,
+        .ai_protocol = IPPROTO_TCP,
+#endif
+    };
+    int err = getaddrinfo(!host && !port ? "" : host, port, &hint, &rst);
+    if (err && !addr) {
+        LOG(E, __func__, "%s:%s %s", host ?: "", port ?: "", gai_strerror(err));
+    } else if (!err) for (ptr = rst; ptr; ptr = ptr->ai_next) {
+        if (!addr) {
+            printf(
+                "AF_%-6s SOCK_%-6s IPPROTO_%s len=%2ld canon=%s name=%s\n",
+                ptr->ai_family == AF_UNSPEC ? "UNSPEC" :
+                ptr->ai_family == AF_INET6 ? "INET6" :
+                ptr->ai_family == AF_INET ? "INET" : "UNKNOWN",
+                ptr->ai_socktype == SOCK_STREAM ? "STREAM" :
+                ptr->ai_socktype == SOCK_DGRAM ? "DGRAM" :
+                ptr->ai_socktype == SOCK_RAW ? "RAW" : "UNKNOWN",
+                ptr->ai_protocol == IPPROTO_IP ? "IP" :
+                ptr->ai_protocol == IPPROTO_ICMP ? "ICMP" :
+                ptr->ai_protocol == IPPROTO_TCP ? "TCP" :
+                ptr->ai_protocol == IPPROTO_UDP ? "UDP" :
+#ifdef IPV6
+                ptr->ai_protocol == IPPROTO_IPV6 ? "IPV6" :
+                ptr->ai_protocol == IPPROTO_ICMPV6 ? "ICMPV6" :
+#endif
+                ptr->ai_protocol == IPPROTO_UDPLITE ? "UDPLITE" :
+                ptr->ai_protocol == IPPROTO_RAW ? "RAW" : "UNKNOWN",
+                ptr->ai_addrlen, rst->ai_canonname ?: "",
+                format_address(ptr->ai_addr, ptr->ai_addrlen)
+            );
+        } else if (ptr->ai_addrlen <= sizeof(struct sockaddr_storage)) {
+            memcpy(addr, ptr->ai_addr, ptr->ai_addrlen);
+        }
+    }
+    freeaddrinfo(rst);
+    return err;
+}
+
 const char * getaddrname(int fd, bool local) {
-    static char ret[ADDRSTRLEN];
-#ifdef IPV6
-    struct sockaddr_in6 addr;
-#else
-    struct sockaddr_in addr;
-#endif
-    socklen_t len = sizeof(addr);
+    struct sockaddr_storage addr;
     struct sockaddr *ptr = (struct sockaddr *)&addr;
-    int rc = local ? getsockname(fd, ptr, &len) : getpeername(fd, ptr, &len);
-    if (rc < 0) return "unknown";
-#ifdef IPV6
-    const char *host = inet6_ntoa(addr.sin6_addr);
-    if (!strncmp(host, "::FFFF:", 7)) host += 7;
-    sprintf(ret, "%s:%d", host, ntohs(addr.sin6_port));
-#else
-    sprintf(ret, "%s:%d", inet_ntoa(addr.sin_addr), ntohs(addr.sin_port));
-#endif
-    return ret;
+    socklen_t len = sizeof(addr);
+    return (
+        local ? getsockname(fd, ptr, &len) : getpeername(fd, ptr, &len)
+    ) ? "" : format_address(ptr, len);
 }
 
 // Convert timesync packtype to bytearray and vice versa
@@ -184,27 +287,6 @@ static const char * TSS = "TSS";
 static struct pollfd pollfds[TIMESYNC_CLIENTS_NUM + 1];
 static timesync_client_t clients[TIMESYNC_CLIENTS_NUM];
 static int server = -1;
-
-void timesync_server_status() {
-    bool header = false;
-    LOOPN(i, TIMESYNC_CLIENTS_NUM) {
-        if (clients[i].fd < 0) continue;
-        if (!header) {
-            printf("FD Count %18s %18s %13s\n",
-                   "AvrTimeOffset(s)", "SyncTime(s)", "RoundTrip(ms)");
-            header = true;
-        }
-        printf("%2d %05u %18.6f %18.6f %13.3f\n",
-               clients[i].fd, clients[i].count, clients[i].offset,
-               clients[i].results[(clients[i].count - 1) % 3].sync,
-               clients[i].rtript * TIMESTAMP_MS);
-        LOOPND(j, MIN(clients[i].count, 3)) {
-            uint16_t cnt = clients[i].count - j - 1;
-            timesync_result_t *rst = &clients[i].results[cnt % 3];
-            printf(" > %05u %18.6f %18.6f\n", cnt + 1, rst->offset, rst->sync);
-        }
-    }
-}
 
 static int timesync_server_find(int fd) {
     LOOPN(i, TIMESYNC_CLIENTS_NUM) { if (clients[i].fd == fd) return i; }
@@ -262,30 +344,30 @@ static int timesync_server_close(int *fd) {
  *   - listen() for clients
  *   - prepare for poll()
  */
-int timesync_server_init(uint16_t port) {
+int timesync_server_init(const char *port) {
 #ifdef TIMESYNC_THREAD_SAFE
     if (!mutex && ( mutex = MUTEX() )) RELEASE(mutex);
 #endif
     if (server >= 0) return 0;
     LOG(D, TSS, "TimeSync Server init");
-    if (( server = socket(AF_INET, SOCK_STREAM, IPPROTO_IP) ) == -1) {
+    struct sockaddr_storage laddr;
+    if (parse_address(NULL, port, &laddr)) {
+        log_error(TSS, server, "parse_address");
+        return -1;
+    }
+    if (( server = socket(laddr.ss_family, SOCK_STREAM, 0) ) == -1) {
         log_error(TSS, server, "socket");
         return -1;
     }
     LOOPN(i, TIMESYNC_CLIENTS_NUM) { clients[i].fd = pollfds[i].fd = -1; }
     pollfds[TIMESYNC_CLIENTS_NUM].events = POLLIN;
     pollfds[TIMESYNC_CLIENTS_NUM].fd = server;
-    struct sockaddr_in laddr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(port),
-        .sin_addr = { .s_addr = htonl(INADDR_ANY) }
-    };
     if (bind(server, (struct sockaddr *)&laddr, sizeof(laddr))) {
         log_error(TSS, server, "bind");
     } else if (listen(server, 1)) {
         log_error(TSS, server, "listen");
     } else {
-        LOG(I, TSS, "listening on port %d", ntohs(laddr.sin_port));
+        LOG(I, TSS, "listening on %s", getaddrname(server, true));
         return 0;
     }
     timesync_server_close(&server);
@@ -422,24 +504,16 @@ static timesync_client_t client = { 0 };
  *   - setsockopt(RCVTIMEO)
  *   - connect()
  */
-int timesync_client_init(const char *host, uint16_t port) {
+int timesync_client_init(const char *host, const char *port) {
     if (client.fd == 0) client.fd = -1;
     if (client.fd >= 0) return 0;
     LOG(D, TSC, "TimeSync Client init");
-    char address[INET_ADDRSTRLEN];
-    struct sockaddr_in raddr = {
-        .sin_family = AF_INET,
-        .sin_port = htons(port)
-    };
-    if (inet_pton(AF_INET, host, &raddr.sin_addr) != 1) {
-        log_error(TSC, client.fd, "inet_pton");
+    struct sockaddr_storage raddr;
+    if (parse_address(host, port, &raddr)) {
+        log_error(TSC, client.fd, "parse_address");
         return -1;
     }
-    if (!inet_ntop(AF_INET, &raddr.sin_addr, address, sizeof(address))) {
-        log_error(TSC, client.fd, "inet_ntop");
-        return -1;
-    }
-    if (( client.fd = socket(AF_INET, SOCK_STREAM, 0) ) < 0) {
+    if (( client.fd = socket(raddr.ss_family, SOCK_STREAM, 0) ) < 0) {
         log_error(TSC, client.fd, "socket");
         return -1;
     }
@@ -535,4 +609,26 @@ int timesync_client_exit() {
     client.fd = -1;
     LOG(D, TSC, "TimeSync Client exit");
     return 0;
+}
+
+void timesync_status(bool server) {
+    bool header = false;
+    timesync_client_t *ptr = server ? clients : &client;
+    LOOPN(i, server ? TIMESYNC_CLIENTS_NUM : 1) {
+        if (ptr[i].fd < 0) continue;
+        if (!header) {
+            printf("FD Count %18s %18s %13s\n",
+                   "AvrTimeOffset(s)", "SyncTime(s)", "RoundTrip(ms)");
+            header = true;
+        }
+        printf("%2d %05u %18.6f %18.6f %13.3f\n",
+               ptr[i].fd, ptr[i].count, ptr[i].offset,
+               ptr[i].results[(ptr[i].count - 1) % 3].sync,
+               ptr[i].rtript * TIMESTAMP_MS);
+        LOOPND(j, MIN(ptr[i].count, 3)) {
+            uint16_t cnt = ptr[i].count - j - 1;
+            timesync_result_t *rst = &ptr[i].results[cnt % 3];
+            printf(" > %05u %18.6f %18.6f\n", cnt + 1, rst->offset, rst->sync);
+        }
+    }
 }

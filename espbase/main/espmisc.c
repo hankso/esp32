@@ -321,24 +321,26 @@ void version_info() {
 
 void memory_info() {
     const uint32_t caps[] = {
-        MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM,
-        MALLOC_CAP_DMA, MALLOC_CAP_EXEC
+        MALLOC_CAP_DEFAULT, MALLOC_CAP_INTERNAL, MALLOC_CAP_SPIRAM, MALLOC_CAP_DMA,
+#ifdef MALLOC_CAP_EXEC
+        MALLOC_CAP_EXEC,
+#endif
     };
     const char * const names[] = {
         "DEFAULT", "INTERN", "SPI RAM", "DMA", "EXEC"
     };
     multi_heap_info_t info;
-    printf("%-7s %8s %8s %4s %4s %s\n",
-           "Type", "Total", "Avail", "Used", "Frag", "Caps");
+    printf("%-7s %8s %8s %8s %4s %4s %s\n",
+           "Type", "Total", "Avail", "Largest", "Used", "Frag", "Caps");
     LOOPN(i, LEN(caps)) {
         heap_caps_get_info(&info, caps[i]);
         size_t tfree = info.total_free_bytes;
-        size_t tfrag = tfree - info.largest_free_block;
         size_t total = tfree + info.total_allocated_bytes;
         printf("%-7s %8s ", names[i], format_size(total));
         printf("%8s ", format_size(tfree));
+        printf("%8s ", format_size(info.largest_free_block));
         printf("%3zu%% ", total ? 100 * info.total_allocated_bytes / total : 0);
-        printf("%3zu%% ", tfree ? 100 * tfrag / tfree : 0);
+        printf("%3zu%% ", tfree ? 100 * (tfree - info.largest_free_block) / tfree : 0);
         printf("0x%08" PRIu32 "\n", caps[i]);
     }
 }
@@ -429,6 +431,7 @@ static const char * partition_subtype_str(
         case ESP_PARTITION_SUBTYPE_DATA_ESPHTTPD:   return "ESPHTTPD";
         case ESP_PARTITION_SUBTYPE_DATA_FAT:        return "FAT";
         case ESP_PARTITION_SUBTYPE_DATA_SPIFFS:     return "SPIFFS";
+        case ESP_PARTITION_SUBTYPE_DATA_LITTLEFS:   return "LITTLEFS";
         default: break;
         }
     } else if (type == ESP_PARTITION_TYPE_APP) {
@@ -444,6 +447,18 @@ static const char * partition_subtype_str(
                 snprintf(buf, sizeof(buf), "OTA_%d", subtype);
             }
             break;
+        }
+    } else if (type == ESP_PARTITION_TYPE_BOOTLOADER) {
+        switch (subtype) {
+        case ESP_PARTITION_SUBTYPE_BOOTLOADER_PRIMARY:  return "PRIMARY";
+        case ESP_PARTITION_SUBTYPE_BOOTLOADER_OTA:      return "Temp OTA";
+        default: break;
+        }
+    } else if (type == ESP_PARTITION_TYPE_PARTITION_TABLE) {
+        switch (subtype) {
+        case ESP_PARTITION_SUBTYPE_PARTITION_TABLE_PRIMARY: return "PRIMARY";
+        case ESP_PARTITION_SUBTYPE_PARTITION_TABLE_OTA:     return "Temp OTA";
+        default: break;
         }
     }
     return buf;
@@ -492,7 +507,7 @@ static uint8_t partition_used(const esp_partition_t *part) {
 
 void partition_info() {
     uint8_t num = 0;
-    const esp_partition_t * parts[16], *part, *tmp;
+    const esp_partition_t *parts[16], *part, *tmp;
     esp_partition_iterator_t iter = esp_partition_find(
         ESP_PARTITION_TYPE_ANY, ESP_PARTITION_SUBTYPE_ANY, NULL);
     while (iter != NULL && num < LEN(parts)) {
@@ -510,23 +525,25 @@ void partition_info() {
         printf("No partitons found in flash. Skip");
         return;
     }
-    printf("Label        Type SubType   Offset   Size     Used Secure\n");
+    printf("Label        Type SubType   Offset   %-16s Used Secure\n", "Size");
     while (num--) {
         part = parts[num];
         esp_partition_subtype_t subtype = part->subtype;
 #ifdef CONFIG_BASE_USE_FFS
         if (!strcmp(part->label, CONFIG_BASE_FFS_PART)) {
-#   ifdef CONFIG_BASE_FFS_FAT
+#   if CONFIG_BASE_FFS_FAT
             subtype = ESP_PARTITION_SUBTYPE_DATA_FAT;
-#   else
+#   elif CONFIG_BASE_FFS_SPI
             subtype = ESP_PARTITION_SUBTYPE_DATA_SPIFFS;
+#   elif CONFIG_BASE_FFS_LIT
+            subtype = ESP_PARTITION_SUBTYPE_DATA_LITTLEFS;
 #   endif
         }
 #endif
-        printf("%-12s %-4s %-9s 0x%06" PRIX32 " 0x%06" PRIX32 " %3d%% %s\n",
+        printf("%-12s %-4s %-9s 0x%06" PRIX32 " 0x%06" PRIX32 " %7s %3d%% %s\n",
                part->label, partition_type_str(part->type),
                partition_subtype_str(part->type, subtype),
-               part->address, part->size, partition_used(part),
-               part->encrypted ? "true" : "false");
+               part->address, part->size, format_size(part->size),
+               partition_used(part), part->encrypted ? "true" : "false");
     }
 }

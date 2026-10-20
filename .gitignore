@@ -10,15 +10,15 @@ lerna-debug.log*
 *.local
 
 dist
-build
+build*
 cache
 .cache
 coverage
 __pycache__
 node_modules
 managed_components
-**/files/www/
-**/files/docs/
+**/data/www/
+**/data/doc/
 
 sdkconfig
 stats.html

@@ -349,7 +349,7 @@ static esp_err_t tscn_sync() {
 #   ifdef CONFIG_BASE_GPIO_INT
     tscn.stop = true;
 #   endif
-    if (xTaskCreate(tscn_task, "tscn", 4096, NULL, 5, &tscn.task) == pdTRUE)
+    if (xTaskCreate(tscn_task, "tscn", 4096, NULL, 5, &tscn.task) == pdPASS)
         return ESP_OK;
     ESP_LOGW(TAG, "TSCN: task creation failed");
     return ESP_ERR_NO_MEM;
@@ -357,7 +357,7 @@ static esp_err_t tscn_sync() {
 
 static void tscn_oncfg(void *a, esp_event_base_t base, int32_t id, void *data) {
     const char *key = data;
-    if (base != CFG_EVENT || id != CFG_UPDATE || !strlen(key ?: "")) return;
+    if (base != CFG_EVENT || id != CFG_UPDATE || EMPTY(key)) return;
     if (!strcasecmp(key, "app.tscn.mode")) tscn_sync();
 }
 
@@ -392,8 +392,8 @@ static esp_err_t tscn_initialize(uint8_t bus, uint8_t addr) {
     tscn.bus = bus;
     tscn.addr = addr;
     tscn_sync();
-    REGEVTS(CFG, tscn_oncfg, NULL, NULL);
-    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X: PANEL ID = 0x%02X",
+    REGEVT(CFG, tscn_oncfg);
+    ESP_LOGI(TAG, "TSCN: found %s at I2C %d-%02X: PANEL ID = 0x%02" PRIX32,
              chip, bus, addr, regs[1].val);
     return err;
 }

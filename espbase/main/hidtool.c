@@ -6,7 +6,7 @@
 
 #include "hiddesc.h"
 #include "hidtool.h"
-#include "network.h"            // for network_parse_addr
+#include "network.h"            // for CONFIG_BASE_USE_NET
 #include "filesys.h"            // for filesys_readfile
 #include "usbmode.h"            // for hidu_send_report
 #include "btmode.h"             // for hidb_send_report
@@ -44,7 +44,7 @@ hidtool_t HIDTool = {
 };
 
 void hidtool_initialize() {
-    if (!strlen(Config.app.HID_MODE)) return;
+    if (EMPTY(Config.app.HID_MODE)) return;
 
     int vals[2], blen = sizeof(HIDTool.dstr);
     if (parse_all(Config.info.VER, vals, 2) == 2)
@@ -113,13 +113,8 @@ void hidtool_initialize() {
         TRYFREE(desc);
     }
 #ifdef CONFIG_BASE_USE_NET
-    if (!network_parse_addr(Config.app.HID_HOST, 4950, &uctx.addr)) {
-        if (uctx.addr.ss_family == AF_INET) {
-            uctx.sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-        } else {
-            uctx.sock = socket(AF_INET6, SOCK_DGRAM, IPPROTO_IPV6);
-        }
-    }
+    if (!parse_address(Config.app.HID_HOST, "4950", &uctx.addr))
+        uctx.sock = socket(uctx.addr.ss_family, SOCK_DGRAM, 0);
 #endif
 }
 
@@ -585,7 +580,7 @@ static uint8_t str2modifier(const char *str) {
 static uint8_t * str2keycodes(const char *str, uint8_t *mod, uint8_t *num) {
     static uint8_t codes[KEYBD_NUM_KEYS];
     size_t idx = 0;
-    if (!strlen(str ?: "")) goto exit;
+    if (EMPTY(str)) goto exit;
     if (str[0] == '|') {
         codes[idx++] = HID_KEY_BACKSLASH;
         if (mod) *mod = KEYBD_MOD_ADD_SHIFT(*mod);

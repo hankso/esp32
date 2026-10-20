@@ -6,23 +6,23 @@
 
 #include "network.h"
 #include "config.h"
+#include "esp_err.h"
+#include "esp_log.h"
 #include "update.h"             // for ota_updation_url
 #include "server.h"             // for CTYPE_XXX
 #include "avitool.h"            // for CAMERA_XXX
+#include "console.h"            // for console_xxx
 #include "drivers.h"            // for SPI && GPIO
 #include "filesys.h"            // for filesys_xxx
-#include "timesync.h"           // for timesync_xxx
 
 #ifndef CONFIG_BASE_USE_NET
 void network_initialize() {};
-esp_err_t network_command(const char *c, const char *s, const char *p, uint16_t t) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(c); NOTUSED(s); NOTUSED(p); NOTUSED(t);
-}
-esp_err_t network_parse_host(const char *h, void *d) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(d);
-}
-esp_err_t network_parse_addr(const char *h, uint16_t p, void *d) {
-    return ESP_ERR_NOT_SUPPORTED; NOTUSED(h); NOTUSED(p); NOTUSED(d);
+esp_err_t network_command(
+    const char *i, const char *c, const char *s,
+    const char *p, const char *h, uint16_t t
+) {
+    return ESP_ERR_NOT_SUPPORTED;
+    NOTUSED(i); NOTUSED(c); NOTUSED(s); NOTUSED(p); NOTUSED(h); NOTUSED(t);
 }
 #else // CONFIG_BASE_USE_NET
 
@@ -36,21 +36,21 @@ esp_err_t network_parse_addr(const char *h, uint16_t p, void *d) {
 #include "dhcpserver/dhcpserver.h"
 
 #define STA_CONN_BIT    BIT0    // sta connected to ap
-#define STA_STOP_BIT    BIT1    // manually disconnect from ap
-#define STA_FAIL_BIT    BIT2    // failed to connect to ap
-#define STA_SCAN_BIT    BIT3    // wait for wifi scan done
-#define FTM_DONE_BIT    BIT4    // got success ftm response
-#define FTM_FAIL_BIT    BIT5    // got failure ftm response
-#define PCAP_STOP_BIT   BIT6
-#define MQTT_CONN_BIT   BIT7
-#define TSS_STOP_BIT    BIT9
-#define TSC_STOP_BIT    BIT10
-#define TS_STOPPED_BIT  BIT11
-#define HBT_STOP_BIT    BIT12
+#define STA_FAIL_BIT    BIT1    // failed to connect to ap
+#define STA_STOP_BIT    BIT2    // manually disconnect from ap
+#define STA_WAIT_BIT    BIT3    // wait for sta state change
+#define STA_SCAN_BIT    BIT4    // wait for wifi scan done
+#define NOW_STOP_BIT    BIT5    // esp-now queue task stop
+#define FTM_DONE_BIT    BIT6    // got success ftm response
+#define FTM_FAIL_BIT    BIT7    // got failure ftm response
+#define PCAP_STOP_BIT   BIT8    // pcap message task stop
+#define MQTT_CONN_BIT   BIT9    // mqtt connected to broker
+#define TSS_STOP_BIT    BIT10    // timesync server stopped
+#define TSC_STOP_BIT    BIT11   // timesync client stopped
+#define TS_STOPPED_BIT  BIT12   // timesync service stopped
+#define HBT_STOP_BIT    BIT13   // heartbeat service stopped
 
 #define UNCHANGED       -1
-#define PROTOCOL        ( WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | \
-                          WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR )
 
 static const char *TAG = "Network";
 
@@ -70,40 +70,78 @@ static struct {
 } netifs[3];
 
 static EventGroupHandle_t evtgrp = NULL;
+#define setbits(b)      ( evtgrp ? xEventGroupSetBits(evtgrp, (b)) : false )
+#define getbits(b)      ( evtgrp ? xEventGroupGetBits(evtgrp) & (b) : false )
+#define clrbits(b)      ( evtgrp ? xEventGroupClearBits(evtgrp, (b)) : false )
+#define waitbits(b, m)  ( evtgrp ? xEventGroupWaitBits( /* Clear=0, WaitAll=0 */ \
+                          evtgrp, (b), pdFALSE, pdFALSE, TIMEOUT(m)) & (b) : 0 )
 
-static EventBits_t waitBits(EventBits_t bits, uint32_t ms) {
-    // ClearOnExit = false, WaitForAllBits = false
-    return evtgrp ? xEventGroupWaitBits(
-        evtgrp, bits, pdFALSE, pdFALSE, TIMEOUT(ms)) & bits : 0;
-}
-
-static bool getBits(EventBits_t bits) {
-    return evtgrp ? xEventGroupGetBits(evtgrp) & bits : false;
-}
-
-static bool setBits(EventBits_t bits) {
-    return evtgrp ? xEventGroupSetBits(evtgrp, bits) : false;
-}
-
-static EventBits_t clearBits(EventBits_t bits) {
-    return evtgrp ? xEventGroupClearBits(evtgrp, bits) : 0;
-}
-
-static bool str_like_ipaddr(const char *s) {
-    int len = strlen(s ?: ""), dot = 0, num = 0, hex = 0, con = 0;
-    LOOPN(i, len) {
-             if (s[i] == '.') { dot++; }
-        else if (s[i] == ':') { con++; }
-        else if ('0' <= s[i] && s[i] <= '9') { num++; }
-        else if ('a' <= s[i] && s[i] <= 'f') { hex++; }
-        else if ('A' <= s[i] && s[i] <= 'F') { hex++; }
+static esp_err_t network_parse_ipaddr(const char *host, ip_addr_t *addr) {
+    // Currently LWIP ip_addr_t is equivalent to ESP-NETIF esp_ip_addr_t in IDF v5.4
+    struct sockaddr_storage sa;
+    if (parse_address(host, NULL, &sa)) return ESP_ERR_INVALID_ARG;
+    if (sa.ss_family == AF_INET) {
+        addr->type = IPADDR_TYPE_V4;
+        inet_addr_to_ip4addr(ip_2_ip4(addr), &((struct sockaddr_in *)&sa)->sin_addr);
+    } else if (sa.ss_family == AF_INET6) {
+        addr->type = IPADDR_TYPE_V6;
+        inet6_addr_to_ip6addr(ip_2_ip6(addr), &((struct sockaddr_in6 *)&sa)->sin6_addr);
+    } else {
+        return ESP_ERR_NOT_SUPPORTED;
     }
-    if (dot == 3 && (num + dot) == len) return true;
-    if (!dot && con && (con + num + hex) == len) return true;
-    return false;
+    return ESP_OK;
 }
 
-static uint32_t network_local_ip(esp_netif_t *);
+static int network_local_ipaddr(esp_netif_t *ifp, int type, esp_ip_addr_t *addr) {
+    // Get requested type of ip address from specified or default interface
+    // Return ESP_IPADDR_TYPE_V4/6 or -1 if failed
+    if (!ifp) ifp = esp_netif_get_default_netif();
+    if (!ifp && esp_netif_is_netif_up(if_eth)) ifp = if_eth;
+    if (!ifp && esp_netif_is_netif_up(if_sta)
+             && getbits(STA_CONN_BIT)) ifp = if_sta;
+    if (ifp) {
+        esp_netif_ip_info_t info = { 0 };
+        if ((type == ESP_IPADDR_TYPE_ANY || type == ESP_IPADDR_TYPE_V4) &&
+            !esp_netif_get_ip_info(ifp, &info) && info.ip.addr
+        ) {
+            addr->u_addr.ip4.addr = info.ip.addr;
+            return addr->type = ESP_IPADDR_TYPE_V4;
+        }
+        if ((type == ESP_IPADDR_TYPE_ANY || type == ESP_IPADDR_TYPE_V6) &&
+            !esp_netif_get_ip6_global(ifp, &addr->u_addr.ip6)
+        ) return addr->type = ESP_IPADDR_TYPE_V6;
+    }
+    return -1;
+}
+
+static uint32_t network_local_ipv4(esp_netif_t *ifp, esp_ip4_addr_t *ip4) {
+    esp_ip_addr_t ipaddr = { 0 };
+    if (network_local_ipaddr(ifp, ESP_IPADDR_TYPE_V4, &ipaddr) < 0) return 0;
+    if (ip4) ip4->addr = ipaddr.u_addr.ip4.addr;
+    return ipaddr.u_addr.ip4.addr;
+}
+
+static uint8_t *network_local_ipv6(esp_netif_t *ifp, esp_ip6_addr_t *ip6) {
+    static esp_ip_addr_t ipaddr;
+    if (network_local_ipaddr(ifp, ESP_IPADDR_TYPE_V6, &ipaddr) < 0) return NULL;
+    if (ip6) memcpy(ip6->addr, ipaddr.u_addr.ip6.addr, sizeof(ip6->addr));
+    return (uint8_t *)ipaddr.u_addr.ip6.addr;
+}
+
+static const char *network_local_ipstr(esp_netif_t *ifp, char *dst, size_t dstlen) {
+    static char buf[ADDRSTRLEN];
+    if (!dst) { dst = buf; dstlen = sizeof(buf); }
+    esp_ip_addr_t ipaddr;
+    switch (network_local_ipaddr(ifp, ESP_IPADDR_TYPE_ANY, &ipaddr)) {
+    case ESP_IPADDR_TYPE_V4:
+        snprintf(dst, dstlen, IPSTR, IP2STR(&ipaddr.u_addr.ip4)); break;
+    case ESP_IPADDR_TYPE_V6:
+        snprintf(dst, dstlen, IPV6STR, IPV62STR(ipaddr.u_addr.ip6)); break;
+    default:
+        return NULL;
+    }
+    return dst;
+}
 
 #ifdef IDF_TARGET_V4 // backport from IDF v5
 static esp_netif_t * esp_netif_get_default_netif() { return NULL; }
@@ -114,9 +152,9 @@ static esp_err_t esp_netif_napt_enable(esp_netif_t *ifp) {
 #   ifndef WITH_NAPT
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(ifp);
 #   else
-    uint32_t addr = network_local_ip(ifp);
-    if (!esp_netif_is_netif_up(ifp) || !addr) return ESP_ERR_INVALID_STATE;
-    ip_napt_enable(addr, true);
+    uint32_t ipv4 = network_local_ipv4(ifp, NULL);
+    if (!esp_netif_is_netif_up(ifp) || !ipv4) return ESP_ERR_INVALID_STATE;
+    ip_napt_enable(ipv4, true);
     return ESP_OK;
 #   endif
 }
@@ -160,19 +198,19 @@ static esp_err_t network_ctrl_static(
     esp_err_t err = ESP_OK;
     esp_netif_ip_info_t info;
     size_t ilen = strlen(ip ?: "");
-    char ipv4[IP4ADDR_STRLEN_MAX + 4], desc[16];
+    char ipv4[ADDRSTRLEN], desc[16];
     bool dhcps = esp_netif_get_flags(ifp) & ESP_NETIF_DHCP_SERVER;
     if (( err = esp_netif_get_ip_info(ifp, &info) )) return err;
     if (ilen) {
         if (strlcpy(ipv4, ip, sizeof(ipv4)) >= sizeof(ipv4)) return ESP_ERR_INVALID_ARG;
         char *netmask = strtok(ipv4, "/") ? strtok(NULL, "/") : NULL;
-        if (!inet_aton(ipv4, &info.ip)) return ESP_ERR_INVALID_ARG;
+        if (( err = esp_netif_str_to_ip4(ipv4, &info.ip) )) return err;
         if (netmask && parse_u8(netmask, &nmbit) && (nmbit < 2 || nmbit > 32))
             return ESP_ERR_INVALID_ARG;
     } else if (ip) goto done;                       // empty string
     if (nm && nm[0]) {
-        if (!inet_aton(nm, &info.netmask)) return ESP_ERR_INVALID_ARG;
-        if (!ip_addr_netmask_valid(&info.netmask)) return ESP_ERR_INVALID_ARG;
+        if (( err = esp_netif_str_to_ip4(nm, &info.netmask) )) return err;
+        if (!ip4_addr_netmask_valid(info.netmask.addr)) return ESP_ERR_INVALID_ARG;
     } else if (nmbit < 33) {
         info.netmask.addr = PP_HTONL(BITS2NETMASK(nmbit));
     } else if (nm || !info.netmask.addr) {
@@ -180,7 +218,7 @@ static esp_err_t network_ctrl_static(
     }
     if (gw && gw[0]) {
         strlcpy(ipv4, gw, sizeof(ipv4)); strtok(ipv4, "/");
-        if (!inet_aton(ipv4, &info.gw)) return ESP_ERR_INVALID_ARG;
+        if (( err = esp_netif_str_to_ip4(ipv4, &info.gw) )) return err;
     } else if (dhcps) {
         info.gw.addr = info.ip.addr;
     } else if (gw || !info.gw.addr) {
@@ -188,8 +226,8 @@ static esp_err_t network_ctrl_static(
     }
     if (ilen) {                                     // store netmask with ipaddr
         ilen = snprintf(
-            (char *)(ip = ipv4), sizeof(ipv4), "%s/%u",
-            inet_ntoa(info.ip.addr), NETMASK2BITS(info.netmask.addr));
+            (char *)(ip = ipv4), sizeof(ipv4), IPSTR "/%u",
+            IP2STR(&info.ip), NETMASK2BITS(info.netmask.addr));
     }
     if (!err) err = network_ctrl_dhcp(ifp, NULL, false);
     if (!err) err = esp_netif_set_ip_info(ifp, &info);
@@ -220,59 +258,39 @@ done:
     return err;
 }
 
-#if CONFIG_LWIP_IPV6
 static const char * network_ipv6_tstr(esp_ip6_addr_t *ip) {
     switch (esp_netif_ip6_get_addr_type(ip)) {
-    case ESP_IP6_ADDR_IS_GLOBAL:        return "global";
-    case ESP_IP6_ADDR_IS_LINK_LOCAL:    return "link-local";
-    case ESP_IP6_ADDR_IS_SITE_LOCAL:    return "site-local";
-    case ESP_IP6_ADDR_IS_UNIQUE_LOCAL:  return "unique-local";
-    default: return NULL;
+    case ESP_IP6_ADDR_IS_GLOBAL:            return "global";
+    case ESP_IP6_ADDR_IS_LINK_LOCAL:        return "link-local";
+    case ESP_IP6_ADDR_IS_SITE_LOCAL:        return "site-local";
+    case ESP_IP6_ADDR_IS_UNIQUE_LOCAL:      return "unique-local";
+    case ESP_IP6_ADDR_IS_IPV4_MAPPED_IPV6:  return "ipv4-mapped";
+    default:                                return "unknown";
     }
 }
-#endif
 
-static void network_print_ipinfo(esp_netif_t *ifp, FILE *stream) {
-    const char *desc = esp_netif_get_desc(ifp), *tstr;
-    const char *types[] = { "main", "backup", "fallback" };
+static void network_print_ipinfo(esp_netif_t *ifp) {
     esp_netif_ip_info_t ip;
     esp_netif_dns_info_t dns;
-    esp_netif_get_ip_info(ifp, &ip);
-    if (stream) {
-        fprintf(stream, "IP " IPSTR ", GW " IPSTR ", Mask " IPSTR "\n",
-                IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
-    } else {
-        ESP_LOGI(TAG, "IF %s IP " IPSTR ", GW " IPSTR ", Mask " IPSTR,
-                desc, IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
-    }
-#if CONFIG_LWIP_IPV6
+    if (!esp_netif_get_ip_info(ifp, &ip))
+        printf("IP " IPSTR ", GW " IPSTR ", Mask " IPSTR "\n",
+               IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
     esp_ip6_addr_t ip6s[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
     LOOPN(i, esp_netif_get_all_ip6(ifp, ip6s)) {
-        if (!( tstr = network_ipv6_tstr(ip6s + i) )) continue;
-        if (stream) {
-            fprintf(stream, "IP " IPV6STR " (%s)\n", IPV62STR(ip6s[i]), tstr);
-        } else {
-            ESP_LOGI(TAG, "IF %s IP " IPV6STR " (%s)", desc, IPV62STR(ip6s[i]), tstr);
-        }
+        printf("IP[%d] " IPV6STR " (%s)\n",
+               i, IPV62STR(ip6s[i]), network_ipv6_tstr(ip6s + i));
     }
-#endif
-    LOOPN(i, MIN(ESP_NETIF_DNS_MAX, LEN(types))) {
-        if (!esp_netif_get_dns_info(ifp, i, &dns) && !ip_addr_isany(&dns.ip)) {
-            if (stream) {
-                fprintf(stream, "DNS %s " IPSTR "\n",
-                        types[i], IP2STR(&dns.ip.u_addr.ip4));
-            } else {
-                ESP_LOGI(TAG, "IF %s DNS %s " IPSTR,
-                        desc, types[i], IP2STR(&dns.ip.u_addr.ip4));
-            }
-        }
+    const char *types[] = { "main", "backup", "fallback" };
+    LOOPN(i, MIN(ifp == if_ap ? 1 : ESP_NETIF_DNS_MAX, LEN(types))) {
+        if (!esp_netif_get_dns_info(ifp, i, &dns) && !ESP_IP_IS_ANY(dns.ip))
+            printf("DNS %s " IPSTR "\n", types[i], IP2STR(&dns.ip.u_addr.ip4));
     }
 }
 
 static esp_err_t network_print_detail(const char *iface) {
     const char
         *tstr, *desc,
-        *types[] = { "main", "backup" }, // FIXME: DNS "fallback"
+        *types[] = { "main", "backup", "fallback" },
         *dstrs[] = { "inited", "started", "stopped" },
         *fstrs[] = {
             "DHCPC", "DHCPS", "AUTOUP", "GARP", "IP MODIFIED",
@@ -293,7 +311,6 @@ static esp_err_t network_print_detail(const char *iface) {
         if (iface && !strstr(desc, iface)) continue;
         if (network_ctrl_dhcp(ifp, &status, UNCHANGED)) status = 0;
         if (esp_netif_get_mac(ifp, mac)) memset(mac, 0xFF, sizeof(mac));
-        if (esp_netif_get_ip_info(ifp, &ip)) memset(&ip, 0, sizeof(ip));
         bool up = esp_netif_is_netif_up(ifp);
         esp_netif_flags_t flag = esp_netif_get_flags(ifp);
         char dhcp = flag & ESP_NETIF_DHCP_SERVER ? 's' : 'c';
@@ -303,20 +320,17 @@ static esp_err_t network_print_detail(const char *iface) {
         printf("> %s%s", up ? "UP" : "DOWN", ifp == dft ? " default" : "");
         printf(" dhcp%c-%s\n", dhcp, dstrs[status]);
         printf("    ether " MACSTR "\n", MAC2STR(mac));
-        printf("    inet4 " IPSTR " gateway " IPSTR " netmask " IPSTR "\n",
-                IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
-#if CONFIG_LWIP_IPV6
+        if (!esp_netif_get_ip_info(ifp, &ip))
+            printf("    inet4 " IPSTR " gateway " IPSTR " netmask " IPSTR "\n",
+                   IP2STR(&ip.ip), IP2STR(&ip.gw), IP2STR(&ip.netmask));
         esp_ip6_addr_t ip6s[CONFIG_LWIP_IPV6_NUM_ADDRESSES];
         LOOPN(i, esp_netif_get_all_ip6(ifp, ip6s)) {
             if (!( tstr = network_ipv6_tstr(ip6s + i) )) continue;
             printf("    inet6 " IPV6STR " scope %s\n", IPV62STR(ip6s[i]), tstr);
         }
-#endif
-        LOOPN(i, MIN(ESP_NETIF_DNS_MAX, LEN(types))) {
-            if (esp_netif_get_dns_info(ifp, i, &dns) || ip_addr_isany(&dns.ip))
-                continue;
-            printf("    dnsip " IPSTR " type %s\n",
-                    IP2STR(&dns.ip.u_addr.ip4), types[i]);
+        LOOPN(i, MIN(ifp == if_ap ? 1 : ESP_NETIF_DNS_MAX, LEN(types))) {
+            if (esp_netif_get_dns_info(ifp, i, &dns) || ESP_IP_IS_ANY(dns.ip)) continue;
+            printf("    dnsip " IPSTR " type %s\n", IP2STR(&dns.ip.u_addr.ip4), types[i]);
         }
 #if CONFIG_ESP_NETIF_REPORT_DATA_TRAFFIC
         uint32_t currms = MSFPO();
@@ -325,10 +339,10 @@ static esp_err_t network_print_detail(const char *iface) {
             LOOPN(j, LEN(netifs[i].speed)) {
                 if ((currms - netifs[i].lastms[j]) > 2000) netifs[i].speed[j] = 0;
             }
-            printf("     send %s", format_size(netifs[i].total[ESP_NETIF_TX]));
-            printf(" %sps\n", format_size(netifs[i].speed[ESP_NETIF_TX]));
-            printf("     recv %s", format_size(netifs[i].total[ESP_NETIF_RX]));
-            printf(" %sps\n", format_size(netifs[i].speed[ESP_NETIF_RX]));
+            printf("     send %9s", format_size(netifs[i].total[ESP_NETIF_TX]));
+            printf(" - %9sps\n", format_size(netifs[i].speed[ESP_NETIF_TX]));
+            printf("     recv %9s", format_size(netifs[i].total[ESP_NETIF_RX]));
+            printf(" - %9sps\n", format_size(netifs[i].speed[ESP_NETIF_RX]));
             break;
         }
 #endif
@@ -371,19 +385,19 @@ static esp_err_t network_eth_init() {
     esp_err_t err = ESP_OK;
     esp_eth_mac_t *mac = NULL;
     esp_eth_phy_t *phy = NULL;
-    eth_mac_config_t mac_conf = ETH_MAC_DEFAULT_CONFIG();
-    eth_phy_config_t phy_conf = ETH_PHY_DEFAULT_CONFIG();
-    phy_conf.reset_gpio_num = pins[0];
+    eth_mac_config_t mac_cfg = ETH_MAC_DEFAULT_CONFIG();
+    eth_phy_config_t phy_cfg = ETH_PHY_DEFAULT_CONFIG();
+    phy_cfg.reset_gpio_num = pins[0];
 
 #ifdef CONFIG_BASE_ETH_SPI
-    spi_bus_config_t bus_conf = {
+    spi_bus_config_t bus_cfg = {
         .mosi_io_num   = pins[2],
         .miso_io_num   = pins[3],
         .sclk_io_num   = pins[4],
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
     };
-    spi_device_interface_config_t dev_conf = {
+    spi_device_interface_config_t dev_cfg = {
         .command_bits   = 16,
         .address_bits   = 8,
         .mode           = 0b00,
@@ -399,23 +413,23 @@ static esp_err_t network_eth_init() {
         ESP_LOGI(TAG, "GPIO ISR already installed");
         err = ESP_OK;
     }
-    if (!err) err = spi_bus_initialize(eth.bus, &bus_conf, SPI_DMA_CH_AUTO);
+    if (!err) err = spi_bus_initialize(eth.bus, &bus_cfg, SPI_DMA_CH_AUTO);
 #   ifdef IDF_TARGET_V4
     spi_device_handle_t spi_dev;
-    if (!err) err = spi_bus_add_device(eth.bus, &dev_conf, &spi_dev);
-    eth_w5500_config_t mod_conf = ETH_W5500_DEFAULT_CONFIG(spi_dev);
+    if (!err) err = spi_bus_add_device(eth.bus, &dev_cfg, &spi_dev);
+    eth_w5500_config_t mod_cfg = ETH_W5500_DEFAULT_CONFIG(spi_dev);
 #   else
-    eth_w5500_config_t mod_conf = ETH_W5500_DEFAULT_CONFIG(eth.bus, &dev_conf);
+    eth_w5500_config_t mod_cfg = ETH_W5500_DEFAULT_CONFIG(eth.bus, &dev_cfg);
 #   endif
-    mod_conf.int_gpio_num = pins[1];
-    mac = esp_eth_mac_new_w5500(&mod_conf, &mac_conf);
-    phy = esp_eth_phy_new_w5500(&phy_conf);
+    mod_cfg.int_gpio_num = pins[1];
+    mac = esp_eth_mac_new_w5500(&mod_cfg, &mac_cfg);
+    phy = esp_eth_phy_new_w5500(&phy_cfg);
 #else // CONFIG_BASE_ETH_EMAC
     return ESP_ERR_NOT_SUPPORTED;
 #endif // CONFIG_BASE_ETH_SPI
 
-    esp_eth_config_t eth_conf = ETH_DEFAULT_CONFIG(mac, phy);
-    if (!err) err = esp_eth_driver_install(&eth_conf, &eth.hdl);
+    esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
+    if (!err) err = esp_eth_driver_install(&eth_cfg, &eth.hdl);
 #ifdef CONFIG_BASE_ETH_SPI
     uint8_t mac_eth[6], mac_ext[6];
     if (!err) err = esp_read_mac(mac_eth, ESP_MAC_ETH);
@@ -440,7 +454,13 @@ static esp_err_t network_eth_init() {
 #endif
 
 #ifdef CONFIG_BASE_USE_WIFI
+#   include "esp_crc.h"
+#   include "esp_now.h"
 #   include "esp_wifi.h"
+#   include "esp_rom_md5.h"
+#   ifdef CONFIG_BASE_USE_EASYCONNECT
+#       include "esp_dpp.h"
+#   endif
 #   ifdef CONFIG_BASE_USE_SMARTCONFIG
 #       include "esp_smartconfig.h"
 #   endif
@@ -486,7 +506,7 @@ static const char * wifi_ftm_str(wifi_ftm_status_t status) {
     }
 }
 
-static esp_err_t wifi_mode_switch(int sta, int ap, wifi_mode_t *mode) {
+static esp_err_t wifi_mode_switch(int sta, int ap) {
     wifi_mode_t origin, target;
     esp_err_t err = esp_wifi_get_mode(&origin);
     if (err) return err;
@@ -507,8 +527,6 @@ static esp_err_t wifi_mode_switch(int sta, int ap, wifi_mode_t *mode) {
         ESP_LOGI(TAG, "Switch mode from %s to %s",
                 wifi_mode_str(origin), wifi_mode_str(target));
     }
-    if (mode)
-        *mode = target;
     return err;
 }
 
@@ -616,7 +634,7 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     // Arguments validation
     esp_err_t err = ESP_ERR_INVALID_ARG;
     if (!ssid) {
-        if (!strlen(Config.net.STA_SSID)) return err;
+        if (EMPTY(Config.net.STA_SSID)) return err;
         ssid = Config.net.STA_SSID;
         pass = Config.net.STA_PASS;
     } else if (!pass) {
@@ -625,8 +643,8 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
     if (!ip) ip = Config.net.STA_HOST;
 
     // WiFi mode validation
-    if (( err = wifi_mode_switch(true, UNCHANGED, NULL) )) return err;
-    if (getBits(STA_CONN_BIT)) {
+    if (( err = wifi_mode_switch(true, UNCHANGED) )) return err;
+    if (getbits(STA_CONN_BIT)) {
         wifi_ap_record_t info;
         err = esp_wifi_sta_get_ap_info(&info);
         if (err == ESP_OK && !strcmp((char *)info.ssid, ssid))
@@ -649,9 +667,9 @@ esp_err_t wifi_sta_start(const char *ssid, const char *pass, const char *ip) {
 }
 
 esp_err_t wifi_sta_stop(bool down) {
-    setBits(STA_STOP_BIT);
+    setbits(STA_STOP_BIT);
     esp_err_t err = esp_wifi_disconnect();
-    if (!err && down) err = wifi_mode_switch(false, UNCHANGED, NULL);
+    if (!err && down) err = wifi_mode_switch(false, UNCHANGED);
     return err;
 }
 
@@ -665,7 +683,7 @@ esp_err_t wifi_sta_scan(
         .show_hidden = true,
         .scan_type = WIFI_SCAN_TYPE_ACTIVE,
     };
-    esp_err_t err = wifi_mode_switch(UNCHANGED, UNCHANGED, &mode);
+    esp_err_t err = esp_wifi_get_mode(&mode);
     if (!err) err = HAS_STA(mode) ? ESP_OK : ESP_ERR_INVALID_STATE;
     if (!err) err = esp_wifi_scan_stop();
     if (!err) err = esp_wifi_clear_ap_list();
@@ -673,7 +691,7 @@ esp_err_t wifi_sta_scan(
     if (!tout_ms) return esp_wifi_scan_start(&cfg, false);
     cfg.scan_time.active.min = CONS(tout_ms / 15, 10, 1400);
     cfg.scan_time.active.max = CONS(tout_ms / 10, 20, 1500);
-    setBits(STA_SCAN_BIT);
+    setbits(STA_SCAN_BIT);
     if (!( err = esp_wifi_scan_start(&cfg, true) )
      && !( err = wifi_get_ap_records() ) && verbose) {
         ESP_LOGI(TAG, "STA found %d AP", s_nap);
@@ -682,37 +700,51 @@ esp_err_t wifi_sta_scan(
     return err;
 }
 
-esp_err_t wifi_sta_wait(uint16_t tout_ms) {
-    EventBits_t bits = waitBits(STA_CONN_BIT | STA_STOP_BIT | STA_FAIL_BIT, tout_ms);
-    if (!bits) return ESP_ERR_TIMEOUT;
+esp_err_t wifi_sta_wait(uint32_t tout_ms) {
+    clrbits(STA_WAIT_BIT);
+    if (!waitbits(STA_WAIT_BIT, tout_ms)) return ESP_ERR_TIMEOUT;
+    clrbits(STA_WAIT_BIT);
+    EventBits_t bits = getbits(STA_CONN_BIT | STA_FAIL_BIT);
     if (bits & STA_FAIL_BIT) return ESP_FAIL;
     if (bits & STA_CONN_BIT) return ESP_OK;
-    ESP_LOGW(TAG, "STA manually stopped by wifi_sta_stop");
-    return ESP_ERR_INVALID_STATE;
+    return ESP_ERR_INVALID_STATE; // manually disconnected
 }
 
 esp_err_t wifi_sta_list_ap() {
-    wifi_mode_t mode;
-    wifi_mode_switch(UNCHANGED, UNCHANGED, &mode);
+    wifi_mode_t mode = WIFI_MODE_NULL;
+    esp_wifi_get_mode(&mode);
     printf("STA ");
     if (!HAS_STA(mode)) {
         puts("not enabled");
         return ESP_ERR_INVALID_STATE;
     }
     if (strlen((char *)config_sta.sta.ssid))
-        printf("SSID `%s` ", (char *)config_sta.sta.ssid);
-    if (getBits(STA_FAIL_BIT)) {
-        puts("connect failed");
-    } else if (getBits(STA_CONN_BIT)) {
+        printf("SSID=%s ", (char *)config_sta.sta.ssid);
+    if (getbits(STA_FAIL_BIT)) {
+        puts("failed");
+    } else if (getbits(STA_CONN_BIT)) {
         int8_t power = 0;
+        uint8_t proto = 0;
         wifi_ps_type_t psave = 0;
+        wifi_bandwidth_t band = WIFI_BW20;
         esp_wifi_get_ps(&psave);
         esp_wifi_get_max_tx_power(&power);
-        printf("connected power-save=%s power-tx=%ddBm\n",
-               psave == WIFI_PS_MAX_MODEM ? "max" :
-               psave == WIFI_PS_MIN_MODEM ? "min" : "none",
-               power / 4);
-        network_print_ipinfo(if_sta, stdout);
+        esp_wifi_get_protocol(WIFI_IF_STA, &proto);
+        esp_wifi_get_bandwidth(WIFI_IF_STA, &band);
+        printf(
+            "connected PSave=%s MaxTX=%ddBm\nProtocol=%c%c%c%c Bandwidth=%s\n",
+            psave == WIFI_PS_MAX_MODEM ? "max" :
+            psave == WIFI_PS_MIN_MODEM ? "min" : "none", power / 4,
+            proto & WIFI_PROTOCOL_11B ? 'b' : ' ',
+            proto & WIFI_PROTOCOL_11G ? 'g' : ' ',
+            proto & WIFI_PROTOCOL_11N ? 'n' : ' ',
+            proto & WIFI_PROTOCOL_LR ? 'l' : ' ',
+            band == WIFI_BW20 ? "20MHz" : band == WIFI_BW40 ? "40MHz" :
+            band == WIFI_BW80 ? "80MHz" : band == WIFI_BW160 ? "160MHz" :
+            band == WIFI_BW_HT20 ? "HT20" : band == WIFI_BW_HT40 ? "HT40" :
+            band == WIFI_BW80_BW80 ? "80+80MHZ" : ""
+        );
+        network_print_ipinfo(if_sta);
         wifi_ap_record_t info;
         if (s_nap) {
             wifi_print_apinfo(s_aps, s_nap);
@@ -729,7 +761,7 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     // Arguments validation
     esp_err_t err = ESP_ERR_INVALID_ARG;
     if (!ssid) {
-        if (!strlen(Config.net.AP_SSID)) return err;
+        if (EMPTY(Config.net.AP_SSID)) return err;
         ssid = Config.net.AP_SSID;
         pass = Config.net.AP_PASS;
     } else if (!pass) {
@@ -738,7 +770,7 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     if (!ip) ip = Config.net.AP_HOST;
 
     // WiFi mode validation
-    if (( err = wifi_mode_switch(UNCHANGED, true, NULL) )) return err;
+    if (( err = wifi_mode_switch(UNCHANGED, true) )) return err;
 
     // Configure gateway IP address
     if (( err = network_ctrl_static(if_ap, ip, ip, NULL) )) return err;
@@ -770,13 +802,16 @@ esp_err_t wifi_ap_start(const char *ssid, const char *pass, const char *ip) {
     if (!( err = esp_wifi_set_config(WIFI_IF_AP, &config_ap) )) {
         ESP_LOGI(TAG, "AP SSID `%s`, PASS `%s`, Channel %d, Hidden %d",
                 ap->ssid, ap->password, ap->channel, ap->ssid_hidden);
-        if (( err = esp_wifi_set_protocol(WIFI_IF_AP, PROTOCOL) ))
-            ESP_LOGW(TAG, "AP set protocol error: %s", esp_err_to_name(err));
+        // wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
+        // if (0 < ap->channel && ap->channel < 5) second = WIFI_SECOND_CHAN_ABOVE;
+        // if (6 < ap->channel && ap->channel < 9) second = WIFI_SECOND_CHAN_BELOW;
+        // if (( err = esp_wifi_set_channel(ap->channel, second) ))
+        //     ESP_LOGW(TAG, "Set channel error: %s", esp_err_to_name(err));
     }
     return err;
 }
 
-esp_err_t wifi_ap_stop() { return wifi_mode_switch(UNCHANGED, false, NULL); }
+esp_err_t wifi_ap_stop() { return wifi_mode_switch(UNCHANGED, false); }
 
 esp_err_t wifi_ap_list_sta() {
     if (!esp_netif_is_netif_up(if_ap)) {
@@ -794,15 +829,13 @@ esp_err_t wifi_ap_list_sta() {
     if (err) ESP_LOGW(TAG, "Get WiFi info error: %s", esp_err_to_name(err));
     printf(
         "AP SSID=%.*s Country=%c%c%c%c Channel=%d(%u~%u) MaxTX=%ddBm\n"
-        "Primary=%d Second=%s Protocol=%c%c%c%c Bandwidth=%s\n",
+        "Protocol=%c%c%c%c Bandwidth=%s Primary=%d Second=%s\n",
         config_ap.ap.ssid_len, config_ap.ap.ssid,
         cinfo.cc[0] ?: ' ', cinfo.cc[1] ?: ' ',
         cinfo.cc[2] == ' ' ? '-' : cinfo.cc[2] ?: ' ',
         cinfo.policy == WIFI_COUNTRY_POLICY_AUTO ? 'A' : 'M',
         config_ap.ap.channel, cinfo.schan, cinfo.schan + cinfo.nchan,
-        cinfo.max_tx_power / 4, primary,
-        second == WIFI_SECOND_CHAN_BELOW ? "below" :
-        second == WIFI_SECOND_CHAN_ABOVE ? "above" : "HT20",
+        cinfo.max_tx_power / 4,
         proto & WIFI_PROTOCOL_11B ? 'b' : ' ',
         proto & WIFI_PROTOCOL_11G ? 'g' : ' ',
         proto & WIFI_PROTOCOL_11N ? 'n' : ' ',
@@ -810,9 +843,11 @@ esp_err_t wifi_ap_list_sta() {
         band == WIFI_BW20 ? "20MHz" : band == WIFI_BW40 ? "40MHz" :
         band == WIFI_BW80 ? "80MHz" : band == WIFI_BW160 ? "160MHz" :
         band == WIFI_BW_HT20 ? "HT20" : band == WIFI_BW_HT40 ? "HT40" :
-        band == WIFI_BW80_BW80 ? "80+80MHZ" : ""
+        band == WIFI_BW80_BW80 ? "80+80MHZ" : "", primary,
+        second == WIFI_SECOND_CHAN_BELOW ? "below" :
+        second == WIFI_SECOND_CHAN_ABOVE ? "above" : "HT20"
     );
-    network_print_ipinfo(if_ap, stdout);
+    network_print_ipinfo(if_ap);
 
 #   ifdef IDF_TARGET_V4
 #       define wifi_sta_mac_ip_list_t           esp_netif_sta_list_t
@@ -827,6 +862,7 @@ esp_err_t wifi_ap_list_sta() {
         return err;
     }
 
+    char ipv4[ADDRSTRLEN];
     printf("\nAID  IP address       MAC address       RSSI Mode Mesh\n");
     LOOPN(i, sta_info_list.num) {
         uint16_t aid;
@@ -836,10 +872,446 @@ esp_err_t wifi_ap_list_sta() {
             continue;
         }
         printf("%-4d %-16s " MACSTR " %4d %c%c%c%c %s\n",
-            aid, inet_ntoa(sta_macip_list.sta[i].ip), MAC2STR(info->mac), info->rssi,
+            aid, esp_ip4addr_ntoa(&sta_macip_list.sta[i].ip, ipv4, sizeof(ipv4)),
+            MAC2STR(info->mac), info->rssi,
             info->phy_11b ? 'b' : ' ', info->phy_11g ? 'g' : ' ',
-            info->phy_11n ? 'n' : ' ', info->phy_lr ? 'l' : 'h',
+            info->phy_11n ? 'n' : ' ', info->phy_lr ? 'l' : ' ',
             info->is_mesh_child ? "true" : "false");
+    }
+    return err;
+}
+
+#ifdef CONFIG_BASE_USE_EASYCONNECT
+static char * dpp_qrcode = NULL;
+static void cb_easyconnect(esp_supp_dpp_event_t evt, void *arg) {
+    static int retry = 5;
+    esp_err_t err = ESP_OK;
+    if (evt == ESP_SUPP_DPP_URI_READY) {
+        ESP_LOGI(TAG, "DPP raw URI: %s", (const char *)arg);
+        TRYFREE(dpp_qrcode);
+        size_t size = 0;
+        qrenc_config_t cfg = {
+            .stream = open_memstream(&dpp_qrcode, &size),
+            .flags = QRENC_INV,
+            .data = arg,
+            .bdr = 2,
+        };
+        err = avi_qrenc(&cfg);
+        TRYNULL(cfg.stream, fclose);
+        if (err) {
+            ESP_LOGW(TAG, "QRENC error: %s", esp_err_to_name(err));
+        } else {
+            ESP_LOGI(TAG, "DPP qrcode:\n%s", dpp_qrcode);
+        }
+        if (( err = esp_supp_dpp_start_listen() )) {
+            ESP_LOGE(TAG, "DPP start listen error: %s", esp_err_to_name(err));
+            setbits(STA_WAIT_BIT);
+        }
+    } else if (evt == ESP_SUPP_DPP_CFG_RECVD) {
+        retry = 5;
+        esp_wifi_set_config(WIFI_IF_STA, (wifi_config_t *)arg);
+        esp_wifi_connect();
+    } else if (evt == ESP_SUPP_DPP_FAIL) {
+        ESP_LOGW(TAG, "DPP auth fail: %s", esp_err_to_name((int)arg));
+        if (retry-- > 0 && !( err = esp_supp_dpp_start_listen() )) return;
+        if (err) ESP_LOGE(TAG, "DPP start listen error: %s", esp_err_to_name(err));
+        setbits(STA_WAIT_BIT);
+    }
+}
+#endif
+
+#ifdef CONFIG_BASE_USE_SMARTCONFIG
+static void cb_smartconfig(void *a, esp_event_base_t b, int32_t id, void *data) {
+    if (id == SC_EVENT_GOT_SSID_PSWD) {
+        smartconfig_event_got_ssid_pswd_t *evt = data;
+        esp_ip4_addr_t ip = { .addr = *(uint32_t *)evt->cellphone_ip };
+        ESP_LOGI(TAG, "SC from " IPSTR " got SSID `%s` type %s",
+                    IP2STR(&ip), (char *)evt->ssid,
+                    evt->type == SC_TYPE_ESPTOUCH_AIRKISS ? "ESPTouch & AirKiss" :
+                    evt->type == SC_TYPE_ESPTOUCH_V2 ? "ESPTouch V2" :
+                    evt->type == SC_TYPE_AIRKISS ? "AirKiss" : "ESPTouch V1");
+        wifi_sta_start((char *)evt->ssid, (char *)evt->password, NULL);
+    } else if (id == SC_EVENT_SEND_ACK_DONE) {
+        setbits(STA_WAIT_BIT);
+    }
+}
+#endif
+
+#if CONFIG_BASE_USE_EASYCONNECT || CONFIG_BASE_USE_SMARTCONFIG
+static void prov_task(void *arg) {
+    esp_err_t err = ESP_OK;
+    uint32_t tout_ms = 600000; // 10 minutes
+#   ifdef CONFIG_BASE_USE_EASYCONNECT
+    if (strtob(Config.net.DPP_AUTO)) {
+        err = esp_supp_dpp_init(cb_easyconnect);
+        if (!err) err = esp_supp_dpp_bootstrap_gen(
+            Config.net.DPP_CHAN, DPP_BOOTSTRAP_QR_CODE, NULL, NULL);
+        if (!err) {
+            ESP_LOGI(TAG, "EasyConnect start listening");
+            err = wifi_sta_wait(tout_ms);
+        }
+        TRYFREE(dpp_qrcode);
+        esp_supp_dpp_deinit();
+        if (!err) vTaskDelete(NULL);
+        ESP_LOGE(TAG, "EasyConnect error: %s", esp_err_to_name(err));
+    }
+#   endif
+#   ifdef CONFIG_BASE_USE_SMARTCONFIG
+    if (strtob(Config.net.SC_AUTO)) {
+        const char *tstr = Config.net.SC_TYPE,
+                   *ver2 = strcasestr(tstr, "v2"),
+                   *kiss = strcasestr(tstr, "kiss"),
+                  *touch = strcasestr(tstr, "touch");
+        smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
+        smartconfig_type_t type = SC_TYPE_ESPTOUCH;
+        if (kiss && touch) type = SC_TYPE_ESPTOUCH_AIRKISS;
+        else if (kiss)     type = SC_TYPE_AIRKISS;
+        else if (ver2)     type = SC_TYPE_ESPTOUCH_V2;
+        err = esp_smartconfig_fast_mode(strcasestr(tstr, "fast"));
+        if (!err) err = esp_smartconfig_set_type(type);
+        if (!err) err = esp_smartconfig_start(&cfg);
+        if (!err) err = REGEVT(SC, cb_smartconfig);
+        if (!err) {
+            ESP_LOGI(TAG, "SmartConfig %s", esp_smartconfig_get_version());
+            err = wifi_sta_wait(tout_ms);
+        }
+        UREGEVT(SC, cb_smartconfig);
+        esp_smartconfig_stop();
+        if (err) ESP_LOGE(TAG, "SmartConfig error: %s", esp_err_to_name(err));
+    }
+#   endif
+    vTaskDelete(NULL);
+}
+#endif
+
+typedef struct {
+    uint8_t crc, flag, payload[0];
+#   define NOW_FLAG_PING BIT4
+#   define NOW_FLAG_PONG BIT5
+#   define NOW_FLAG_TEXT BIT6
+} PACKED now_data_t;
+
+typedef struct {
+    uint16_t len;
+    uint8_t flag, src[ESP_NOW_ETH_ALEN], dst[ESP_NOW_ETH_ALEN];
+#   define NOW_FLAG_RECV BIT0
+#   define NOW_FLAG_SEND BIT1
+#   define NOW_FLAG_CAST BIT2
+#   define NOW_FLAG_FAIL BIT3
+    now_data_t *pkt;
+} now_event_t;
+
+static_assert(sizeof(((now_param_t *)0)->mac) == ESP_NOW_ETH_ALEN, "invalid mac size");
+static_assert(sizeof(((now_param_t *)0)->lmk) == ESP_NOW_KEY_LEN, "invalid lmk size");
+static_assert(ESP_ROM_MD5_DIGEST_LEN == ESP_NOW_KEY_LEN, "invalid md5 digest size");
+
+static struct {
+    QueueHandle_t queue;
+    wifi_interface_t itf;
+    size_t count, channel, cast_ms, ping_ms, max_plen;
+    uint8_t broadcast[ESP_NOW_ETH_ALEN], buffer[ESP_NOW_MAX_DATA_LEN_V2];
+    uint32_t version;
+} now = {
+    .itf = WIFI_IF_STA,
+    .channel = 1,
+    .cast_ms = 1000,
+    .ping_ms = 5000,
+    .broadcast = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF },
+};
+
+#   define MACCMP(a, b)     memcmp((a), (b), ESP_NOW_ETH_ALEN)
+
+#   define IS_BROADCAST(m)  ( !(m) || !MACCMP(now.broadcast, m) )
+
+#   define IS_INTERFACE(m, i) ({                                            \
+        uint8_t b[ESP_NOW_ETH_ALEN];                                        \
+        !esp_netif_get_mac((i), b) && !MACCMP(b, (m));                      \
+    })
+
+#   define NOW_SEND(mac, val, msg, len) ({                                  \
+        now_data_t *p = (now_data_t *)now.buffer;                           \
+        size_t l = MIN(now.max_plen, (len)), b = l + sizeof(now_data_t);    \
+        memset(now.buffer, 0, sizeof(now.buffer));                          \
+        memcpy(p->payload, (msg), l);                                       \
+        p->flag = (val);                                                    \
+        p->crc = esp_crc8_le(UINT8_MAX, now.buffer, b);                     \
+        esp_now_send((mac), now.buffer, b);                                 \
+    })
+
+#   define NOW_RECV(msg, len) ({                                            \
+        now_data_t *p = (now_data_t *)(msg);                                \
+        uint8_t c = p->crc; p->crc = 0;                                     \
+        c == esp_crc8_le(UINT8_MAX, (msg), (len));                          \
+    })
+
+#   define NOW_PCNT() \
+    ({ esp_now_peer_num_t n; esp_now_get_peer_num(&n) ? 0 : n.total_num - 1; })
+
+#   define NOW_ITER(peer) for (                                             \
+        int n = NOW_PCNT(), e = esp_now_fetch_peer(true, &peer);            \
+        n-- > 0 && !e;      e = esp_now_fetch_peer(false, &peer)            \
+    )
+
+static void cb_now_send(const uint8_t *mac, esp_now_send_status_t status) {
+    now_event_t evt = {
+        .flag = NOW_FLAG_SEND | (IS_BROADCAST(mac) ? NOW_FLAG_CAST : 0) |
+                (status == ESP_NOW_SEND_FAIL ? NOW_FLAG_FAIL : 0)
+    };
+    memcpy(evt.dst, mac ?: now.broadcast, sizeof(evt.dst));
+    xQueueSend(now.queue, &evt, TIMEOUT(50));
+}
+
+static void cb_now_recv(const esp_now_recv_info_t *info, const uint8_t *msg, int len) {
+    if (!info || !info->src_addr || !msg || len < sizeof(now_data_t)) return;
+    now_event_t evt = {
+        .flag = NOW_FLAG_RECV | (IS_BROADCAST(info->des_addr) ? NOW_FLAG_CAST : 0)
+    };
+    if (!NOW_RECV(msg, len) || EMALLOC(evt.pkt, len)) return;
+    memcpy(evt.pkt, msg, evt.len = len);
+    memcpy(evt.src, info->src_addr, sizeof(evt.src));
+    memcpy(evt.dst, info->des_addr ?: now.broadcast, sizeof(evt.dst));
+    if (!xQueueSend(now.queue, &evt, TIMEOUT(50))) TRYFREE(evt.pkt);
+}
+
+static esp_err_t now_calc_lmk(uint8_t *lmk, const uint8_t *a, const uint8_t *b) {
+    if (!lmk || !a || !b) return ESP_ERR_INVALID_ARG;
+    bool first = MACCMP(a, b) < 0;
+    md5_context_t ctx;
+    esp_rom_md5_init(&ctx);
+    esp_rom_md5_update(&ctx, Config.net.NOW_LMK, strlen(Config.net.NOW_LMK));
+    esp_rom_md5_update(&ctx, first ? a : b, ESP_NOW_ETH_ALEN);
+    esp_rom_md5_update(&ctx, first ? b : a, ESP_NOW_ETH_ALEN);
+    esp_rom_md5_final(lmk, &ctx);
+    return ESP_OK;
+}
+
+static void now_task(void *arg) {
+    uint32_t last_cast = 0, last_ping = 0;
+    esp_err_t err;
+    now_event_t evt;
+    esp_now_peer_info_t peer;
+    if (( now.queue = xQueueCreate(10, sizeof(now_event_t)) ) &&
+        !esp_now_register_recv_cb(cb_now_recv) &&
+        !esp_now_register_send_cb(cb_now_send) &&
+        !esp_wifi_set_ps(WIFI_PS_NONE)
+    ) while (!getbits(NOW_STOP_BIT)) {
+        uint32_t currms = MSFPO();
+        if (now.cast_ms && (currms - last_cast) > now.cast_ms && now.count != 0) {
+            void *msg = &now.count; size_t mlen = sizeof(now.count);
+            if (( err = NOW_SEND(now.broadcast, NOW_FLAG_PING, msg, mlen) )) {
+                ESP_LOGE(TAG, "NOW cast: %s", esp_err_to_name(err));
+                if (err != ESP_ERR_ESPNOW_NO_MEM) now.count = 0;
+            } else {
+                ESP_LOGD(TAG, "NOW cast: ping-%d", now.count);
+            }
+            last_cast = currms;
+        }
+        if (now.ping_ms && (currms - last_ping) > now.ping_ms) {
+            NOW_ITER(peer) { NOW_SEND(peer.peer_addr, NOW_FLAG_PING, NULL, 0); }
+            last_ping = currms;
+        }
+        if (!xQueueReceive(now.queue, &evt, TIMEOUT(100))) continue;
+        if (evt.flag & NOW_FLAG_SEND) {
+            if (!(evt.flag & NOW_FLAG_FAIL)) {
+                ESP_LOGD(TAG, "NOW send " MACSTR " success", MAC2STR(evt.dst));
+                if (evt.flag & NOW_FLAG_CAST && now.count > 0) now.count--;
+            } else if (!(evt.flag & NOW_FLAG_CAST)) {
+                ESP_LOGI(TAG, "NOW del " MACSTR, MAC2STR(evt.dst));
+                esp_now_del_peer(evt.dst);
+            } else {
+                ESP_LOGE(TAG, "NOW send " MACSTR " failed", MAC2STR(evt.dst));
+                if (now.count > 0) now.count = 0;
+            }
+            continue;
+        }
+        bool broadcast = evt.flag & NOW_FLAG_CAST;
+        size_t plen = evt.len - sizeof(now_data_t);
+        if (!esp_now_is_peer_exist(evt.src)) {
+            now_param_t param = { .apifidx = -1, .channel = -1, .encrypt = -1 };
+            memcpy(param.mac, evt.src, sizeof(param.mac));
+            if (!broadcast) {
+                bool ap = IS_INTERFACE(evt.dst, if_ap),
+                    sta = IS_INTERFACE(evt.dst, if_sta);
+                param.apifidx = ap ? WIFI_IF_AP : sta ? WIFI_IF_STA : -1;
+                now_calc_lmk(param.lmk, evt.src, evt.dst);
+            }
+            if (( err = now_command("add", &param, NULL) )) {
+                ESP_LOGE(TAG, "NOW add " MACSTR ": %s",
+                         MAC2STR(evt.src), esp_err_to_name(err));
+            } else {
+                ESP_LOGI(TAG, "NOW add " MACSTR, MAC2STR(evt.src));
+                if (!esp_now_get_peer(evt.src, &peer) && peer.encrypt)
+                    now.count++; // latest added peer is encrypted so broadcast
+            }
+        }
+        if (evt.pkt->flag & NOW_FLAG_PING) {
+            if (plen == sizeof(now.count)) {            // broadcast
+                err = NOW_SEND(evt.src, NOW_FLAG_PONG, evt.pkt->payload, plen);
+            } else if (!plen) {                         // unicast
+                err = NOW_SEND(evt.src, NOW_FLAG_PONG, NULL, 0);
+            } else {                                    // error plen
+                ESP_LOGW(TAG, "NOW recv " MACSTR ": ping plen=%d",
+                         MAC2STR(evt.src), plen);
+                err = ESP_OK;
+            }
+            if (err) ESP_LOGE(TAG, "NOW send " MACSTR ": pong err=%s",
+                              MAC2STR(evt.src), esp_err_to_name(err));
+        } else if (evt.pkt->flag & NOW_FLAG_PONG) {
+            if (plen == sizeof(now.count)) {            // broadcast
+                ESP_LOGD(TAG, "NOW recv " MACSTR ": pong-%d",
+                         MAC2STR(evt.src), *(typeof(now.count)*)evt.pkt->payload);
+            } else if (!plen) {                         // unicast
+                ESP_LOGD(TAG, "NOW recv " MACSTR ": pong", MAC2STR(evt.src));
+            } else {                                    // error plen
+                ESP_LOGW(TAG, "NOW recv " MACSTR ": pong plen=%d",
+                         MAC2STR(evt.src), plen);
+            }
+        } else if (evt.pkt->flag & NOW_FLAG_TEXT) {     // text
+            ESP_LOGI(TAG, "NOW recv from " MACSTR ": %.*s",
+                        MAC2STR(evt.src), plen, (char *)evt.pkt->payload);
+        } else if (plen) {                              // binary
+            ESP_LOGI(TAG, "NOW recv from " MACSTR ": plen %d", MAC2STR(evt.src), plen);
+        }
+        TRYFREE(evt.pkt);
+    }
+    esp_now_unregister_recv_cb();
+    esp_now_unregister_send_cb();
+    esp_now_deinit();
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    TRYNULL(now.queue, vQueueDelete);
+    setbits(NOW_STOP_BIT);
+    vTaskDelete(NULL);
+}
+
+esp_err_t now_command(const char *cmd, now_param_t *param, const char *msg) {
+    esp_err_t err = ESP_OK;
+    if (!now.version) {
+        if (( err = esp_now_get_version(&now.version) )) return err;
+        now.max_plen = (
+            now.version == 2 ? ESP_NOW_MAX_DATA_LEN_V2 : ESP_NOW_MAX_DATA_LEN
+        ) - sizeof(now_data_t);
+    }
+    TaskHandle_t task = xTaskGetHandle("espnow");
+    bool hasmac = param && MACCMP(param->mac, (uint8_t[ESP_NOW_ETH_ALEN]){ 0 });
+    if (cmd) {
+        if (!strcasecmp(cmd, "add") || !strcasecmp(cmd, "mod")) {
+            if (!param) return ESP_ERR_INVALID_ARG;
+            esp_now_peer_num_t num;
+            esp_now_peer_info_t peer;
+            memset(&peer, 0, sizeof(peer));
+            memcpy(peer.peer_addr, param->mac, sizeof(peer.peer_addr));
+            bool full = esp_now_get_peer_num(&num) ||
+                        num.encrypt_num >= ESP_NOW_MAX_ENCRYPT_PEER_NUM,
+                exist = !esp_now_get_peer(param->mac, &peer);
+            if (param->encrypt >= 0) {
+                peer.encrypt = !!param->encrypt;
+            } else if (!full) {
+                peer.encrypt = true;
+            }
+            if (param->apifidx >= 0) {
+                peer.ifidx = param->apifidx ? WIFI_IF_AP : WIFI_IF_STA;
+            } else if (!exist) {
+                peer.ifidx = now.itf;
+            }
+            if (param->channel >= 0) {
+                peer.channel = param->channel;
+            } else if (!exist && (peer.ifidx != WIFI_IF_STA || !getbits(STA_CONN_BIT))) {
+                peer.channel = now.channel;
+            }
+            if (IS_BROADCAST(param->mac)) {
+                peer.encrypt = false;
+                memset(peer.lmk, 0, sizeof(peer.lmk));
+            } else if (!memchr(param->lmk, '\0', sizeof(param->lmk))) {
+                memcpy(peer.lmk, param->lmk, sizeof(peer.lmk));
+            } else {
+                uint8_t mac[6];
+                esp_netif_t *ifp = peer.ifidx == WIFI_IF_AP ? if_ap : if_sta;
+                if (( err = esp_netif_get_mac(ifp, mac) )) return err;
+                if (( err = now_calc_lmk(peer.lmk, param->mac, mac) )) return err;
+            }
+            err = exist ? esp_now_mod_peer(&peer) : esp_now_add_peer(&peer);
+        } else if (!strcasecmp(cmd, "del")) {
+            err = param ? esp_now_del_peer(param->mac) : ESP_ERR_INVALID_ARG;
+        } else if (!strcasecmp(cmd, "set")) {
+            wifi_interface_t itf = param->apifidx > 0 ? WIFI_IF_AP : WIFI_IF_STA;
+            uint8_t proto = WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N;
+            if (param->longrange >= 0) {
+                err = esp_wifi_set_protocol(itf, proto | WIFI_PROTOCOL_LR);
+            } else if (param->longrange == 0) {
+                err = esp_wifi_set_protocol(itf, proto);
+            }
+            if (param->powersave > 0) {
+                err = esp_now_set_wake_window(50) ?:
+                      esp_wifi_connectionless_module_set_wake_interval(100);
+            } else if (param->powersave == 0) {
+                err = esp_now_set_wake_window(UINT16_MAX) ?:
+                      esp_wifi_connectionless_module_set_wake_interval(
+                        ESP_WIFI_CONNECTIONLESS_INTERVAL_DEFAULT_MODE);
+            }
+        } else if (!strcasecmp(cmd, "pmk")) {
+            if (param && !memchr(param->lmk, '\0', sizeof(param->lmk))) {
+                if (!( err = esp_now_set_pmk(param->lmk) ))
+                    ESP_LOGI(TAG, "NOW set pmk: %s",
+                             format_sha256(param->lmk, sizeof(param->lmk)));
+            } else if (strlen(msg ?: "") == ESP_NOW_KEY_LEN) {
+                if (!( err = esp_now_set_pmk((const uint8_t *)msg) ))
+                    ESP_LOGI(TAG, "NOW set pmk: %s", msg);
+            } else {
+                err = msg ? ESP_ERR_INVALID_SIZE : ESP_ERR_INVALID_ARG;
+            }
+        } else if (!strcasecmp(cmd, "send")) {
+            size_t mlen = strlen(msg ?: "");
+            if (!mlen) return ESP_ERR_INVALID_SIZE;
+            if (hasmac && !esp_now_is_peer_exist(param->mac) &&
+                ( err = now_command("add", param, NULL) )) return err;
+            err = NOW_SEND(hasmac ? param->mac : NULL, NOW_FLAG_TEXT, msg, mlen);
+        } else if (!strcasecmp(cmd, "cast")) {
+            size_t mlen = strlen(msg ?: "");
+            if (param && param->broadcast >= 0) {
+                now.count = param->broadcast;
+            } else if (mlen) {
+                err = NOW_SEND(now.broadcast, NOW_FLAG_TEXT, msg, mlen);
+            }
+        } else if (!strtob(cmd)) {
+            setbits(NOW_STOP_BIT);
+        } else if (!task) {
+            int ap = param && param->apifidx > 0 ? true : UNCHANGED,
+                sta = ap == UNCHANGED ? true : UNCHANGED;
+            now_param_t tmp = { .apifidx = -1, .channel = -1, .encrypt = -1 };
+            if (param) memcpy(&tmp, param, sizeof(tmp));
+            memcpy(tmp.mac, now.broadcast, sizeof(tmp.mac));
+            if (( err = wifi_mode_switch(sta, ap) ) || ( err = esp_now_init()) ||
+                ( err = now_command("add", &tmp, NULL) )) return err;
+            clrbits(NOW_STOP_BIT);
+            xTaskCreate(now_task, "espnow", 8192, NULL, 4, &task);
+            if (!task) {
+                err = ESP_ERR_NO_MEM;
+            } else if (waitbits(NOW_STOP_BIT, 100)) {
+                err = ESP_FAIL;
+            } else {
+                now.count = 3;
+            }
+        }
+    } else if (param && (param->longrange >= 0 || param->powersave >= 0)) {
+        err = now_command("set", param, msg);
+    } else if (msg) {
+        err = now_command("send", param, msg);
+    } else {
+        esp_now_peer_info_t peer;
+        int num = task ? NOW_PCNT() : 0, idx = 0;
+        if (!hasmac || !task)
+            printf("ESPNow V%" PRIu32 " %sabled peers %d count %u\n",
+                   now.version, task ? "en" : "dis", num, now.count);
+        if (!num) return err;
+        printf("ID %-17s CH ITF ENC LMK\n", "MAC");
+        NOW_ITER(peer) {
+            if (hasmac && MACCMP(param->mac, peer.peer_addr)) continue;
+            printf("%2d " MACSTR " %2d %3s %s %s\n",
+                idx++, MAC2STR(peer.peer_addr), peer.channel,
+                peer.ifidx == WIFI_IF_AP ? "AP" : "STA",
+                peer.encrypt ? "yes" : "no",
+                format_sha256(peer.lmk, sizeof(peer.lmk)));
+        }
     }
     return err;
 }
@@ -874,7 +1346,7 @@ esp_err_t ftm_request(const char *ssid, uint8_t count) {
     if (ssid) {
         if (( err = wifi_find_ap_record(ssid, NULL, true, &info) ))
             return err;
-    } else if (getBits(STA_CONN_BIT)) {
+    } else if (getbits(STA_CONN_BIT)) {
         if (( err = esp_wifi_sta_get_ap_info(&info) ))
             return err;
     } else {
@@ -899,8 +1371,8 @@ esp_err_t ftm_request(const char *ssid, uint8_t count) {
              MAC2STR(cfg.resp_mac), cfg.channel,
              cfg.frm_count, cfg.burst_period * 100);
     if (( err = esp_wifi_ftm_initiate_session(&cfg) )) return err;
-    EventBits_t bits = waitBits(FTM_DONE_BIT | FTM_FAIL_BIT, 3000);
-    clearBits(bits);
+    EventBits_t bits = waitbits(FTM_DONE_BIT | FTM_FAIL_BIT, 3000);
+    clrbits(bits);
     if (bits & FTM_FAIL_BIT) return ESP_FAIL;
     if (bits & FTM_DONE_BIT) return ESP_OK;
     esp_wifi_ftm_end_session();
@@ -933,7 +1405,7 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
     if (base == IP_EVENT) {
         if (id == IP_EVENT_AP_STAIPASSIGNED) {
             ip_event_ap_staipassigned_t *evt = data;
-            ESP_LOGI(TAG, "AP client %s assigned", inet_ntoa(evt->ip.addr));
+            ESP_LOGI(TAG, "AP client " IPSTR " assigned", IP2STR(&evt->ip));
         } else if (id == IP_EVENT_STA_LOST_IP) {
             if (esp_netif_is_netif_up(if_eth)) esp_netif_set_default_netif(if_eth);
         } else if (id == IP_EVENT_ETH_LOST_IP) {
@@ -941,25 +1413,29 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
         } else if (id == IP_EVENT_STA_GOT_IP || id == IP_EVENT_ETH_GOT_IP) {
             ip_event_got_ip_t *evt = data;
             esp_netif_set_default_netif(evt->esp_netif);
-            if (evt->ip_changed) network_print_ipinfo(evt->esp_netif, NULL);
+            esp_netif_create_ip6_linklocal(evt->esp_netif); // hotfix
+            if (evt->ip_changed) {
+                ESP_LOGI(TAG, "IF %s IP " IPSTR ", GW " IPSTR ", Mask " IPSTR,
+                    esp_netif_get_desc(evt->esp_netif), IP2STR(&evt->ip_info.ip),
+                    IP2STR(&evt->ip_info.gw), IP2STR(&evt->ip_info.netmask));
+            }
+            if (strtob(Config.app.OTA_AUTO)) update_control(NULL);
             if (strtob(Config.app.MQTT_RUN)) mqtt_control("on");
             if (strtob(Config.app.SNTP_RUN)) sntp_control("sync");
-            if (strtob(Config.app.HBT_AUTO)) hbeat_control("on");
-            if (strtob(Config.app.OTA_AUTO)) update_control(NULL);
+            if (strtob(Config.app.HBT_RUN)) hbeat_control("on");
 #ifdef CONFIG_BASE_USE_WIFI
             if (strtob(Config.net.AP_AUTO)) wifi_ap_stop();
             if (strtob(Config.net.AP_NAPT)) wifi_update_napt(evt->esp_netif);
             if (id == IP_EVENT_STA_GOT_IP) {
-                setBits(STA_CONN_BIT);
-                clearBits(STA_FAIL_BIT | STA_STOP_BIT);
+                setbits(STA_CONN_BIT | STA_WAIT_BIT);
+                clrbits(STA_FAIL_BIT | STA_STOP_BIT);
             }
 #endif
         } else if (id == IP_EVENT_GOT_IP6) {
             ip_event_got_ip6_t *evt = data;
-            network_print_ipinfo(evt->esp_netif, NULL);
-        } else if (id == IP_EVENT_AP_STAIPASSIGNED) {
-            ip_event_ap_staipassigned_t *evt = data;
-            ESP_LOGI(TAG, "AP client %s assigned", inet_ntoa(evt->ip.addr));
+            ESP_LOGI(TAG, "IF %s IP[%d] " IPV6STR " (%s)",
+                esp_netif_get_desc(evt->esp_netif), evt->ip_index,
+                IPV62STR(evt->ip6_info.ip), network_ipv6_tstr(&evt->ip6_info.ip));
 #ifdef CONFIG_ESP_NETIF_REPORT_DATA_TRAFFIC
         } else if (id == IP_EVENT_TX_RX) {
             ip_event_tx_rx_t *evt = data;
@@ -981,16 +1457,6 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             }
 #endif
         }
-#ifdef CONFIG_BASE_USE_SMARTCONFIG
-    } else if (base == SC_EVENT) {
-        if (id == SC_EVENT_GOT_SSID_PSWD) {
-            smartconfig_event_got_ssid_pswd_t *evt = data;
-            wifi_sta_start((char *)evt->ssid, (char *)evt->password, NULL);
-        } else if (id == SC_EVENT_SEND_ACK_DONE) {
-            ESP_LOGI(TAG, "SC done");
-            esp_smartconfig_stop();
-        }
-#endif
 #ifdef CONFIG_BASE_USE_WIFI
     } else if (base == WIFI_EVENT) {
         static int retry = 0;
@@ -1015,11 +1481,12 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             ESP_LOGI(TAG, "STA connect `%s` success", evt->ssid);
             retry = 0;
         } else if (id == WIFI_EVENT_STA_DISCONNECTED) {
-            clearBits(STA_CONN_BIT);
+            clrbits(STA_CONN_BIT);
             wifi_event_sta_disconnected_t *evt = data;
-            if (getBits(STA_STOP_BIT)) {
+            if (getbits(STA_STOP_BIT)) {
                 ESP_LOGI(TAG, "STA disconnect from `%s`", evt->ssid);
-                clearBits(STA_STOP_BIT);
+                clrbits(STA_STOP_BIT);
+                setbits(STA_WAIT_BIT);
             } else if (evt->reason != WIFI_REASON_NO_AP_FOUND && retry < 3) {
                 ESP_LOGD(TAG, "STA connect `%s` retry %d", evt->ssid, retry);
                 retry++;
@@ -1027,15 +1494,10 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             } else {
                 ESP_LOGW(TAG, "STA connect `%s` failed %d", evt->ssid, evt->reason);
                 retry = 0;
-                setBits(STA_FAIL_BIT);
+                setbits(STA_WAIT_BIT | STA_FAIL_BIT);
                 if (strtob(Config.net.AP_AUTO)) wifi_ap_start(NULL, NULL, NULL);
-#ifdef CONFIG_BASE_USE_SMARTCONFIG
-                if (strtob(Config.net.SC_AUTO)) {
-                    smartconfig_start_config_t cfg = SMARTCONFIG_START_CONFIG_DEFAULT();
-                    esp_smartconfig_set_type(SC_TYPE_ESPTOUCH);
-                    esp_smartconfig_start(&cfg);
-                }
-#endif
+                if (strtob(Config.net.DPP_AUTO) || strtob(Config.net.SC_AUTO))
+                    network_command("sta", "prov", "on", NULL, NULL, 0);
             }
         } else if (id == WIFI_EVENT_STA_NEIGHBOR_REP) {
             wifi_event_neighbor_report_t *evt = data;
@@ -1043,8 +1505,8 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
                 ESP_LOGI(TAG, "STA neighbor[%d] report %d", i, evt->n_report[i]);
             }
         } else if (id == WIFI_EVENT_SCAN_DONE) {
-            if (getBits(STA_SCAN_BIT)) {
-                clearBits(STA_SCAN_BIT);
+            if (getbits(STA_SCAN_BIT)) {
+                clrbits(STA_SCAN_BIT);
             } else if (!wifi_get_ap_records()) {
                 ESP_LOGI(TAG, "STA found %d AP", s_nap);
                 wifi_print_apinfo(s_aps, s_nap);
@@ -1054,7 +1516,7 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
             if (evt->status != FTM_STATUS_SUCCESS) {
                 ESP_LOGW(TAG, "FTM " MACSTR " failed: %s",
                          MAC2STR(evt->peer_mac), wifi_ftm_str(evt->status));
-                setBits(FTM_FAIL_BIT);
+                setbits(FTM_FAIL_BIT);
             } else {
                 ESP_LOGI(TAG, "FTM " MACSTR " RTT %" PRIu32 "ns, DIST %" PRIu32 "cm",
                         MAC2STR(evt->peer_mac), evt->rtt_est, evt->dist_est);
@@ -1070,7 +1532,7 @@ static void cb_network(void *a, esp_event_base_t base, int32_t id, void *data) {
                 }
                 }
                 TRYFREE(ents);
-                setBits(FTM_DONE_BIT);
+                setbits(FTM_DONE_BIT);
             }
         }
 #endif
@@ -1103,33 +1565,36 @@ void network_initialize() {
 #ifdef CONFIG_BASE_USE_WIFI
         "wifi", "wifi_init", "net80211",
 #endif
+#ifdef CONFIG_BASE_USE_SMARTCONFIG
+        "smartconfig",
+#endif
     };
     ITERV(tag, tags) { esp_log_level_set(tag, ESP_LOG_WARN); }
 
-    evtgrp = xEventGroupCreate();
+    ESP_ERROR_CHECK( (evtgrp = xEventGroupCreate()) ? ESP_OK : ESP_ERR_NO_MEM );
 #ifdef CONFIG_BASE_USE_ETH
     esp_netif_config_t netif_config = ESP_NETIF_DEFAULT_ETH();
     if_eth = esp_netif_new(&netif_config);
     ESP_ERROR_CHECK( network_eth_init() );
     ESP_ERROR_CHECK( esp_netif_attach(if_eth, eth.glue) );
+    ESP_ERROR_CHECK( esp_netif_tx_rx_event_enable(if_eth) );
     ESP_ERROR_CHECK( esp_eth_start(eth.hdl) );
-    ESP_ERROR_CHECK( REGEVTS(ETH, cb_network, NULL, NULL) );
+    ESP_ERROR_CHECK( REGEVT(ETH, cb_network) );
 #endif
 #ifdef CONFIG_BASE_USE_WIFI
+    wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
     if_ap = esp_netif_create_default_wifi_ap();
     if_sta = esp_netif_create_default_wifi_sta();
-    wifi_init_config_t init_config = WIFI_INIT_CONFIG_DEFAULT();
+    ESP_ERROR_CHECK( esp_netif_tx_rx_event_enable(if_ap) );
+    ESP_ERROR_CHECK( esp_netif_tx_rx_event_enable(if_sta) );
     ESP_ERROR_CHECK( esp_wifi_init(&init_config) );
     ESP_ERROR_CHECK( esp_wifi_get_config(WIFI_IF_AP, &config_ap) );
     ESP_ERROR_CHECK( esp_wifi_get_config(WIFI_IF_STA, &config_sta) );
     ESP_ERROR_CHECK( esp_wifi_set_mode(WIFI_MODE_NULL) );
     ESP_ERROR_CHECK( esp_wifi_start() );
-    ESP_ERROR_CHECK( REGEVTS(WIFI, cb_network, NULL, NULL) );
+    ESP_ERROR_CHECK( REGEVT(WIFI, cb_network) );
 #endif
-#ifdef CONFIG_BASE_USE_SMARTCONFIG
-    ESP_ERROR_CHECK( REGEVTS(SC, cb_network, NULL, NULL) );
-#endif
-    ESP_ERROR_CHECK( REGEVTS(IP, cb_network, NULL, NULL) );
+    ESP_ERROR_CHECK( REGEVT(IP, cb_network) );
 
     if (strtob(Config.app.MDNS_RUN) && ( err = mdns_control("on") ))
         ESP_LOGE(TAG, "Failed to start mDNS: %s", esp_err_to_name(err));
@@ -1155,7 +1620,7 @@ void network_initialize() {
 
 static esp_netif_t *find_netif(const char *iface) {
     esp_netif_t *ifp = NULL, *dft = esp_netif_get_default_netif();
-    if (!strlen(iface ?: "")) return dft;
+    if (EMPTY(iface)) return dft;
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 2, 0)
     while (( ifp = esp_netif_next_unsafe(ifp) )) {
 #else
@@ -1173,33 +1638,44 @@ esp_err_t network_command(
     if (!itf || !cmd) goto exit;
     esp_netif_ip_info_t ip;
     esp_netif_t *ifp = find_netif(itf);
-    esp_err_t err = !ifp ? ESP_ERR_INVALID_ARG : esp_netif_get_ip_info(ifp, &ip);
-    if (err) return err;
+    esp_err_t err = ifp ? ESP_OK : ESP_ERR_INVALID_ARG;
+    if (err || ( err = esp_netif_get_ip_info(ifp, &ip) )) return err;
     err = ESP_ERR_NOT_SUPPORTED;
     if (!strcasecmp(cmd, "dft")) {
-#ifndef IDF_TARGET_V4
         err = esp_netif_set_default_netif(ifp);
-#endif
     } else if (!strcasecmp(cmd, "scan")) {
 #ifdef CONFIG_BASE_USE_WIFI
         if (ifp == if_sta) return wifi_sta_scan(ssid, 0, tout_ms, true);
 #endif
-    } else if (!strcasecmp(cmd, "on") || !strcasecmp(cmd, "up")) {
-#ifdef CONFIG_BASE_USE_WIFI
-        if (ifp == if_ap) {
-            err = wifi_ap_start(ssid, pass, ipv4);
-        } else if (ifp == if_sta) {
-            err = wifi_sta_start(ssid, pass, ipv4);
-            if (!err && tout_ms) err = wifi_sta_wait(tout_ms);
+    } else if (!strcasecmp(cmd, "prov")) {
+#if CONFIG_BASE_USE_EASYCONNECT || CONFIG_BASE_USE_SMARTCONFIG
+        if (ifp != if_sta) return err;
+        if (!strcasecmp(ssid ?: "", "qrcode")) {
+#   ifdef CONFIG_BASE_USE_EASYCONNECT
+            if (!dpp_qrcode) return ESP_ERR_INVALID_STATE;
+            puts(dpp_qrcode); return ESP_OK;
+#   else
+            return ESP_ERR_NOT_SUPPORTED;
+#   endif
         }
+        if (getbits(STA_CONN_BIT)) {
+            if (( err = wifi_sta_stop(false) )) return err;
+            err = wifi_sta_wait(tout_ms ?: 100);
+            if (err == ESP_ERR_TIMEOUT || !err) return err ?: ESP_FAIL;
+        }
+        TaskHandle_t task = xTaskGetHandle("prov");
+        if (!strtob(ssid)) {
+            setbits(STA_WAIT_BIT);
+        } else if (!task) {
+            xTaskCreate(prov_task, "prov", 4096, NULL, 5, &task);
+            if (!task) return ESP_ERR_NO_MEM;
+        }
+        return ESP_OK;
 #endif
-    } else if (!strcasecmp(cmd, "off") || !strcasecmp(cmd, "down")) {
-#ifdef CONFIG_BASE_USE_WIFI
-        if (ifp == if_ap) {
-            err = wifi_ap_stop();
-        } else if (ifp == if_sta) {
-            err = wifi_sta_stop(!strcasecmp(cmd, "down"));
-        }
+    } else if (!strcasecmp(cmd, "txrx")) {
+#ifdef CONFIG_ESP_NETIF_REPORT_DATA_TRAFFIC
+        if (strtob(ssid)) return esp_netif_tx_rx_event_enable(ifp);
+        return esp_netif_tx_rx_event_disable(ifp);
 #endif
     } else if (!strcasecmp(cmd, "info") || !strcasecmp(cmd, "list")) {
 #ifdef CONFIG_BASE_USE_WIFI
@@ -1208,86 +1684,47 @@ esp_err_t network_command(
 #endif
     } else if (!strcasecmp(cmd, "ip") || !strcasecmp(cmd, "static")) {
         if (!ipv4) {
-            puts(inet_ntoa(ip.ip.addr));
-            err = ESP_OK;
-        } else {
-        err = network_ctrl_static(ifp, ipv4, NULL, NULL);
+            printf(IPSTR "\n", IP2STR(&ip.ip));
+            return ESP_OK;
         }
+        err = network_ctrl_static(ifp, ipv4, NULL, NULL);
     } else if (!strcasecmp(cmd, "gw") || !strcasecmp(cmd, "gateway")) {
         if (!ipv4) {
-            puts(inet_ntoa(ip.gw.addr));
-            err = ESP_OK;
-        } else {
-        err = network_ctrl_static(ifp, NULL, ipv4, NULL);
+            printf(IPSTR "\n", IP2STR(&ip.gw));
+            return ESP_OK;
         }
+        err = network_ctrl_static(ifp, NULL, ipv4, NULL);
     } else if (!strcasecmp(cmd, "nm") || !strcasecmp(cmd, "netmask")) {
         if (!ipv4) {
-            puts(inet_ntoa(ip.netmask.addr));
-            err = ESP_OK;
-        } else {
-        err = network_ctrl_static(ifp, NULL, NULL, ipv4);
+            printf(IPSTR "\n", IP2STR(&ip.netmask));
+            return ESP_OK;
         }
+        err = network_ctrl_static(ifp, NULL, NULL, ipv4);
+    } else if (!strcasecmp(cmd, "up") || (strcasecmp(cmd, "down") && strtob(cmd))) {
+#ifdef CONFIG_BASE_USE_WIFI
+        if (ifp == if_ap) {
+            err = wifi_ap_start(ssid, pass, ipv4);
+        } else if (ifp == if_sta) {
+            err = wifi_sta_start(ssid, pass, ipv4);
+            if (!err && tout_ms) err = wifi_sta_wait(tout_ms);
+        }
+#endif
     } else {
-        err = ESP_ERR_INVALID_ARG;
+#ifdef CONFIG_BASE_USE_WIFI
+        if (ifp == if_ap) {
+            err = wifi_ap_stop();
+        } else if (ifp == if_sta) {
+            err = wifi_sta_stop(!strcasecmp(cmd, "down"));
+            if (!err && tout_ms) {
+                err = wifi_sta_wait(tout_ms);
+                err = err == ESP_ERR_TIMEOUT ? err : !err;
+            }
+        }
+#endif
     }
     if (err) return err;
 exit:
     return network_print_detail(itf);
-}
-
-esp_err_t network_parse_host(const char *host, void *ipaddr) {
-    ip_addr_t tmp = { 0 };
-    struct addrinfo *res = NULL, *ptr;
-    if (getaddrinfo(host, NULL, NULL, &res) != 0) return ESP_ERR_INVALID_ARG;
-    for (ptr = res; ptr; ptr = ptr->ai_next) {
-        if (ptr->ai_family == AF_INET) {
-            struct sockaddr_in *addr4 = (struct sockaddr_in *)ptr->ai_addr;
-            inet_addr_to_ip4addr(ip_2_ip4(&tmp), &addr4->sin_addr);
-        } else {
-            struct sockaddr_in6 *addr6 = (struct sockaddr_in6 *)ptr->ai_addr;
-            inet6_addr_to_ip6addr(ip_2_ip6(&tmp), &addr6->sin6_addr);
-        }
-        if (!ipaddr) {
-            puts(ipaddr_ntoa(&tmp));
-        } else if (ptr == res) {
-            *(ip_addr_t *)ipaddr = tmp;
-        }
-    }
-    freeaddrinfo(res);
-    return ESP_OK;
-}
-
-esp_err_t network_parse_addr(const char *host, uint16_t port, void *sockaddr) {
-    ip_addr_t tmp;
-    esp_err_t err = network_parse_host(host, &tmp);
-    if (!err) {
-        struct sockaddr_in *p4 = sockaddr;
-        struct sockaddr_in6 *p6 = sockaddr;
-        if (IP_IS_V4(&tmp)) {
-            p4->sin_len = sizeof(*p4);
-            p4->sin_family = AF_INET;
-            p4->sin_port = htons(port);
-            inet_addr_from_ip4addr(&p4->sin_addr, ip_2_ip4(&tmp));
-            memset(p4->sin_zero, 0, SIN_ZERO_LEN);
-        } else {
-            p6->sin6_len = sizeof(*p6);
-            p6->sin6_family = AF_INET6;
-            p6->sin6_port = htons(port);
-            inet6_addr_from_ip6addr(&p6->sin6_addr, ip_2_ip6(&tmp));
-            p6->sin6_scope_id = ip6_addr_zone(ip_2_ip6(&tmp));
-        }
-    }
-    return err;
-}
-
-static uint32_t network_local_ip(esp_netif_t *ifp) {
-    esp_netif_ip_info_t ip = { 0 };
-    if (!ifp) ifp = esp_netif_get_default_netif();
-    if (!ifp && esp_netif_is_netif_up(if_eth)) ifp = if_eth;
-    if (!ifp && esp_netif_is_netif_up(if_sta)
-             && getBits(STA_CONN_BIT)) ifp = if_sta;
-    if (ifp) esp_netif_get_ip_info(ifp, &ip);
-    return ip.ip.addr;
 }
 
 /*
@@ -1359,7 +1796,8 @@ esp_err_t pmap_command(
             err = config_nvs_write(pmap.nvs, "ctx", &pmap, PMAP_CTX_SIZE);
             err = err < 0 ? -err : ESP_OK;
         } else if (strtob(ctrl)) {
-            uint32_t saddr = network_local_ip(NULL);
+            uint32_t saddr = network_local_ipv4(NULL, NULL);
+            if (!saddr) return ESP_ERR_INVALID_STATE;
             ITERP(ent, pmap.ents) {
                 if (!ent->proto) continue;
                 ip_portmap_add(ent->proto, saddr, ent->sport, ent->daddr, ent->dport);
@@ -1374,10 +1812,10 @@ esp_err_t pmap_command(
         printf("PMap SPort DPort DAddr\n");
         ITERP(ent, pmap.ents) {
             if (!ent->proto) continue;
-            uint32_t daddr = ent->daddr; // suppress -Waddress-of-packed-member
-            printf("%4s %5u %5u %s\n",
+            esp_ip4_addr_t daddr = { .addr = ent->daddr };
+            printf("%4s %5u %5u " IPSTR "\n",
                    ent->proto == IPPROTO_TCP ? "TCP" : "UDP",
-                   ent->sport, ent->dport, inet_ntoa(daddr));
+                   ent->sport, ent->dport, IP2STR(&daddr));
         }
 
     }
@@ -1409,10 +1847,10 @@ static struct {
     pcap_link_type_t type;
     pcap_file_handle_t hdl;
     filesys_path_t filename;
-} pcap;
+} pcap = { .tout = TIMEOUT(50) };
 
 #   ifdef CONFIG_BASE_USE_WIFI
-static void pcap_wifi_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
+static void cb_pcap_wifi(void *buf, wifi_promiscuous_pkt_type_t type) {
     wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t *)buf;
     if (type == WIFI_PKT_MISC || pkt->rx_ctrl.rx_state) return;
     pcap_pkt_t record = {
@@ -1427,13 +1865,12 @@ static void pcap_wifi_cb(void *buf, wifi_promiscuous_pkt_type_t type) {
 #   endif
 
 #   ifdef CONFIG_BASE_USE_ETH
-static esp_err_t pcap_eth_cb(
+static esp_err_t cb_pcap_eth(
     esp_eth_handle_t hdl, uint8_t *buf, uint32_t len, void *arg
 ) {
     const struct timeval *tv = get_systime_us();
     pcap_pkt_t record = { buf, len, tv->tv_sec, tv->tv_usec };
-    if (xQueueSend(pcap.queue, &record, pcap.tout) != pdTRUE)
-        free(record.buffer);
+    if (!xQueueSend(pcap.queue, &record, pcap.tout)) free(record.buffer);
     return ESP_OK;
 }
 #   endif
@@ -1453,13 +1890,13 @@ static void pcap_task(void *arg) {
         err = ESP_ERR_NO_MEM;
 #   ifdef CONFIG_BASE_USE_WIFI
     } else if (pcap.type == PCAP_LINK_TYPE_802_11) {
-        if (!err) err = esp_wifi_set_promiscuous_rx_cb(pcap_wifi_cb);
+        if (!err) err = esp_wifi_set_promiscuous_rx_cb(cb_pcap_wifi);
         if (!err) err = esp_wifi_set_promiscuous(true);
 #   endif
 #   ifdef CONFIG_BASE_USE_ETH
     } else if (pcap.type == PCAP_LINK_TYPE_ETHERNET) {
         bool enable = true;
-        if (!err) err = esp_eth_update_input_path(eth.hdl, pcap_eth_cb, NULL);
+        if (!err) err = esp_eth_update_input_path(eth.hdl, cb_pcap_eth, NULL);
         if (!err) err = esp_eth_ioctl(eth.hdl, ETH_CMD_S_PROMISCUOUS, &enable);
 #   endif
     } else {
@@ -1468,11 +1905,13 @@ static void pcap_task(void *arg) {
     if (err) goto clean;
     pcap_pkt_t pkt;
     uint32_t cnt = 0;
-    clearBits(PCAP_STOP_BIT);
-    while (!getBits(PCAP_STOP_BIT)) {
+    clrbits(PCAP_STOP_BIT);
+    while (!getbits(PCAP_STOP_BIT)) {
         if (!xQueueReceive(pcap.queue, &pkt, pcap.tout)) continue;
         pcap_capture_packet(
-            pcap.hdl, pkt.buffer, pkt.length, pkt.seconds, pkt.microseconds);
+            pcap.hdl, pkt.buffer, pkt.length,
+            pkt.seconds, pkt.microseconds
+        );
         TRYFREE(pkt.buffer);
         if (pcap.npkt && cnt++ > pcap.npkt) break;
     }
@@ -1494,7 +1933,7 @@ clean:
 exit:
     TRYNULL(pcap.hdl, pcap_del_session);
     TRYNULL(pcap.queue, vQueueDelete);
-    setBits(PCAP_STOP_BIT);
+    setbits(PCAP_STOP_BIT);
     vTaskDelete(NULL);
 }
 
@@ -1502,7 +1941,7 @@ esp_err_t pcap_command(const char *ctrl, const char *itf, uint32_t npkt) {
     TaskHandle_t task = xTaskGetHandle("pcap");
     if (ctrl) {
         if (!strtob(ctrl)) {
-            setBits(PCAP_STOP_BIT);
+            setbits(PCAP_STOP_BIT);
         } else if (!task) {
             if (startswith(itf, "wifi")) {
                 pcap.type = PCAP_LINK_TYPE_802_11;
@@ -1514,7 +1953,7 @@ esp_err_t pcap_command(const char *ctrl, const char *itf, uint32_t npkt) {
             if (npkt != UINT32_MAX) pcap.npkt = npkt;
             xTaskCreate(pcap_task, "pcap", 8192, NULL, 10, &task);
             if (!task) return ESP_ERR_NO_MEM;
-            if (waitBits(PCAP_STOP_BIT, 100)) return ESP_FAIL;
+            if (waitbits(PCAP_STOP_BIT, 100)) return ESP_FAIL;
         }
     } else {
         printf("PCap %srunning\n", task ? "" : "not ");
@@ -1542,7 +1981,7 @@ static void cb_mqtt(void *a, esp_event_base_t base, int32_t id, void *data) {
     esp_mqtt_event_t *evt = data;
     switch (id) {
     case MQTT_EVENT_CONNECTED:
-        setBits(MQTT_CONN_BIT);
+        setbits(MQTT_CONN_BIT);
         ESP_LOGI(TAG, "MQTT connected to %s (session: %d)",
                  mqtt.url->valuestring, evt->session_present);
         for (cJSON *item = mqtt.tpc->child; item; item = item->next) {
@@ -1556,7 +1995,7 @@ static void cb_mqtt(void *a, esp_event_base_t base, int32_t id, void *data) {
         }
         mqtt_control("dump");
         break;
-    case MQTT_EVENT_DISCONNECTED: clearBits(MQTT_CONN_BIT); break;
+    case MQTT_EVENT_DISCONNECTED: clrbits(MQTT_CONN_BIT); break;
     case MQTT_EVENT_PUBLISHED: FALLTH;
     case MQTT_EVENT_SUBSCRIBED: FALLTH;
     case MQTT_EVENT_UNSUBSCRIBED: {
@@ -1625,7 +2064,7 @@ esp_err_t mqtt_command(
             cfg.credentials.client_id = NULL; // use default platform cid
         }
         if (mqtt.hdl) {
-            bool connected = getBits(MQTT_CONN_BIT);
+            bool connected = getbits(MQTT_CONN_BIT);
             if (connected) mqtt_control("off");
             err = esp_mqtt_set_config(mqtt.hdl, &cfg);
             if (connected) mqtt_control("on");
@@ -1668,13 +2107,13 @@ esp_err_t mqtt_command(
                 cJSON_AddNumberToObject(mqtt.tpc, topic, msgid);
             }
         } else if (!strcasecmp(ctrl, "pub")) {
-            if (!pub || !pub->data || !pub->len) return ESP_ERR_INVALID_ARG;
+            if (!pub || !pub->msg || !pub->len) return ESP_ERR_INVALID_ARG;
             if (!topic) {
                 if (cJSON_GetArraySize(mqtt.tpc) != 1) return ESP_ERR_INVALID_ARG;
                 topic = mqtt.tpc->child->string; // use first topic
             }
             if (( msgid = esp_mqtt_client_publish(
-                mqtt.hdl, topic, pub->data, pub->len, pub->qos, pub->retain
+                mqtt.hdl, topic, pub->msg, pub->len, pub->qos, pub->retain
             ) ) < 0) {
                 err = msgid == -2 ? ESP_ERR_NO_MEM : ESP_FAIL;
             } else {
@@ -1718,25 +2157,27 @@ esp_err_t mqtt_command(
             cJSON_Delete(ctx);
         } else if (!strtob(ctrl)) {
             if (!( err = esp_mqtt_client_stop(mqtt.hdl) )) {
-                clearBits(MQTT_CONN_BIT);
+                clrbits(MQTT_CONN_BIT);
                 for (cJSON *item = mqtt.tpc->child; item; item = item->next) {
                     cJSON_SetNumberValue(item, 0);
                 }
             }
-        } else if (!getBits(MQTT_CONN_BIT)) {
+        } else if (!getbits(MQTT_CONN_BIT)) {
             err = esp_mqtt_client_start(mqtt.hdl);
-            waitBits(MQTT_CONN_BIT, 3000);
+            waitbits(MQTT_CONN_BIT, 3000);
         }
+    } else if (pub) {
+        err = mqtt_command("pub", NULL, NULL, pub);
     } else if (!mqtt.hdl || !mqtt.ctx) {
         printf("MQTT not %s\n", mqtt.hdl ? "loaded" : "inited");
     } else {
         printf("MQTT %sconnected to %s\n",
-               getBits(MQTT_CONN_BIT) ? "" : "not ", mqtt.url->valuestring);
+               getbits(MQTT_CONN_BIT) ? "" : "not ", mqtt.url->valuestring);
         for (cJSON *item = mqtt.tpc->child; item; item = item->next) {
             printf(" - %5d: %s\n", item->valueint, item->string);
         }
     }
-    return ESP_OK;
+    return err;
 }
 #else // WITH_MQTT
 esp_err_t mqtt_command(const char *c, const char *u, const char *t, const mqtt_pub_t *p) {
@@ -1804,8 +2245,8 @@ static esp_err_t mdns_query_service(
 
 static esp_err_t mdns_query_host(const char *hostname, uint16_t tout_ms) {
     ESP_LOGI(TAG, "Query A/AAAA: %s.local", hostname);
-    struct esp_ip4_addr ip4 = { .addr = 0 };
-    struct esp_ip6_addr ip6 = { .addr = 0 };
+    esp_ip4_addr_t ip4;
+    esp_ip6_addr_t ip6;
     esp_err_t err4 = mdns_query_a(hostname, tout_ms, &ip4);
     esp_err_t err6 = mdns_query_aaaa(hostname, tout_ms, &ip6);
     if (err4 == ESP_ERR_NOT_FOUND && err6 == ESP_ERR_NOT_FOUND) {
@@ -1897,7 +2338,7 @@ esp_err_t mdns_command(
 
 #include "esp_sntp.h"
 
-static void sntp_notification_cb(struct timeval *tv) {
+static void cb_sntp_notification(struct timeval *tv) {
     ESP_LOGI(TAG, "SNTP time synced: %s", format_timestamp_us(tv));
 }
 
@@ -1910,18 +2351,17 @@ static const char * sntp_status_str(sntp_sync_status_t status) {
 
 static esp_err_t sntp_setserverhost(uint8_t idx, const char *host) {
     esp_err_t err = ESP_ERR_INVALID_ARG;
-    if (idx > SNTP_MAX_SERVERS || !strlen(host ?: "")) return err;
-    ip_addr_t addr = { 0 };
-    err = network_parse_host(host, &addr);
-    if (getBits(STA_CONN_BIT) && err) return err;
+    if (idx > SNTP_MAX_SERVERS || EMPTY(host)) return err;
     bool updated = false;
 #if SNTP_SERVER_DNS
-    if (!str_like_ipaddr(host)) {
+    if (!address_like_numeric(host)) {
         esp_sntp_setservername(idx, host);
         updated = true;
     } else
 #endif
     if (!err) {
+        ip_addr_t addr = { 0 };
+        if (( err = network_parse_ipaddr(host, &addr) )) return err;
         esp_sntp_setserver(idx, &addr);
         updated = true;
     }
@@ -1950,7 +2390,7 @@ esp_err_t sntp_command(
         } else if (!strtob(ctrl)) {
             esp_sntp_stop();
         } else if (!enabled) {
-            esp_sntp_set_time_sync_notification_cb(sntp_notification_cb);
+            esp_sntp_set_time_sync_notification_cb(cb_sntp_notification);
             esp_sntp_setoperatingmode(SNTP_OPMODE_POLL);
             sntp_setserverhost(0, Config.app.SNTP_HOST);
             esp_sntp_init();
@@ -2063,7 +2503,7 @@ esp_err_t ping_command(
     }
 
     esp_ping_config_t cfg = ESP_PING_DEFAULT_CONFIG();
-    if (network_parse_host(host, &cfg.target_addr)) {
+    if (network_parse_ipaddr(host, &cfg.target_addr)) {
         printf("Invalid host to ping: %s\n", host);
         return ESP_ERR_INVALID_ARG;
     }
@@ -2095,48 +2535,66 @@ esp_err_t iperf_command(
     const char *host, uint16_t port, uint16_t length,
     uint8_t intv_sec, uint8_t tout_sec, bool udp, bool abort
 ) {
+    esp_err_t err = ESP_OK;
     TaskHandle_t server = xTaskGetHandle(IPERF_TRAFFIC_TASK_NAME);
     TaskHandle_t client = xTaskGetHandle(IPERF_REPORT_TASK_NAME);
     if (abort) {
-        if (server) puts("IPerf server stopped");
-        if (client) puts("IPerf client stopped");
-        return iperf_stop();
+        if (!( err = iperf_stop_instance(IPERF_ALL_INSTANCES_ID) )) {
+            if (server) puts("IPerf server stopped");
+            if (client) puts("IPerf client stopped");
+        }
     } else if (server || client) {
         printf("IPerf %s running\n", server ? "server" : "client");
-        return ESP_OK;
-    } else if (host && !strlen(host)) {
+    } else if (host && !*host) {
         puts("IPerf not running");
-        return ESP_OK;
-    }
-
-    uint32_t flag = host ? IPERF_FLAG_CLIENT : IPERF_FLAG_SERVER;
-    uint32_t src_ip = network_local_ip(NULL);
-    uint32_t dst_ip = ipaddr_addr(host ?: "");
-    esp_err_t err = src_ip ? ESP_OK : ESP_ERR_INVALID_STATE;
-    if (!err && host && dst_ip == IPADDR_NONE) err = ESP_ERR_INVALID_ARG;
-    if (err) return err;
-
-    iperf_cfg_t cfg = {
-        .flag = flag | (udp ? IPERF_FLAG_UDP : IPERF_FLAG_TCP),
-        .destination_ip4 = host ? dst_ip : 0,
-        .source_ip4 = src_ip,
-        .type = IPERF_IP_TYPE_IPV4, // currently only support IPv4
-        .dport = (port && host) ? port : IPERF_DEFAULT_PORT,
-        .sport = (port && !host) ? port : IPERF_DEFAULT_PORT,
-        .interval = intv_sec ?: IPERF_DEFAULT_INTERVAL,
-        .time = (tout_sec ?: IPERF_DEFAULT_TIME) + (host ? 0 : 1),
-        .len_send_buf = length,
-        .bw_lim = IPERF_DEFAULT_NO_BW_LIMIT
-    };
-    if (cfg.time < cfg.interval) cfg.time = cfg.interval;
-    if (!( err = iperf_start(&cfg) )) {
-        char sip[IP4ADDR_STRLEN_MAX], dip[IP4ADDR_STRLEN_MAX];
-        ESP_LOGI(TAG,
-            "IPerf %s-%s src=%s:%u, dst=%s:%u, intv=%" PRIu32 ", tout=%" PRIu32,
-            udp ? "udp" : "tcp", host ? "client" : "server",
-            inet_ntoa_r(cfg.source_ip4, sip, sizeof(sip)), cfg.sport,
-            inet_ntoa_r(cfg.destination_ip4, dip, sizeof(dip)), cfg.dport,
-            cfg.interval, cfg.time);
+    } else {
+        ip_addr_t dst_addr;
+        iperf_cfg_t cfg = {
+            .format = KBYTES_PER_SEC,
+            .flag = (host ? IPERF_FLAG_CLIENT : IPERF_FLAG_SERVER) |
+                    (udp ? IPERF_FLAG_UDP : IPERF_FLAG_TCP),
+            .interval = intv_sec ?: IPERF_DEFAULT_INTERVAL,
+            .time = (tout_sec ?: IPERF_DEFAULT_TIME) + (host ? 0 : 1),
+            .bw_lim = IPERF_DEFAULT_NO_BW_LIMIT,
+            .dport = (port && host) ? port : IPERF_DEFAULT_PORT,
+            .sport = (port && !host) ? port : IPERF_DEFAULT_PORT,
+            .len_send_buf = length,
+        };
+        if (cfg.time < cfg.interval) cfg.time = cfg.interval;
+        if (!host) {                            // server mode
+            if (network_local_ipaddr(NULL, ESP_IPADDR_TYPE_ANY, &cfg.source) < 0)
+                return ESP_ERR_INVALID_STATE;   // not connected
+        } else if (( err = network_parse_ipaddr(host, &dst_addr) )) {
+            return err;                         // invalid host
+        } else if (dst_addr.type == IPADDR_TYPE_V4) {
+            cfg.destination.type = cfg.source.type = ESP_IPADDR_TYPE_V4;
+            cfg.destination.u_addr.ip4.addr = dst_addr.u_addr.ip4.addr;
+            if (!network_local_ipv4(NULL, &cfg.source.u_addr.ip4))
+                return ESP_ERR_INVALID_STATE;   // no ipv4
+        } else if (dst_addr.type == IPADDR_TYPE_V6) {
+            cfg.destination.type = cfg.source.type = ESP_IPADDR_TYPE_V6;
+            memcpy(cfg.destination.u_addr.ip6.addr, dst_addr.u_addr.ip6.addr, 16);
+            if (!network_local_ipv6(NULL, &cfg.source.u_addr.ip6))
+                return ESP_ERR_INVALID_STATE;   // no ipv6
+        }
+        if (iperf_start_instance(&cfg) < 0) return ESP_FAIL;
+        if (cfg.source.type == ESP_IPADDR_TYPE_V4) {
+            ESP_LOGI(TAG,
+                "IPerf %s-%s src=" IPSTR ":%u, dst=" IPSTR ":%u,"
+                " intv=%" PRIu32 ", tout=%" PRIu32,
+                udp ? "udp" : "tcp", host ? "client" : "server",
+                IP2STR(&cfg.source.u_addr.ip4), cfg.sport,
+                IP2STR(&cfg.destination.u_addr.ip4), cfg.dport,
+                cfg.interval, cfg.time);
+        } else {
+            ESP_LOGI(TAG,
+                "IPerf %s-%s src=" IPV6STR ":%u, dst=" IPV6STR ":%u,"
+                " intv=%" PRIu32 ", tout=%" PRIu32,
+                udp ? "udp" : "tcp", host ? "client" : "server",
+                IPV62STR(cfg.source.u_addr.ip6), cfg.sport,
+                IPV62STR(cfg.destination.u_addr.ip6), cfg.dport,
+                cfg.interval, cfg.time);
+        }
     }
     return err;
 }
@@ -2152,75 +2610,77 @@ esp_err_t iperf_command(
 #endif // WITH_IPERF
 
 typedef struct {
-    const char *host;
-    uint16_t port;
+    char host[ADDRSTRLEN], port[6];
     uint32_t tout;
 } timesync_param_t;
 
 static void timesync_server_task(void *arg) {
-    timesync_param_t param = *(timesync_param_t *)arg;
-    if (timesync_server_init(param.port)) {
+    timesync_param_t *param = arg;
+    if (timesync_server_init(param->port)) {
         ESP_LOGE(TAG, "Could not init TimeSync Server");
     } else {
-        clearBits(TSS_STOP_BIT);
-        while (!getBits(TSS_STOP_BIT)) {
-            timesync_server_loop(param.tout);
+        clrbits(TSS_STOP_BIT);
+        while (!getbits(TSS_STOP_BIT)) {
+            timesync_server_loop(param->tout);
         }
     }
+    free(param);
     timesync_server_exit();
-    setBits(TS_STOPPED_BIT | TSS_STOP_BIT);
+    setbits(TS_STOPPED_BIT | TSS_STOP_BIT);
     vTaskDelete(NULL);
 }
 
 static void timesync_client_task(void *arg) {
-    timesync_param_t param = *(timesync_param_t *)arg;
-    if (timesync_client_init(param.host, param.port)) {
+    timesync_param_t *param = arg;
+    if (timesync_client_init(param->host, param->port)) {
         ESP_LOGE(TAG, "Could not init TimeSync Client");
     } else {
         double offset = 0;
-        clearBits(TSC_STOP_BIT);
-        while (!getBits(TSC_STOP_BIT)) {
+        clrbits(TSC_STOP_BIT);
+        while (!getbits(TSC_STOP_BIT)) {
             if (timesync_client_xsync(&offset, 5) < 0) break;
-            ESP_LOGI(TAG, "TimeSync offset with %s: %.9f", param.host, offset);
-            waitBits(TSC_STOP_BIT, param.tout);
+            ESP_LOGI(TAG, "TimeSync offset with %s: %.9f", param->host, offset);
+            waitbits(TSC_STOP_BIT, param->tout);
         }
     }
+    free(param);
     timesync_client_exit();
-    setBits(TS_STOPPED_BIT | TSC_STOP_BIT);
+    setbits(TS_STOPPED_BIT | TSC_STOP_BIT);
     vTaskDelete(NULL);
 }
 
 esp_err_t tsync_command(
-    const char *host, uint16_t port, uint32_t tout_ms, bool abort
+    const char *host, const char *port, uint32_t tout_ms, bool abort
 ) {
     TaskHandle_t server = xTaskGetHandle("tss");
     TaskHandle_t client = xTaskGetHandle("tsc");
     if (abort) {
         // do NOT use vTaskDelete because we need clean on exit
-        setBits(TSS_STOP_BIT | TSC_STOP_BIT);
-        if (waitBits(TS_STOPPED_BIT, tout_ms ?: 1000)) {
+        setbits(TSS_STOP_BIT | TSC_STOP_BIT);
+        if (waitbits(TS_STOPPED_BIT, tout_ms ?: 1000)) {
             if (server) puts("TimeSync server stopped");
             if (client) puts("TimeSync client stopped");
         }
     } else if (server || client) {
         printf("TimeSync %s running\n", server ? "server" : "client");
-    } else if (host && !strlen(host)) {
+    } else if (host && !*host) {
         puts("TimeSync not running");
     } else {
-        timesync_param_t param = {
-            .host = host,
-            .port = port ?: TIMESYNC_PORT,
-            .tout = tout_ms ?: (host ? 30000 : 500), // client 30s, server 0.5s
-        };
+        timesync_param_t *param = calloc(1, sizeof(timesync_param_t));
+        if (!param) return ESP_ERR_NO_MEM;
+        if (host) strlcpy(param->host, host, sizeof(param->host));
+        if (port) strlcpy(param->port, port, sizeof(param->port));
+        else snprintf(param->port, sizeof(param->port), "%d", TIMESYNC_PORT);
+        param->tout = tout_ms ?: (host ? 30000 : 500); // client 30s, server 0.5s
         TaskHandle_t task = NULL;
-        clearBits(TS_STOPPED_BIT);
+        clrbits(TS_STOPPED_BIT);
         if (host) {
-            xTaskCreate(timesync_client_task, "tsc", 1024, &param, 5, &task);
+            xTaskCreate(timesync_client_task, "tsc", 4096, param, 5, &task);
         } else {
-            xTaskCreate(timesync_server_task, "tss", 2048, &param, 5, &task);
+            xTaskCreate(timesync_server_task, "tss", 4096, param, 5, &task);
         }
-        if (!task) return ESP_ERR_NO_MEM;
-        if (waitBits(TS_STOPPED_BIT, 100)) return ESP_FAIL;
+        if (!task) { free(param); return ESP_ERR_NO_MEM; }
+        if (waitbits(TS_STOPPED_BIT, 100)) return ESP_FAIL;
     }
     return ESP_OK;
 }
@@ -2284,24 +2744,25 @@ static void hbeat_task(void *arg) {
 #endif
     esp_err_t err = ESP_OK;
     esp_http_client_handle_t client = NULL;
-    uint32_t addr = 0, blen = 256, rlen = 2048;
-    char mac[9], macstr[32], *body = NULL, *resp = NULL;
+    int blen = 512, rlen = 2048;
+    char mac[9], macstr[32], addr[ADDRSTRLEN], *body = NULL, *resp = NULL;
     cJSON *info = cJSON_CreateObject(), *rst = NULL, *ts = NULL, *ip = NULL;
     if (( err = EMALLOC(body, blen) )
      || ( err = EMALLOC(resp, rlen) )
      || ( err = esp_base_mac_addr_get((uint8_t *)mac) )
     ) goto error;
+    memset(addr, ' ', sizeof(addr) - 1); addr[sizeof(addr) - 1] = '\0';
     snprintf(macstr, sizeof(macstr), MACSTR, MAC2STR(mac));
     cJSON_AddStringToObject(info, "sn", Config.info.UID);
     cJSON_AddStringToObject(info, "mac_address", macstr);
     ts = cJSON_AddStringToObject(info, "beat_time", "XXXX-XX-XX XX:XX:XX");
-    ip = cJSON_AddStringToObject(info, "ip_address", "XXX.XXX.XXX.XXX");
+    ip = cJSON_AddStringToObject(info, "ip_address", addr);
     if (!info || !ts || !ip) {
         err = ESP_ERR_NO_MEM;
         goto error;
     }
-    if (!strlen(hbeat.hbturl)) {
-        if (!strlen(Config.app.HBT_URL)) {
+    if (EMPTY(hbeat.hbturl)) {
+        if (EMPTY(Config.app.HBT_URL)) {
             err = ESP_ERR_INVALID_ARG;
             goto error;
         }
@@ -2316,18 +2777,18 @@ static void hbeat_task(void *arg) {
         err = ESP_FAIL;
         goto error;
     }
-    clearBits(HBT_STOP_BIT);
+    clrbits(HBT_STOP_BIT);
     TickType_t last[2] = { 0, 0 };
-    while (hbeat.hbtime > 0 && !getBits(HBT_STOP_BIT)) {
-        waitBits(HBT_STOP_BIT, 500);
-        if (!( addr = network_local_ip(NULL) )) continue;
+    while (hbeat.hbtime > 0 && !getbits(HBT_STOP_BIT)) {
+        waitbits(HBT_STOP_BIT, 500);
         TickType_t curr = xTaskGetTickCount(),
                    dhbt = TIMEOUT((int)(hbeat.hbtime * 1000)),
                    ditv = TIMEOUT((int)(hbeat.intval * 1000));
         if (!last[0] || (curr - last[0]) >= dhbt) {
             last[0] = curr;
             time_t sec = get_timestamp_us(NULL);
-            inet_ntoa_r(addr, ip->valuestring, 16);
+            if (!network_local_ipstr(NULL, ip->valuestring, sizeof(addr)))
+                continue;
             strftime(ts->valuestring, 20, "%F %T", localtime(&sec));
             char *json = cJSON_PrintUnformatted(info);
             if (!json) {
@@ -2359,7 +2820,7 @@ static void hbeat_task(void *arg) {
             TRYNULL(rst, cJSON_Delete);
             TRYFREE(json);
         }
-        if (!strlen(hbeat.imgurl) || hbeat.intval <= 0) continue;
+        if (EMPTY(hbeat.imgurl) || hbeat.intval <= 0) continue;
         if (!last[1] || (curr - last[1]) >= ditv) {
             last[1] = curr;
             video_data_t frame;
@@ -2375,12 +2836,12 @@ static void hbeat_task(void *arg) {
                     "name=\"mac_address\"\r\n\r\n%s\r\n"
                 "--FRAME\r\nContent-Disposition:form-data;"
                     "name=\"image\"; filename=\"image\"\r\n\r\n",
-                inet_ntoa(addr), macstr);
-            size_t blen = strlen(body) + frame.len + 13;
+                network_local_ipstr(NULL, NULL, 0), macstr);
+            size_t wlen = strlen(body) + frame.len + 13;
             esp_http_client_set_url(client, hbeat.imgurl);
             esp_http_client_set_header(client, "Content-Type", CTYPE_BDRY(FRAME));
             esp_http_client_set_timeout_ms(client, 10000);
-            if (( err = esp_http_client_open(client, blen) )) {
+            if (( err = esp_http_client_open(client, wlen) )) {
                 ESP_LOGE(TAG, "HBT post request: %s", esp_err_to_name(err));
             } else if (
                    esp_http_client_write(client, body, strlen(body)) < 0
@@ -2417,7 +2878,7 @@ exit:
     TRYNULL(info, cJSON_Delete);
     TRYNULL(rst, cJSON_Delete);
     TRYFREE(resp); TRYFREE(body);
-    setBits(HBT_STOP_BIT);
+    setbits(HBT_STOP_BIT);
     vTaskDelete(NULL);
 }
 
@@ -2443,10 +2904,10 @@ esp_err_t hbeat_command(
             err = config_nvs_write(hbeat.nvs, "ctx", &hbeat, HBEAT_CTX_SIZE);
             err = err < 0 ? -err : ESP_OK;
         } else if (!strtob(ctrl)) {
-            setBits(HBT_STOP_BIT);
+            setbits(HBT_STOP_BIT);
         } else if (!task) {
             xTaskCreate(hbeat_task, "hbeat", 4096, NULL, 10, &task);
-            err = !task ? ESP_ERR_NO_MEM : waitBits(HBT_STOP_BIT, 100) ? ESP_FAIL : ESP_OK;
+            err = !task ? ESP_ERR_NO_MEM : waitbits(HBT_STOP_BIT, 100) ? ESP_FAIL : ESP_OK;
         }
     } else if (hurl || iurl || hbtime != -1 || intval != -1) {
         if (strlen(hurl ?: "") > 7)

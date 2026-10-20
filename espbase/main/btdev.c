@@ -57,23 +57,11 @@ static struct {
     esp_hidd_dev_t *hiddev;         // esp_hid
 } ctx;
 
-static EventBits_t waitBits(EventBits_t bits, uint32_t ms) {
-    // ClearOnExit = true, WaitForAllBits = false
-    return ctx.evtgrp ? xEventGroupWaitBits(
-        ctx.evtgrp, bits, pdTRUE, pdFALSE, TIMEOUT(ms)) & bits : 0;
-}
-
-static EventBits_t getBits(EventBits_t bits) {
-    return ctx.evtgrp ? xEventGroupGetBits(ctx.evtgrp) & bits : 0;
-}
-
-static bool setBits(EventBits_t bits) {
-    return ctx.evtgrp ? xEventGroupSetBits(ctx.evtgrp, bits) : false;
-}
-
-static EventBits_t clearBits(EventBits_t bits) {
-    return ctx.evtgrp ? xEventGroupClearBits(ctx.evtgrp, bits) : 0;
-}
+#define setbits(b)      ( ctx.evtgrp ? xEventGroupSetBits(ctx.evtgrp, (b)) : false )
+#define getbits(b)      ( ctx.evtgrp ? xEventGroupGetBits(ctx.evtgrp) & (b) : false )
+#define clrbits(b)      ( ctx.evtgrp ? xEventGroupClearBits(ctx.evtgrp, (b)) : false )
+#define waitbits(b, m)  ( ctx.evtgrp ? xEventGroupWaitBits( /* Clear=1, WaitAll=0 */ \
+                          ctx.evtgrp, (b), pdTRUE, pdFALSE, TIMEOUT(m)) & (b) : 0 )
 
 void btdev_status(btmode_t mode) {
     printf("Connectable: %s, discoverable: %s, evtgrp: 0b%s\n",
@@ -81,7 +69,7 @@ void btdev_status(btmode_t mode) {
         ctx.dmode == ESP_BT_GENERAL_DISCOVERABLE
             ? "general"
             : (ctx.dmode ? "limited " : "false"),
-        format_binary(getBits(0xFF), 8));
+        format_binary(getbits(0xFF), 8));
 #ifdef CONFIG_BASE_BT_HID_DEVICE
     if (mode == BT_HIDD) {
         if (!ctx.enabled) {
@@ -280,31 +268,31 @@ static UNUSED void scan_print_devinfo(scan_rst_t *devs, int count) {
 
 #ifdef CONFIG_BT_CLASSIC_ENABLED
 static void bt_scan_done(bool verbose) {
-    if (getBits(BT_SCAN_BLOCK_BIT)) {
-        clearBits(BT_SCAN_BLOCK_BIT);
+    if (getbits(BT_SCAN_BLOCK_BIT)) {
+        clrbits(BT_SCAN_BLOCK_BIT);
     } else if (verbose) {
         printf("BT Scan found %d devices\n", scan_rst_num(s_devs));
         scan_print_devinfo(s_devs, -1);
     }
-    setBits(BT_SCAN_DONE_BIT);
+    setbits(BT_SCAN_DONE_BIT);
 }
 
 static esp_err_t bt_scan_entry(uint32_t tout_ms, bool verbose) {
     esp_err_t err = ESP_OK;
-    setBits(BT_SCAN_BLOCK_BIT); // mute if scan cancelled
-    if (!getBits(BT_SCAN_DONE_BIT) && ( err = esp_bt_gap_cancel_discovery() ))
+    setbits(BT_SCAN_BLOCK_BIT); // mute if scan cancelled
+    if (!getbits(BT_SCAN_DONE_BIT) && ( err = esp_bt_gap_cancel_discovery() ))
         return err;
-    waitBits(BT_SCAN_DONE_BIT, 10); // wait 10ms for previous discovery
-    clearBits(BT_SCAN_BLOCK_BIT);
+    waitbits(BT_SCAN_DONE_BIT, 10); // wait 10ms for previous discovery
+    clrbits(BT_SCAN_BLOCK_BIT);
 
     esp_bt_inq_mode_t mode = ESP_BT_INQ_MODE_GENERAL_INQUIRY;
     if (!tout_ms) return esp_bt_gap_start_discovery(mode, 10, 0); // 12.8s
 
-    setBits(BT_SCAN_BLOCK_BIT);
+    setbits(BT_SCAN_BLOCK_BIT);
     int num = tout_ms / 1280;
     num = CONS(num, ESP_BT_GAP_MIN_INQ_LEN, ESP_BT_GAP_MAX_INQ_LEN);
     if (!( err = esp_bt_gap_start_discovery(mode, num, 0) )) {
-        if (!waitBits(BT_SCAN_DONE_BIT, num * 1280 * 2)) {
+        if (!waitbits(BT_SCAN_DONE_BIT, num * 1280 * 2)) {
             err = ESP_ERR_TIMEOUT;
         } else {
             bt_scan_done(verbose);
@@ -316,22 +304,22 @@ static esp_err_t bt_scan_entry(uint32_t tout_ms, bool verbose) {
 
 #ifdef CONFIG_BT_BLE_ENABLED
 static void ble_scan_done(bool verbose) {
-    if (getBits(BLE_SCAN_BLOCK_BIT)) {
-        clearBits(BLE_SCAN_BLOCK_BIT);
+    if (getbits(BLE_SCAN_BLOCK_BIT)) {
+        clrbits(BLE_SCAN_BLOCK_BIT);
     } else if (verbose) {
         printf("BLE Scan found %d devices\n", scan_rst_num(s_devs));
         scan_print_devinfo(s_devs, -1);
     }
-    setBits(BLE_SCAN_DONE_BIT);
+    setbits(BLE_SCAN_DONE_BIT);
 }
 
 static esp_err_t ble_scan_entry(uint32_t tout_ms, bool verbose) {
     esp_err_t err = ESP_OK;
-    setBits(BLE_SCAN_BLOCK_BIT); // mute if scan cancelled
-    if (!getBits(BLE_SCAN_DONE_BIT) && ( err = esp_ble_gap_stop_scanning() ))
+    setbits(BLE_SCAN_BLOCK_BIT); // mute if scan cancelled
+    if (!getbits(BLE_SCAN_DONE_BIT) && ( err = esp_ble_gap_stop_scanning() ))
         return err; // ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT
-    waitBits(BLE_SCAN_DONE_BIT, 10); // wait 10ms for previous discovery
-    clearBits(BLE_SCAN_BLOCK_BIT);
+    waitbits(BLE_SCAN_DONE_BIT, 10); // wait 10ms for previous discovery
+    clrbits(BLE_SCAN_BLOCK_BIT);
 
     static const esp_ble_scan_params_t scan_params = {
         .scan_type          = BLE_SCAN_TYPE_ACTIVE,
@@ -343,13 +331,13 @@ static esp_err_t ble_scan_entry(uint32_t tout_ms, bool verbose) {
     };
     err = esp_ble_gap_set_scan_params((esp_ble_scan_params_t *)&scan_params);
     if (err) return err;
-    waitBits(BLE_SCAN_BLOCK_BIT, 50);
+    waitbits(BLE_SCAN_BLOCK_BIT, 50);
     if (!tout_ms) return esp_ble_gap_start_scanning(10); // 10s
 
-    setBits(BLE_SCAN_BLOCK_BIT);
+    setbits(BLE_SCAN_BLOCK_BIT);
     int sec = MIN(tout_ms / 1000, 50);
     if (!( err = esp_ble_gap_start_scanning(sec) )) {
-        if (!waitBits(BLE_SCAN_DONE_BIT, sec * 2000)) {
+        if (!waitbits(BLE_SCAN_DONE_BIT, sec * 2000)) {
             err = ESP_ERR_TIMEOUT;
         } else {
             ble_scan_done(verbose);
@@ -526,7 +514,7 @@ static void ble_gap_cb(
     static const char * T = "BLE GAP";
     if (event == ESP_GAP_BLE_SCAN_PARAM_SET_COMPLETE_EVT) {
         ESP_LOGD(T, "Scan param updated");
-        setBits(BLE_SCAN_BLOCK_BIT);
+        setbits(BLE_SCAN_BLOCK_BIT);
     } else if (event == ESP_GAP_BLE_SCAN_START_COMPLETE_EVT) {
         ESP_LOGD(T, "Scan started");
     } else if (event == ESP_GAP_BLE_SCAN_STOP_COMPLETE_EVT) {
@@ -603,7 +591,8 @@ static void ble_gap_cb(
          */
         esp_ble_auth_cmpl_t *auth = &param->ble_security.auth_cmpl;
         if (!auth->success) {
-            ESP_LOGE(T, BDASTR " auth failed", BDA2STR(auth->bd_addr));
+            ESP_LOGE(T, BDASTR " auth failed: reason %d key_present %d",
+                    BDA2STR(auth->bd_addr), auth->fail_reason, auth->key_present);
             esp_ble_remove_bond_device(auth->bd_addr);
             esp_ble_gap_disconnect(auth->bd_addr);
         } else {
@@ -665,7 +654,7 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 
     if (!ctx.evtgrp) {
         ctx.evtgrp = xEventGroupCreate();
-        setBits(BT_SCAN_DONE_BIT | BLE_SCAN_DONE_BIT);
+        setbits(BT_SCAN_DONE_BIT | BLE_SCAN_DONE_BIT);
         ctx.cmode = ESP_BT_CONNECTABLE;
         ctx.dmode = strtob(Config.sys.BT_SCAN)
                     ? ESP_BT_GENERAL_DISCOVERABLE
@@ -694,17 +683,17 @@ esp_err_t bt_common_init(esp_bt_mode_t mode, bool clean) {
 #endif
     }
 
-    esp_bt_controller_config_t conf = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    esp_bt_controller_config_t cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
 #ifdef CONFIG_IDF_TARGET_ESP32
-    conf.mode = mode;               // ignore CONFIG_BTDM_CTRL_MODE_XXX
+    cfg.mode = mode;                // ignore CONFIG_BTDM_CTRL_MODE_XXX
 #endif
 #ifdef CONFIG_BT_CLASSIC_ENABLED
     if (HAS_BT(mode)) {
-        conf.bt_max_acl_conn = 3;   // ignore CONFIG_BTDM_CTRL_MODE_XXX
-        conf.bt_max_sync_conn = 3;
+        cfg.bt_max_acl_conn = 3;    // ignore CONFIG_BTDM_CTRL_MODE_XXX
+        cfg.bt_max_sync_conn = 3;
     }
 #endif
-    if (!err) err = esp_bt_controller_init(&conf);
+    if (!err) err = esp_bt_controller_init(&cfg);
     if (!err) err = esp_bt_controller_enable(mode);
     if (!err) err = esp_bluedroid_init();
     if (!err) err = esp_bluedroid_enable();
@@ -938,21 +927,21 @@ static const uint8_t hidd_service_uuid128[] = {
     0x00, 0x10, 0x00, 0x00, 0x12, 0x18, 0x00, 0x00,
 };
 
-static esp_ble_adv_data_t ble_adv_data = {
+static esp_ble_adv_data_t ble_adv_data = {                  // FIXME: >31B
     .set_scan_rsp           = false,
-    .include_name           = true,
-    .include_txpower        = true,
-    .min_interval           = 0x0006, // 7.5ms
-    .max_interval           = 0x0010, // 20ms
-    .appearance             = ESP_HID_APPEARANCE_GENERIC, // 0x03C0
+    .include_name           = true,                         // strlen + 2B
+    .include_txpower        = true,                         //          3B
+    .min_interval           = 0x0006,                       // 7.5ms    3B
+    .max_interval           = 0x0010,                       // 20ms     3B
+    .appearance             = ESP_HID_APPEARANCE_GENERIC,   // 0x03C0   4B
     .manufacturer_len       = 0,
     .p_manufacturer_data    = NULL,
     .service_data_len       = 0,
     .p_service_data         = NULL,
-    .service_uuid_len       = sizeof(hidd_service_uuid128),
+    .service_uuid_len       = sizeof(hidd_service_uuid128), //     16 + 2B
     .p_service_uuid         = (uint8_t *)hidd_service_uuid128,
     .flag                   = ESP_BLE_ADV_FLAG_GEN_DISC
-                            | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT, // 0x6
+                            | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT, // 0x6    3B
 };
 
 static esp_ble_adv_params_t hidd_adv_params = {
@@ -1028,7 +1017,7 @@ esp_err_t ble_hidd_init(btmode_t prev) {
     esp_hid_raw_report_map_t ble_report_maps[] = {
         { .data = HIDTool.desc, .len = HIDTool.dlen }
     };
-    const esp_hid_device_config_t ble_hidd_conf = {
+    const esp_hid_device_config_t cfg = {
         .vendor_id          = HIDTool.vid,
         .product_id         = HIDTool.pid,
         .version            = HIDTool.ver,
@@ -1041,9 +1030,7 @@ esp_err_t ble_hidd_init(btmode_t prev) {
         ble_adv_data.appearance = ESP_HID_APPEARANCE_GAMEPAD;
     if (!err) err = esp_ble_gap_config_adv_data(&ble_adv_data);
     if (!err) err = esp_ble_gatts_register_callback(esp_hidd_gatts_event_handler);
-    if (!err) err = esp_hidd_dev_init(&ble_hidd_conf,
-                                      ESP_HID_TRANSPORT_BLE,
-                                      ble_hidd_cb, &ctx.hiddev);
+    if (!err) err = esp_hidd_dev_init(&cfg, ESP_HID_TRANSPORT_BLE, ble_hidd_cb, &ctx.hiddev);
     return err;
 }
 

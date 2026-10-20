@@ -13,6 +13,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <netinet/tcp.h>
+#include <netdb.h>
 
 #define TIMESTAMP_MS            1000
 #define TIMESTAMP_US            1000000
@@ -62,28 +63,40 @@ const char * format_datetime_us(const struct timeval *ts);
 struct timespec * get_timeout(uint32_t ms, struct timespec *tout);
 struct timespec * get_timeout_alignup(uint32_t ns, struct timespec *tout);
 
-#ifdef CONFIG_LWIP_IPV6
-#   define IPV6
-#   define ADDRSTRLEN (INET6_ADDRSTRLEN + 6) // 1 for ':' and 5 for 0-65535
+#ifndef CONFIG_LWIP_IPV6
+#   define ADDRSTRLEN (INET_ADDRSTRLEN + 6) // 1 for ':' and 5 for 0-65535
 #else
-#   define ADDRSTRLEN (INET_ADDRSTRLEN + 6)
+#   define ADDRSTRLEN (INET6_ADDRSTRLEN + 6 + 2) // 2 for '[]' and 6 for port
+#   define IPV6
 #endif
 
-// Format ipaddress like xxx.xxx.xxx.xxx:xxxxx
+// Return ((HAS_IPV4 << 16) | (HAS_IPV6 << 8) | HAS_PORT) for supported formats:
+// 192.168.1.1          => HAS_IPV4
+// 10.0.0.1:65535       => HAS_IPV4 | HAS_PORT
+// 2001:db8::1          => HAS_IPV6
+// [fe80::1]:54321      => HAS_IPV6 | HAS_PORT
+// [::ffff:1.2.3.4]:5   => HAS_IPV4 | HAS_IPV6 | HAS_PORT
+int address_like_numeric(const char *addr);
+int parse_address(const char *host, const char *port, struct sockaddr_storage *);
+const char * format_address(struct sockaddr *addr, socklen_t slen);
+
+// Format address like [IPV4/IPV6][:PORT]
 // local=true for getsockname and local=false for getpeername
 const char * getaddrname(int fd, bool local);
 
 // TimeSync Server
-int timesync_server_init(uint16_t port);
+int timesync_server_init(const char *port);
 int timesync_server_loop(uint16_t timeout);  // timeout in milliseconds
 int timesync_server_exit();
-void timesync_server_status();
 
 // TimeSync Client
-int timesync_client_init(const char *host, uint16_t port);
+int timesync_client_init(const char *host, const char *port);
 int timesync_client_sync(double *tsoffset, uint8_t ack);
 int timesync_client_xsync(double *tsoffset, uint8_t iters);
 int timesync_client_exit();
+
+// TimeSync Statistics Report
+void timesync_status(bool server);
 
 #ifdef __cplusplus
 }

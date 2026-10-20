@@ -8,7 +8,6 @@
 
 #include "globals.h"
 
-#include "dirent.h"                 // for DIR
 #include "sys/stat.h"               // for struct stat
 #include "diskio_impl.h"            // for FF_DRV_NOT_USED
 #include "wear_levelling.h"         // for wl_handle_t
@@ -28,6 +27,7 @@ extern "C" {
 typedef char filesys_path_t[PATH_MAX_LEN];
 
 typedef enum {
+    FILESYS_VFS = -1,
     FILESYS_FLASH = 1,  // if defined CONFIG_BASE_USE_FFS
     FILESYS_SDCARD = 2, // if defined CONFIG_BASE_USE_SDFS
     FILESYS_COUNT = 2
@@ -41,7 +41,7 @@ typedef struct {
     uint64_t total;
     size_t blkcnt;
     size_t blksize;
-    int pdrv; // available if FAT Flash or FAT SDCard
+    int pdrv; // != FF_DRV_NOT_USED if FAT Flash or FAT SDCard
     union {
         wl_handle_t wlhdl;
         sdmmc_card_t *card;
@@ -53,6 +53,7 @@ bool filesys_acquire(filesys_type_t, uint32_t msec);  // take write lock
 bool filesys_release(filesys_type_t);                 // give write lock
 bool filesys_get_info(filesys_type_t, filesys_info_t *);
 void filesys_print_info(filesys_type_t);
+filesys_type_t filesys_get_type(const char *);
 
 // Mountpoint will be prepended to the path according to filesys_type_t
 char * filesys_norm_r(filesys_type_t, filesys_path_t, const char *);
@@ -76,6 +77,8 @@ char * filesys_listdir_json(filesys_type_t, const char *); // need free
 void * filesys_readfile(filesys_type_t, const char *, size_t *); // need free
 esp_err_t filesys_readelf(filesys_type_t, const char *, int verbose); // 0-4
 esp_err_t filesys_execute(filesys_type_t, const char *, int argc, char **argv);
+esp_err_t filesys_dlcall(filesys_type_t, const char *, const char *func, int argc, char **argv);
+esp_err_t filesys_dllist(bool module, bool symbol);
 
 // Aliases
 #define fnormr(...)     filesys_norm_r(FILESYS_FLASH, __VA_ARGS__)

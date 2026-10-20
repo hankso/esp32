@@ -10,35 +10,64 @@ menu "Project Config"
             config BASE_BOARD_PICOD4
                 bool "ESP32 PicoKit by Espressif"
             config BASE_BOARD_ESPEYE
-                bool "ESP32 CAM EYE by Espressif"
+                bool "ESP32 F4R8 CAM EYE by Espressif"
+                select BASE_USE_PSRAM
+                select BASE_USE_CAM
             config BASE_BOARD_ATCAM
-                bool "ESP32 CAM DEV by AiThinker"
-            config BASE_BOARD_M5WIDE
-                bool "ESP32 CAM WIDE by M5STACK"
-            config BASE_BOARD_M5PSRAM
-                bool "ESP32 CAM PSRAM by M5STACK"
+                bool "ESP32 F4R8 CAM DEV by AiThinker"
+                select BASE_USE_PSRAM
+                select BASE_USE_CAM
+                select BASE_NO_GPIO
+            config BASE_BOARD_M5TIMER
+                bool "ESP32 F4R8 Timer CAM by M5STACK"
+                select BASE_USE_PSRAM
+                select BASE_USE_CAM
             config BASE_BOARD_WRCAM
-                bool "ESP32 CAM WROVER by Freenove"
+                bool "ESP32 F4R8 CAM WROVER by Freenove"
+                select BASE_USE_PSRAM
+                select BASE_USE_CAM
         endif
         if IDF_TARGET_ESP32S3
-            config BASE_BOARD_USBOTG
-                bool "ESP32S3 USB OTG by Espressif"
-            config BASE_BOARD_S3ECAM
-                bool "ESP32S3 CAM ETH by Waveshare"
-            config BASE_BOARD_S3WRCAM
-                bool "ESP32S3 CAM WROOM by Freenove"
             config BASE_BOARD_S3LUAT
-                bool "ESP32S3 CORE DEV by LuaTOS"
-            config BASE_BOARD_S3NL191
-                bool "ESP32S3 LCD 1.91 by NoLogo"
+                bool "ESP32S3 F16 CORE DEV by LuaTOS"
+            config BASE_BOARD_USBOTG
+                bool "ESP32S3 F8 USB OTG by Espressif"
+            config BASE_BOARD_S3ECAM
+                bool "ESP32S3 F16R8 CAM ETH by Waveshare"
+                select BASE_USE_PSRAM
+                select BASE_USE_ETH
+                select BASE_USE_CAM
+            config BASE_BOARD_S3WRCAM
+                bool "ESP32S3 F8R8 CAM WROOM by Freenove"
+                select BASE_USE_PSRAM
+                select BASE_USE_CAM
             config BASE_BOARD_S3XMINI
-                bool "ESP32S3 SuperMini by NoLogo"
+                bool "ESP32S3 F4R2 SuperMini by NoLogo QUAD PSRAM"
+                select BASE_USE_PSRAM
+            config BASE_BOARD_S3NL191
+                bool "ESP32S3 F16R8 LCD 1.91 by NoLogo"
+                select BASE_USE_PSRAM
+                select BASE_USE_SCN
+            config BASE_BOARD_S3WS147
+                bool "ESP32S3 F16R8 LCD 1.47 by WaveShare"
+                select BASE_USE_PSRAM
+                select BASE_USE_SCN
+            config BASE_BOARD_S3WS169
+                bool "ESP32S3 F16R8 LCD 1.69 by WaveShare"
+                select BASE_USE_PSRAM
+                select BASE_USE_SCN
         endif
         config BASE_BOARD_CUSTOM
             bool "Custom ESP32 Board"
     endchoice
 
-    config BASE_IRAM # for ESP-IDF v4 & v5
+    config BASE_NO_GPIO
+        bool
+        default n
+        help
+            Board specific flag that has no free gpio available
+
+    config BASE_OPT_IRAM # for ESP-IDF v4 & v5
         bool
         depends on BASE_USE_WIFI && BASE_USE_BT
         select RINGBUF_PLACE_FUNCTIONS_INTO_FLASH
@@ -49,6 +78,11 @@ menu "Project Config"
 
     config BASE_DEBUG
         bool "Enable DEBUG features and loggings"
+        select PM_TRACE
+        select PM_PROFILING
+        select FREERTOS_USE_TRACE_FACILITY
+        select FREERTOS_GENERATE_RUN_TIME_STATS
+        select FREERTOS_VTASKLIST_INCLUDE_COREID
         default y
 
     config BASE_AUTO_ALIGN
@@ -62,6 +96,7 @@ menu "Project Config"
         select BT_ALLOCATION_FROM_SPIRAM_FIRST if BASE_USE_BT
         select SPIRAM_TRY_ALLOCATE_WIFI_LWIP if BASE_USE_WIFI
         select SPIRAM_IGNORE_NOTFOUND
+        select SPIRAM_XIP_FROM_PSRAM
         select SPIRAM # for ESP-IDF v5.0+
         default n
 
@@ -78,7 +113,6 @@ menu "Project Config"
 
     menuconfig BASE_USE_LED
         bool "Enable LED"
-        depends on !BASE_BOARD_S3NL191
         default y
     if BASE_USE_LED
         config BASE_LED_NUM
@@ -100,7 +134,7 @@ menu "Project Config"
 
     menuconfig BASE_USE_ADC
         bool "Enable ADC"
-        depends on !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO
         select ADC_CAL_EFUSE_VREF_ENABLE if IDF_TARGET_ESP32
         select ADC_CAL_EFUSE_TP_ENABLE if IDF_TARGET_ESP32
         select ADC_CAL_LUT_ENABLE if IDF_TARGET_ESP32
@@ -126,7 +160,7 @@ menu "Project Config"
 
     config BASE_USE_DAC
         bool "Enable DAC"
-        depends on IDF_TARGET_ESP32 && !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO && IDF_TARGET_ESP32
         default n
         help
             Enable dac_xxx functions (~3KB)
@@ -158,11 +192,11 @@ menu "Project Config"
             default 26 if BASE_BOARD_ATCAM
             default 26 if BASE_BOARD_WRCAM
             default 18 if BASE_BOARD_ESPEYE
-            default 22 if BASE_BOARD_M5WIDE
-            default 25 if BASE_BOARD_M5PSRAM
+            default 25 if BASE_BOARD_M5TIMER
             default 48 if BASE_BOARD_S3ECAM
             default 4  if BASE_BOARD_S3WRCAM
             default 18 if BASE_BOARD_S3NL191
+            default 11 if BASE_BOARD_S3WS169
             help
                 Board PIN for I2C SDA
 
@@ -171,11 +205,11 @@ menu "Project Config"
             default 27 if BASE_BOARD_ATCAM
             default 27 if BASE_BOARD_WRCAM
             default 23 if BASE_BOARD_ESPEYE
-            default 23 if BASE_BOARD_M5WIDE
-            default 23 if BASE_BOARD_M5PSRAM
+            default 23 if BASE_BOARD_M5TIMER
             default 47 if BASE_BOARD_S3ECAM
             default 5  if BASE_BOARD_S3WRCAM
             default 17 if BASE_BOARD_S3NL191
+            default 10 if BASE_BOARD_S3WS169
             help
                 Board PIN for I2C SCL
 
@@ -212,8 +246,8 @@ menu "Project Config"
 
     menuconfig BASE_USE_PWM
         bool "Enable PWM"
-        depends on !BASE_BOARD_ATCAM
-        default n
+        depends on !BASE_NO_GPIO
+        default y
     if BASE_USE_PWM
         config BASE_USE_SERVO
             bool "Enable Servo control"
@@ -230,7 +264,7 @@ menu "Project Config"
 
     menuconfig BASE_USE_I2S
         bool "Enable I2S"
-        depends on !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO
         default n
         help
             Enable avi_command -> audio_xxx functions (~20KB)
@@ -261,19 +295,22 @@ menu "Project Config"
 
     menuconfig BASE_USE_SCN
         bool "Enable Screen"
-        depends on (BASE_USE_I2C || BASE_USE_SPI) && !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO && (BASE_USE_I2C || BASE_USE_SPI)
         default n
         help
             Enable scn_xxx functions (200KB+)
     if BASE_USE_SCN
         choice
             prompt "Select Screen interface"
+            default BASE_SCN_I80 if BASE_BOARD_S3NL191
+            default BASE_SCN_SPI if BASE_BOARD_S3WS147
+            default BASE_SCN_SPI if BASE_BOARD_S3WS169
             config BASE_SCN_I80
                 bool "I80" if BASE_BOARD_S3NL191
-            config BASE_SCN_I2C
-                bool "I2C" if BASE_USE_I2C
             config BASE_SCN_SPI
                 bool "SPI" if BASE_USE_SPI
+            config BASE_SCN_I2C
+                bool "I2C" if BASE_USE_I2C
         endchoice
 
         if BASE_SCN_I2C
@@ -329,7 +366,7 @@ menu "Project Config"
 
     menuconfig BASE_USE_BTN
         bool "Enable Button"
-        depends on !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO
         default y
     if BASE_USE_BTN
         config BASE_BTN_INPUT
@@ -347,7 +384,7 @@ menu "Project Config"
 
     menuconfig BASE_USE_GEXP
         bool "Enable GPIO Expander"
-        depends on (BASE_USE_I2C || BASE_USE_SPI) && !BASE_BOARD_ATCAM
+        depends on !BASE_NO_GPIO && (BASE_USE_I2C || BASE_USE_SPI)
         help
             Enable gexp_xxx functions (~19KB)
     if BASE_USE_GEXP
@@ -367,11 +404,11 @@ menu "Project Config"
 
     config BASE_USE_TPAD
         bool "Enable touch pad"
-        default n
+        depends on !BASE_NO_GPIO && SOC_TOUCH_SENSOR_SUPPORTED
+        default y
 
     menuconfig BASE_USE_BT
         bool "Enable BT, BLE and Bluedroid host"
-        depends on !BASE_BOARD_ATCAM
         select BT_ENABLED
         select BT_BLE_DYNAMIC_ENV_MEMORY
         select BT_BLE_42_FEATURES_SUPPORTED if IDF_TARGET_ESP32S3
@@ -406,8 +443,15 @@ menu "Project Config"
         help
             Enable wifi_xxx functions (~400KB)
     if BASE_USE_WIFI
+        config BASE_USE_EASYCONNECT
+            bool "Enable EasyConnect (DPP) on STA interface"
+            select ESP_WIFI_DPP_SUPPORT
+            default y
+            help
+                See Config.net.DPP_AUTO (~25KB)
+
         config BASE_USE_SMARTCONFIG
-            bool "Enable SmartConfig on STA interface"
+            bool "Enable SmartConfig (ESPTouch) on STA interface"
             default n
             help
                 See Config.net.SC_AUTO (~40KB)
@@ -428,7 +472,7 @@ menu "Project Config"
 
     menuconfig BASE_USE_ETH
         bool "Enable Ethernet"
-        default y if BASE_BOARD_S3ECAM
+        default n
         help
             Enable network_eth_xxx functions (~27KB)
     if BASE_USE_ETH
@@ -450,6 +494,7 @@ menu "Project Config"
         depends on IDF_TARGET_ESP32S3 && !ESP_CONSOLE_USB_CDC
         default y
         select TINYUSB
+        select TINYUSB_INIT_IN_DEFAULT_TASK
         help
             Enable usbmode_xxx functions (~60KB)
     if BASE_USE_USB
@@ -488,13 +533,16 @@ menu "Project Config"
 
         config BASE_USB_HID_DEVICE
             bool "Enable USB HID device mode"
-            select TINYUSB_HID_ENABLED  # for ESP-IDF v4.4
-            # set TINYUSB_HID_COUNT=1   # for ESP-IDF v5.0+
+            select TINYUSB_HID_ENABLED
             default y
         config BASE_USB_HID_DEVICE_TASK
             bool "Create a task for HID reports"
             depends on BASE_USB_HID_DEVICE
             default n
+
+        config BASE_USB_NCM_DEVICE
+            bool "Enable USB NCM device mode"
+            default y
     endif
 
     menuconfig BASE_USE_FFS
@@ -505,7 +553,7 @@ menu "Project Config"
     if BASE_USE_FFS
         config BASE_FFS_MP
             string "Flash FileSystem Mount Point"
-            default "/flashfs"
+            default "/flash"
 
         config BASE_FFS_PART
             string "Flash FileSystem partition label"
@@ -515,11 +563,12 @@ menu "Project Config"
 
         choice
             prompt "Select Flash FileSystem Format"
-            default BASE_FFS_SPI
-            config BASE_FFS_FAT
-                bool "Storage partition is FAT FileSystem (FATFS)"
             config BASE_FFS_SPI
                 bool "Storage partition is SPI Flash FileSystem (SPIFFS)"
+            config BASE_FFS_FAT
+                bool "Storage partition is FAT FileSystem (FATFS)"
+            config BASE_FFS_LIT
+                bool "Storage partition is Little FileSystem (LITFS)"
         endchoice
     endif
 
@@ -554,6 +603,7 @@ menu "Project Config"
         bool "Enable ELF Loader"
         depends on BASE_USE_FFS || BASE_USE_SDFS
         select ELF_LOADER
+        select ELF_DYNAMIC_LOAD_SHARED_OBJECT
         default y
         help
             Enable filesys_elf_xxx functions (~7KB)
@@ -802,8 +852,7 @@ menu "Project Config"
         default "32,-1,25,23,0,22,35,34,39,36,21,19,18,5" if BASE_BOARD_ATCAM
         default "-1,-1,25,23,21,22,35,34,39,36,19,18,5,4" if BASE_BOARD_WRCAM
         default "-1,-1,5,27,4,25,36,37,38,39,35,14,13,34" if BASE_BOARD_ESPEYE
-        default "-1,15,25,26,27,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5WIDE
-        default "-1,25,22,26,27,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5PSRAM
+        default "-1,15,22,26,27,21,19,36,18,39,5,34,35,32" if BASE_BOARD_M5TIMER
         default "-1,-1,1,2,3,39,18,15,38,40,42,46,45,41" if BASE_BOARD_S3ECAM
         default "38,-1,6,7,15,13,16,17,18,12,10,8,9,11" if BASE_BOARD_S3WRCAM
         help

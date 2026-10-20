@@ -13,18 +13,26 @@
 #   undef CONFIG_BASE_USE_USB
 #endif
 
-#ifdef CONFIG_BASE_USB_MSC_DEVICE
-#   if !defined(IDF_TARGET_V4) && !__has_include("tusb_msc_storage.h")
+#ifndef IDF_TARGET_V4
+#   if CONFIG_BASE_USB_CDC_DEVICE && !__has_include("tusb_cdc_acm.h")
+#       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
+#       undef CONFIG_BASE_USB_CDC_DEVICE
+#   endif
+#   if CONFIG_BASE_USB_MSC_DEVICE && !__has_include("tusb_msc_storage.h")
 #       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
 #       undef CONFIG_BASE_USB_MSC_DEVICE
 #   endif
-#endif
-
-#ifdef CONFIG_BASE_USB_HID_DEVICE
-#   if !defined(IDF_TARGET_V4) && !__has_include("class/hid/hid_device.h")
+#   if CONFIG_BASE_USB_NCM_DEVICE && !__has_include("tinyusb_net.h")
+#       warning "Run `idf.py add-dependency espressif/esp_tinyusb`"
+#       undef CONFIG_BASE_USB_NCM_DEVICE
+#   endif
+#   if CONFIG_BASE_USB_HID_DEVICE && !__has_include("class/hid/hid_device.h")
 #       warning "Run `idf.py add-dependency espressif/tinyusb`"
 #       undef CONFIG_BASE_USB_HID_DEVICE
 #   endif
+#elif CONFIG_BASE_USB_NCM_DEVICE
+#   warning "IDF-v4 does not support usb ncm device"
+#   undef CONFIG_BASE_USB_NCM_DEVICE
 #endif
 
 #if defined(CONFIG_BASE_USB_CDC_HOST) && !__has_include("usb/cdc_acm_host.h")
@@ -52,17 +60,19 @@ extern "C" {
 #endif
 
 typedef enum {
-    CDC_HOST,
-    CDC_DEVICE,
-    MSC_HOST,
-    MSC_DEVICE,
-    HID_HOST,
-    HID_DEVICE,
     SERIAL_JTAG,
+    CDC_HOST,
+    MSC_HOST,
+    HID_HOST,
+    CDC_DEV,
+    MSC_DEV,
+    HID_DEV,
+    NCM_DEV,
+    USB_MODE_MAX
 } usbmode_t;
 
-#define ISDEV(m) ( (m) == CDC_DEVICE || (m) == MSC_DEVICE || (m) == HID_DEVICE )
-#define ISHOST(m) ( (m) == CDC_HOST || (m) == MSC_HOST || (m) == HID_HOST )
+#define ISHOST(m)   ( (m) == CDC_HOST || (m) == MSC_HOST || (m) == HID_HOST )
+#define ISDEV(m)    ( !ISHOST(m) && (m) != SERIAL_JTAG )
 
 esp_err_t usbmode_switch(usbmode_t mode, bool reboot_now);
 

@@ -8,15 +8,34 @@
 #include "drivers.h"            // for PIN_XXX
 #include "config.h"
 
-#include "esp_spiffs.h"
-#include "esp_vfs_fat.h"
+#include "dirent.h"
 #include "diskio_wl.h"
 #include "diskio_sdmmc.h"
 #include "driver/sdspi_host.h"
 #include "driver/sdmmc_host.h"
+#ifndef IDF_TARGET_V4
+#   include <utime.h>
+#endif
+
+#if CONFIG_BASE_FFS_FAT || CONFIG_BASE_USE_SDFS
+#   include "esp_vfs_fat.h"
+#   ifndef IDF_TARGET_V4
+#       define esp_vfs_fat_spiflash_mount   esp_vfs_fat_spiflash_mount_rw_wl
+#       define esp_vfs_fat_spiflash_unmount esp_vfs_fat_spiflash_unmount_rw_wl
+#   endif
+#endif
+
+#ifdef CONFIG_BASE_FFS_LIT
+#   include "esp_littlefs.h"
+#elif CONFIG_BASE_FFS_SPI
+#   include "esp_spiffs.h"
+#endif
 
 #ifdef CONFIG_BASE_USE_ELF
 #   include "esp_elf.h"
+#   ifdef CONFIG_ELF_DYNAMIC_LOAD_SHARED_OBJECT
+#       include "esp_dlfcn.h"
+#   endif
 #endif
 
 static const char *TAG = "Filesys";
@@ -35,6 +54,8 @@ static void filesys_exit(filesys_dev_t *dev) {
     if (dev->type == FILESYS_FLASH) {
 #   ifdef CONFIG_BASE_FFS_FAT
         if (!esp_vfs_fat_spiflash_unmount(dev->mp, dev->wlhdl))
+#   elif CONFIG_BASE_FFS_LIT
+        if (!esp_vfs_littlefs_unregister(dev->part))
 #   else
         if (!esp_vfs_spiffs_unregister(dev->part))
 #   endif
@@ -72,7 +93,7 @@ static esp_err_t filesys_init(
         part = "";
     }
 #endif
-    if (part && !strlen(part)) part = NULL;
+    if (part && !*part) part = NULL;
     if (!dev || !startswith(mp, "/")) return ESP_ERR_INVALID_ARG;
     if (dev->type && dev->type != type) return ESP_ERR_INVALID_STATE;
     if (dev->type && dev->mp == mp && dev->part == part) return ESP_OK;
@@ -80,20 +101,27 @@ static esp_err_t filesys_init(
     if (type == FILESYS_FLASH) {
         wl_handle_t wlhdl = WL_INVALID_HANDLE;
 #   ifdef CONFIG_BASE_FFS_FAT
-        esp_vfs_fat_mount_config_t conf = {
+        esp_vfs_fat_mount_config_t cfg = {
             .format_if_mount_failed = false,
             .max_files              = 10,
-            .allocation_unit_size   = CONFIG_WL_SECTOR_SIZE
         };
-        err = esp_vfs_fat_spiflash_mount(mp, part, &conf, &wlhdl);
+        err = esp_vfs_fat_spiflash_mount(mp, part, &cfg, &wlhdl);
+#   elif CONFIG_BASE_FFS_LIT
+        esp_vfs_littlefs_conf_t cfg = {
+            .base_path              = mp,
+            .partition_label        = part,
+            .format_if_mount_failed = false,
+            .grow_on_mount          = true
+        };
+        err = esp_vfs_littlefs_register(&cfg);
 #   else
-        esp_vfs_spiffs_conf_t conf = {
+        esp_vfs_spiffs_conf_t cfg = {
             .base_path              = mp,
             .partition_label        = part,
             .max_files              = 10,
             .format_if_mount_failed = false
         };
-        err = esp_vfs_spiffs_register(&conf);
+        err = esp_vfs_spiffs_register(&cfg);
 #   endif
         if (!err) {
             filesys_exit(dev);
@@ -102,6 +130,7 @@ static esp_err_t filesys_init(
             dev->wlhdl = wlhdl;
             dev->type  = type;
             ESP_LOGI(TAG, "FlashFS mounted %s to %s", dev->part, dev->mp);
+            setenv("PWD", mp, true);
         }
         return err;
     }
@@ -167,6 +196,7 @@ static esp_err_t filesys_init(
             dev->card = card;
             dev->type = type;
             ESP_LOGI(TAG, "SDCard mounted to %s", dev->mp);
+            if (!getenv("PWD")) setenv("PWD", mp, true);
         }
         return err;
     }
@@ -178,12 +208,18 @@ static void * locks[FILESYS_COUNT];
 static filesys_dev_t devs[FILESYS_COUNT];
 
 void filesys_initialize() {
+#ifdef CONFIG_BASE_USE_ELF
+    esp_log_level_set("ELF", ESP_LOG_WARN);
+#endif
+    esp_err_t err = ESP_OK;
     LOOPN(i, FILESYS_COUNT) {
         if (!locks[i] && ( locks[i] = MUTEX() )) RELEASE(locks[i]);
         filesys_type_t type = i + FILESYS_FLASH;
-        esp_err_t err = filesys_init(devs + i, type, NULL, NULL);
-        if (err) {
-            ESP_LOGE(TAG, "Failed to mount: %s", esp_err_to_name(err));
+        if (( err = filesys_init(devs + i, type, NULL, NULL) )) {
+            ESP_LOGE(TAG, "Failed to mount %s: %s",
+                     type == FILESYS_FLASH ? "FFS" :
+                     type == FILESYS_SDCARD ? "SDFS" : "Unknown",
+                     esp_err_to_name(err));
         } else {
             filesys_print_info(type);
         }
@@ -209,19 +245,27 @@ bool filesys_get_info(filesys_type_t type, filesys_info_t *info) {
 #   ifdef CONFIG_BASE_FFS_FAT
         if (devs[0].wlhdl == WL_INVALID_HANDLE) return false;
         info->pdrv = ff_diskio_get_pdrv_wl(info->wlhdl = devs[0].wlhdl);
+        size_t ssize = wl_sector_size(info->wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
+#       ifdef IDF_TARGET_V4
         FATFS *fs;
         DWORD free_clust;
         char drv[] = { '0' + info->pdrv, ':', '\0' };
-        uint64_t ssize = wl_sector_size(info->wlhdl) ?: CONFIG_WL_SECTOR_SIZE;
         if (f_getfree(drv, &free_clust, &fs) == FR_OK) {
             info->used = ssize * (fs->n_fatent - 2 - free_clust) * fs->csize;
             info->total = ssize * (fs->n_fatent - 2) * fs->csize;
         }
+#       else
+        esp_vfs_fat_info(devs[0].mp, &info->total, &info->used);
+#       endif
         info->blksize = ssize;
         info->blkcnt = info->blksize ? info->total / info->blksize : 0;
 #   else
         size_t used, total;
+#       if CONFIG_BASE_FFS_LIT
+        if (!esp_littlefs_info(devs[0].part, &total, &used)) {
+#       else
         if (!esp_spiffs_info(devs[0].part, &total, &used)) {
+#       endif
             info->used = used;
             info->total = total;
         }
@@ -283,46 +327,60 @@ void filesys_print_info(filesys_type_t type) {
 #endif
 }
 
+filesys_type_t filesys_get_type(const char *path) {
+    if (!path) path = getenv("PWD") ?: "/";
+#ifdef CONFIG_BASE_USE_FFS
+    if (startswith(path, CONFIG_BASE_FFS_MP)) return FILESYS_FLASH;
+#endif
+#ifdef CONFIG_BASE_USE_SDFS
+    if (startswith(path, CONFIG_BASE_SDFS_MP)) return FILESYS_SDCARD;
+#endif
+    return FILESYS_VFS;
+}
+
 char * filesys_norm_r(
     filesys_type_t type, filesys_path_t buf, const char *path
 ) {
-    const char *prepend = NULL;
+    const char *mp = type == FILESYS_VFS ? "/" : "", *spath = path ?: "";
 #ifdef CONFIG_BASE_USE_FFS
-    if (type == FILESYS_FLASH) prepend = CONFIG_BASE_FFS_MP;
+    spath = strrstr(spath, CONFIG_BASE_FFS_MP) ?: spath;
+    if (type == FILESYS_FLASH) mp = CONFIG_BASE_FFS_MP;
 #endif
 #ifdef CONFIG_BASE_USE_SDFS
-    if (type == FILESYS_SDCARD) prepend = CONFIG_BASE_SDFS_MP;
+    spath = strrstr(spath, CONFIG_BASE_SDFS_MP) ?: spath;
+    if (type == FILESYS_SDCARD) mp = CONFIG_BASE_SDFS_MP;
 #endif
-    if (!buf || !strlen(prepend ?: "") || !strlen(path ?: "")) {
+    if (!buf || !mp[0] || !spath[0]) {
         if (buf) *buf = '\0';
         return buf;
-    } else if (path != buf) {
-        if (!startswith(path, prepend)) {
-            snprintf(buf, PATH_MAX_LEN, "%s/%s", prepend, path);
+    } else if (spath != buf) {
+        if (!startswith(spath, mp)) {
+            snprintf(buf, PATH_MAX_LEN, "%s/%s", mp, spath);
         } else {
-            strlcpy(buf, path, PATH_MAX_LEN);
+            strlcpy(buf, spath, PATH_MAX_LEN);
         }
-    } else if (!startswith(path, prepend)) {            // change mountpoint
-        char *slash = strdup(strchr(path + 1, '/') ?: "");
+    } else if (!startswith(spath, mp)) { // change mountpoint
+        char *slash = strdup(strchr(spath + 1, '/') ?: "");
         if (slash) {
-            snprintf(buf, PATH_MAX_LEN, "%s/%s", prepend, slash);
+            snprintf(buf, PATH_MAX_LEN, "%s/%s", mp, slash);
             free(slash);
+        } else {
+            strlcpy(buf, mp, PATH_MAX_LEN);
         }
     } else {
         return buf;
     }
 #define IS_SEP(c) ( (c) == '/' || (c) == '\\' )
-    char *out, *inp, *prev;
-    for (out = inp = buf; inp[0]; inp++) {
+    char *out = buf;
+    for (char *inp = buf; inp[0]; inp++) {
         if (IS_SEP(inp[0])) {
             inp += strspn(inp, "\\/") - 1;              // skip joining slashes
-            if (inp[1] == '\0') break;                  // trim tailing slash
+            if (inp[1] == '\0' && out != buf) break;    // trim tailing slash
             if (inp[1] == '.') {                        // handle ./ and ../
                 if (IS_SEP(inp[2])) {
                     inp++; continue;
                 } else if (inp[2] == '.' && IS_SEP(inp[3])) {
-                    prev = memrchr(buf, '/', out - buf);
-                    if (prev && prev != buf) out = prev;
+                    out = memrchr(buf, '/', out - buf) ?: out;
                     inp += 2; continue;
                 }
             }
@@ -380,8 +438,11 @@ const char * filesys_join(filesys_type_t type, size_t argc, ...) {
 }
 
 bool filesys_touch(filesys_type_t type, const char *path) {
+#ifdef IDF_TARGET_V4
     FILE *fd = fopen(filesys_norm(type, path), "a");
-    return fd && fclose(fd) == 0;                       // utime is not defined
+    return fd && fclose(fd) == 0;
+#endif
+    return utime(filesys_norm(type, path), NULL) == 0;
 }
 
 static const char * statperm(mode_t mode) {
@@ -407,7 +468,10 @@ static const char * statperm(mode_t mode) {
 void filesys_pstat(filesys_type_t type, const char *path) {
     path = filesys_norm(type, path);
     struct stat st;
-    if (stat(path, &st)) return;
+    if (stat(path, &st)) {
+        printf("stat %s failed: %s\n", path, strerror(errno));
+        return;
+    }
     const char *desc;
     switch (st.st_mode & S_IFMT) {
     case S_IFBLK:   desc = "block special"; break;
@@ -521,7 +585,7 @@ void filesys_walk(
     // and sort the result by 1) dir-first and 2) strverscmp.
     // This implementation uses less memory than glibc `scandir`!
     filesys_path_t dirname;
-    if (!strlen(filesys_norm_r(type, dirname, path))) return;
+    if (!*filesys_norm_r(type, dirname, path)) return;
     struct stat st;
     struct dirent *ent;
     size_t num[2] = { 0, 0 }, cnt[2] = { 0, 0 };        // for dir and non-dir
@@ -573,7 +637,7 @@ exit:
         while (cnt[i] > 0) { free(lst[i][--cnt[i]]); }  // strdup
         if (num[i]) free(lst[i]);                       // allocated
     }
-    closedir(dir);
+    TRYNULL(dir, closedir);
 }
 
 static void print_files(const char *base, const struct stat *st, void *arg) {
@@ -636,16 +700,10 @@ void * filesys_readfile(filesys_type_t type, const char *path, size_t *limit) {
 }
 
 #ifdef CONFIG_BASE_USE_ELF
-static bool elf_init; // mute elf_loader loggings
-
 static esp_err_t load_elf(
     filesys_type_t type, const char *path,
     size_t *len, esp_elf_t *elf, void **pbuf
 ) {
-    if (!elf_init) {
-        esp_log_level_set("ELF", ESP_LOG_WARN);
-        elf_init = true;
-    }
     esp_err_t err = esp_elf_init(elf);
     if (err) return err;
     void *data = filesys_readfile(type, path, len);
@@ -671,13 +729,12 @@ esp_err_t filesys_execute(
 }
 
 esp_err_t filesys_readelf(filesys_type_t type, const char *path, int level) {
-    void *buf = NULL;
-    size_t len = 10240;
+    void *buf = NULL; size_t len = 10240;
     esp_elf_t elf;
     esp_err_t err = load_elf(type, path, &len, &elf, &buf);
     elf32_hdr_t *ehdr = (elf32_hdr_t *)buf;
-    elf32_phdr_t *phdr = (elf32_phdr_t *)(buf + ehdr->phoff);
-    elf32_shdr_t *shdr = (elf32_shdr_t *)(buf + ehdr->shoff);
+    elf32_phdr_t *phdr = (elf32_phdr_t *)(buf + (ehdr ? ehdr->phoff : 0));
+    elf32_shdr_t *shdr = (elf32_shdr_t *)(buf + (ehdr ? ehdr->shoff : 0));
     size_t plen = sizeof(elf32_phdr_t), slen = sizeof(elf32_shdr_t);
     if (err || len < sizeof(elf32_hdr_t) ||
         len < (ehdr->phoff + ehdr->phnum * plen) ||
@@ -796,3 +853,46 @@ esp_err_t filesys_readelf(filesys_type_t t, const char *p, int l) {
     return ESP_ERR_NOT_SUPPORTED; NOTUSED(t); NOTUSED(p); NOTUSED(l);
 }
 #endif // CONFIG_BASE_USE_ELF
+
+#ifdef CONFIG_ELF_DYNAMIC_LOAD_SHARED_OBJECT
+esp_err_t filesys_dlcall(
+    filesys_type_t type, const char *path, const char *func, int argc, char **argv
+) {
+#   if !CONFIG_ELF_LOADER_LOAD_PSRAM && CONFIG_ESP_SYSTEM_MEMPROT_FEATURE
+    ESP_LOGE(TAG, "No MALLOC_CAP_EXEC space to load .so .text section");
+    return ESP_ERR_NOT_SUPPORTED;
+#   endif
+    void *hdl = dlopen(filesys_norm(type, path) + 1, RTLD_NOW);
+    if (!hdl) {
+        ESP_LOGE(TAG, "dlopen failed: %s", dlerror());
+        return ESP_FAIL;
+    }
+    void *ptr = dlsym(hdl, func);
+    if (!ptr) {
+        ESP_LOGE(TAG, "dlsym %s failed: %s", func ?: "", dlerror());
+        dlclose(hdl);
+        return ESP_ERR_INVALID_ARG;
+    }
+#   if CONFIG_ELF_LOADER_LOAD_PSRAM
+    if (SOC_DROM_LOW < (uintptr_t)ptr && (uintptr_t)ptr < SOC_DROM_HIGH) {
+        RUNONCE(ESP_LOGW(TAG, "Execute in PSRAM is not fully supported"));
+        ptr += SOC_IROM_LOW - SOC_DROM_LOW; // just a hotfix and may crash
+    }
+#   endif
+    return -ABS(((int(*)(int, char **))ptr)(argc, argv));
+    // skip dlclose for next call
+}
+
+esp_err_t filesys_dllist(bool module, bool symbol) {
+    if (module) dllist(LIST_MODULE);
+    if (symbol) dllist(LIST_SYMBOL);
+    return ESP_OK;
+}
+#else
+esp_err_t filesys_dlcall(filesys_type_t t, const char *p, const char *f, int c, char **v) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(t); NOTUSED(p); NOTUSED(f); NOTUSED(c); NOTUSED(v);
+}
+esp_err_t filesys_dllist(bool m, bool s) {
+    return ESP_ERR_NOT_SUPPORTED; NOTUSED(m); NOTUSED(s);
+}
+#endif // CONFIG_ELF_DYNAMIC_LOAD_SHARED_OBJECT

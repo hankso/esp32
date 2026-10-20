@@ -17,6 +17,7 @@ extern "C" {
 
 typedef struct {
     const char * TIMEZONE;  // Set local timezone (see man tzset(3))
+    const char * HISTORY;   // Load/dump command line history to file
     const char * PROMPT;    // Console promption string
     const char * DIR_DATA;  // Directory to storage font, image files etc.
     const char * DIR_DOCS;  // Directory to generated documentation
@@ -43,32 +44,36 @@ typedef struct {
     const char * AP_NCON;   // Max number of stations of AP (1~253)
     const char * AP_NAPT;   // Enable WiFi NAT router (IDF V5+)
     const char * AP_HIDE;   // Hide AP SSID (not shown on scan)
-    const char * AP_AUTO;   // Switch to AP mode if STA connection failed
-    const char * SC_AUTO;   // Enable SmartConfig if STA connection failed
+    const char * AP_AUTO;   // Auto switch to AP mode if STA connection failed
+    const char * SC_AUTO;   // Auto start SmartConfig if STA connection failed
+    const char * SC_TYPE;   // SmartConfig type (ESPTOUCH v1/v2 and/or AIRKISS)
+    const char * DPP_AUTO;  // Auto DPP(Easy Connect) if STA connection failed
+    const char * DPP_CHAN;  // DPP channel list separated by comma (1~14)
+    const char * NOW_LMK;   // ESPNow secret seed used to generate LMK
 } config_net_t;
 
 typedef struct {
-    const char * WS_NAME;   // Username to auth websocket connection
-    const char * WS_PASS;   // Password to auth websocket connection
-    const char * HTTP_NAME; // Username to auth webserver (HTTP)
-    const char * HTTP_PASS; // Password to auth webserver (HTTP)
-    const char * AUTH_BASE; // Whether to use basic/digest HTTP authorization
+    const char * WS_NAME;   // Username to auth websocket
+    const char * WS_PASS;   // Password to auth websocket
+    const char * HTTP_NAME; // Username to auth webserver
+    const char * HTTP_PASS; // Password to auth webserver
+    const char * AUTH_BASE; // Whether to use basic/digest authorization
 } config_web_t;
 
 typedef struct {
+    const char * OTA_AUTO;  // Auto updation checking
+    const char * OTA_URL;   // URL to fetch firmware from
+    const char * HBT_RUN;   // Enable heartbeat task
+    const char * HBT_URL;   // URL to post heartbeat info
+    const char * HID_MODE;  // Select gamepad layout
+    const char * HID_HOST;  // UDP target hostname or IP address
     const char * MQTT_RUN;  // Enable MQTT client
-    const char * MQTT_URL;  // MQTT server `schema://[user:pass@]host[:port][/path][#cid]`
+    const char * MQTT_URL;  // MQTT server `schema://[user:pswd@]host[:port][/path][#cid]`
     const char * MDNS_RUN;  // Enable mDNS server
     const char * MDNS_HOST; // Register mDNS hostname
     const char * SNTP_RUN;  // Enable SNTP client
     const char * SNTP_HOST; // NTP server to sync time from
     const char * TSCN_MODE; // Select touchscreen mode
-    const char * HID_MODE;  // Select gamepad layout
-    const char * HID_HOST;  // UDP target IP address
-    const char * HBT_AUTO;  // Auto start heartbeat task
-    const char * HBT_URL;   // URL to post heartbeat info
-    const char * OTA_AUTO;  // Enable auto updation checking
-    const char * OTA_URL;   // URL to fetch firmware from
 } config_app_t;
 
 // Informations are readonly after config_initialize

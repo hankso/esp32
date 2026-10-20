@@ -34,7 +34,9 @@ void console_handle_loop(void*);
 void console_loop_begin(int xCoreID);
 
 // Light weight JSON RPC dispatcher: parse json -> execute -> pack result
-char * console_handle_rpc(const char *json);
+char * console_handle_jsonrpc(const char *json, int len); // len = -1 use strlen
+
+esp_err_t console_history_command(const char *cmd, const char *path);
 
 #ifdef __cplusplus
 }

@@ -9,6 +9,10 @@
       "description": "Set local timezone (see man tzset(3))",
       "type": "string"
     },
+    "sys.history": {
+      "description": "Load/dump command line history to file",
+      "type": "string"
+    },
     "sys.prompt": {
       "description": "Console promption string",
       "type": "string",
@@ -147,13 +151,13 @@
     "net.ap.chan": {
       "description": "Channel of AP",
       "type": "number",
-      "minumum": 1,
+      "minimum": 1,
       "maximum": 14
     },
     "net.ap.ncon": {
       "description": "Max number of stations of AP",
       "type": "number",
-      "minumum": 1,
+      "minimum": 1,
       "maximum": 253
     },
     "net.ap.napt": {
@@ -167,21 +171,49 @@
       "pattern": "^[01yn]?$"
     },
     "net.ap.auto": {
-      "description": "Switch to AP mode if STA connection failed",
+      "description": "Auto switch to AP mode if STA connection failed",
       "type": "string",
       "pattern": "^[01yn]?$"
     },
     "net.sc.auto": {
-      "description": "Enable SmartConfig if STA connection failed",
+      "description": "Auto start SmartConfig if STA connection failed",
       "type": "string",
       "pattern": "^[01yn]?$"
     },
+    "net.sc.type": {
+      "description": "SmartConfig type (ESPTOUCH v1/v2 and/or AIRKISS)",
+      "type": "string",
+      "enum": [
+        "ESPTOUCH V1",
+        "ESPTOUCH V2",
+        "AIRKISS",
+        "ESPTOUCH_AIRKISS"
+      ]
+    },
+    "net.dpp.auto": {
+      "description": "Auto DPP(Easy Connect) if STA connection failed",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "net.dpp.chan": {
+      "description": "DPP channel list separated by comma (1~14)",
+      "type": "string",
+      "pattern": "^[0-9]+(,[0-9]+){,4}$"
+    },
+    "net.now.lmk": {
+      "description": "ESPNow secret seed used to generate LMK",
+      "type": "string",
+      "anyOf": [
+        { "pattern": "^[0-9a-zA-Z]{16}$" },
+        { "maxLength": 0 }
+      ]
+    },
     "web.ws.name": {
-      "description": "Username to auth websocket connection",
+      "description": "Username to auth websocket",
       "type": "string"
     },
     "web.ws.pass": {
-      "description": "Password to auth websocket connection",
+      "description": "Password to auth websocket",
       "type": "string",
       "anyOf": [
         { "pattern": "^[0-9a-zA-Z]{8,}$" },
@@ -189,11 +221,11 @@
       ]
     },
     "web.http.name": {
-      "description": "Username to auth webserver (HTTP)",
+      "description": "Username to auth webserver",
       "type": "string"
     },
     "web.http.pass": {
-      "description": "Password to auth webserver (HTTP)",
+      "description": "Password to auth webserver",
       "type": "string",
       "anyOf": [
         { "pattern": "^[0-9a-zA-Z]{8,}$" },
@@ -201,9 +233,52 @@
       ]
     },
     "web.auth.base": {
-      "description": "Use basic HTTP authorization method (base64)",
+      "description": "Whether to use basic/digest authorization",
       "type": "string",
       "pattern": "^[01yn]?$"
+    },
+    "app.ota.auto": {
+      "description": "Enable auto updation checking",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "app.ota.url": {
+      "description": "URL to fetch firmware from",
+      "type": "string",
+      "anyOf": [
+        { "format": "uri-reference" },
+        { "maxLength": 0 }
+      ]
+    },
+    "app.hbt.run": {
+      "description": "Enable heartbeat task",
+      "type": "string",
+      "pattern": "^[01yn]?$"
+    },
+    "app.hbt.url": {
+      "description": "URL to post heartbeat info",
+      "type": "string",
+      "anyOf": [
+        { "format": "uri-reference" },
+        { "maxLength": 0 }
+      ]
+    },
+    "app.hid.mode": {
+      "description": "Select gamepad layout",
+      "enum": [
+        "GENERAL",
+        "XINPUT",
+        "SWITCH",
+        "DSENSE"
+      ]
+    },
+    "app.hid.host": {
+      "description": "UDP target hostname or IP address",
+      "type": "string",
+      "anyOf": [
+        { "format": "hostname" },
+        { "maxLength": 0 }
+      ]
     },
     "app.mqtt.run": {
       "description": "Enable MQTT client",
@@ -246,49 +321,6 @@
         "REL",
         "ABS",
         "TCH"
-      ]
-    },
-    "app.hid.mode": {
-      "description": "Select gamepad layout",
-      "enum": [
-        "GENERAL",
-        "XINPUT",
-        "SWITCH",
-        "DSENSE"
-      ]
-    },
-    "app.hid.host": {
-      "description": "UDP target hostname or IP address",
-      "type": "string",
-      "anyOf": [
-        { "format": "hostname" },
-        { "maxLength": 0 }
-      ]
-    },
-    "app.hbt.auto": {
-      "description": "Auto start heartbeat task",
-      "type": "string",
-      "pattern": "^[01yn]?$"
-    },
-    "app.hbt.url": {
-      "description": "URL to post heartbeat info",
-      "type": "string",
-      "anyOf": [
-        { "format": "uri-reference" },
-        { "maxLength": 0 }
-      ]
-    },
-    "app.ota.auto": {
-      "description": "Enable auto updation checking",
-      "type": "string",
-      "pattern": "^[01yn]?$"
-    },
-    "app.ota.url": {
-      "description": "URL to fetch firmware from",
-      "type": "string",
-      "anyOf": [
-        { "format": "uri-reference" },
-        { "maxLength": 0 }
       ]
     }
   }

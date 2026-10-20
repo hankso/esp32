@@ -38,19 +38,55 @@
 #define DMUTEX(s)           TRYNULL((s), vSemaphoreDelete)
 #define ACQUIRE(s, t)       ( (s) ? xSemaphoreTake((s), TIMEOUT(t)) : 0 )
 #define RELEASE(s)          ( (s) ? xSemaphoreGive(s) : 0 )
+#define REGEVT(base, hdlr)  esp_event_handler_register(                     \
+                                base##_EVENT, ESP_EVENT_ANY_ID, hdlr, NULL)
+#define UREGEVT(base, hdlr) esp_event_handler_unregister(                   \
+                                base##_EVENT, ESP_EVENT_ANY_ID, hdlr)
 #define REGEVTS(base, ...)  esp_event_handler_instance_register(            \
                                 base##_EVENT, ESP_EVENT_ANY_ID, __VA_ARGS__)
 #define UREGEVTS(base, inst)                                                \
-        do {                                                                \
-            if (inst) esp_event_handler_instance_unregister(                \
-                base##_EVENT, ESP_EVENT_ANY_ID, (inst));                    \
-            (inst) = NULL;                                                  \
-        } while (0)
+        ({                                                                  \
+            esp_err_t e = (inst) ? esp_event_handler_instance_unregister(   \
+                base##_EVENT, ESP_EVENT_ANY_ID, (inst)) : ESP_OK;           \
+            (inst) = NULL; e;                                               \
+        })
 #define STRACE(tag, msg)                                                    \
-        for (int a, b = uxTaskGetStackHighWaterMark(NULL), done = 0; !done; \
-            a = uxTaskGetStackHighWaterMark(NULL),                          \
-            done = ({ ESP_LOGI(tag, "%s: %d Bytes", msg, b - a); 1; })      \
-        )
+        for (int _m = uxTaskGetStackHighWaterMark(NULL), _o = 0; !_o;       \
+            _m -= uxTaskGetStackHighWaterMark(NULL),                        \
+            _o = ({ ESP_LOGI((tag), "%s: %d Bytes", (msg), _m); 1; }))
+#define RUNONCE(stmt)                                                       \
+        do {                                                                \
+            static volatile int _o##__LINE__ = 0;                           \
+            if (!__atomic_exchange_n(&_o##__LINE__, 1, __ATOMIC_SEQ_CST)) { \
+                stmt;                                                       \
+            }                                                               \
+        } while(0)
+
+#ifdef CONFIG_PM_ENABLE
+#   include "esp_pm.h"
+typedef struct {
+    esp_pm_lock_handle_t lock;
+    bool once;
+} _pm_scope_t;
+static inline _pm_scope_t _pm_scope_init(esp_pm_lock_type_t t, const char *n) {
+    _pm_scope_t s = { NULL, true };
+    esp_pm_lock_create(t, 0, n, &s.lock);
+    if (s.lock) esp_pm_lock_acquire(s.lock);
+    return s;
+}
+static inline void _pm_scope_exit(_pm_scope_t *s) {
+    if (s->lock) {
+        esp_pm_lock_release(s->lock);
+        esp_pm_lock_delete(s->lock);
+        s->lock = NULL;
+    }
+}
+#   define PMLOCK(type, name)                                               \
+        for (_pm_scope_t _s __attribute__((cleanup(_pm_scope_exit))) =      \
+             _pm_scope_init((type), (name)); _s.once; _s.once = 0)
+#else
+#   define PMLOCK(...) LOOPN(i, 1)
+#endif
 
 // Version aliases
 

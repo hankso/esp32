@@ -20,15 +20,16 @@ static const char * TAG = "Config";
 config_t Config = {
     .sys = {
         .TIMEZONE  = "CST-8",   // China Standard Time
+        .HISTORY   = "",
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
-        .PROMPT    = "esp32s3> ",
+        .PROMPT    = "esp32s3",
 #elif defined(CONFIG_IDF_TARGET_ESP32)
-        .PROMPT    = "esp32> ",
+        .PROMPT    = "esp32",
 #else
-        .PROMPT    = "esp> ",
+        .PROMPT    = "esp",
 #endif
-        .DIR_DATA  = "/data/",
-        .DIR_DOCS  = "/docs/",
+        .DIR_DATA  = "/etc/",
+        .DIR_DOCS  = "/doc/",
         .DIR_HTML  = "/www/",
         .BTN_HIGH  = "n",
         .INT_EDGE  = "ANY",
@@ -53,6 +54,10 @@ config_t Config = {
         .AP_HIDE   = "n",
         .AP_AUTO   = "y",
         .SC_AUTO   = "y",
+        .SC_TYPE   = "ESPTOUCH",
+        .DPP_AUTO  = "y",
+        .DPP_CHAN  = "6,7,8",
+        .NOW_LMK   = "",
     },
     .web = {
         .WS_NAME   = "",
@@ -62,6 +67,12 @@ config_t Config = {
         .AUTH_BASE = "n",
     },
     .app = {
+        .OTA_AUTO  = "y",
+        .OTA_URL   = "",
+        .HBT_RUN   = "n",
+        .HBT_URL   = "",
+        .HID_MODE  = "GENERAL",
+        .HID_HOST  = "10.0.2.255",
         .MQTT_RUN  = "",
         .MQTT_URL  = "mqtt://rw:readwrite@test.mosquitto.org:1884",
         .MDNS_RUN  = "y",
@@ -69,12 +80,6 @@ config_t Config = {
         .SNTP_RUN  = "y",
         .SNTP_HOST = "pool.ntp.org",
         .TSCN_MODE = "REL",
-        .HID_MODE  = "GENERAL",
-        .HID_HOST  = "10.0.2.255",
-        .HBT_AUTO  = "n",
-        .HBT_URL   = "",
-        .OTA_AUTO  = "y",
-        .OTA_URL   = "",
     },
     .info = {
         .NAME      = "",
@@ -98,6 +103,7 @@ typedef struct {
 
 static config_entry_t rwlst[] = {       // read/write entries
     {"sys.timezone",    &Config.sys.TIMEZONE,   NULL},
+    {"sys.history",     &Config.sys.HISTORY,    NULL},
     {"sys.prompt",      &Config.sys.PROMPT,     NULL},
     {"sys.dir.data",    &Config.sys.DIR_DATA,   NULL},
     {"sys.dir.docs",    &Config.sys.DIR_DOCS,   NULL},
@@ -124,6 +130,10 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"net.ap.hide",     &Config.net.AP_HIDE,    NULL},
     {"net.ap.auto",     &Config.net.AP_AUTO,    NULL},
     {"net.sc.auto",     &Config.net.SC_AUTO,    NULL},
+    {"net.sc.type",     &Config.net.SC_TYPE,    NULL},
+    {"net.dpp.auto",    &Config.net.DPP_AUTO,    NULL},
+    {"net.dpp.chan",    &Config.net.DPP_CHAN,    NULL},
+    {"net.now.lmk",     &Config.net.NOW_LMK,    NULL},
 
     {"web.ws.name",     &Config.web.WS_NAME,    NULL},
     {"web.ws.pass",     &Config.web.WS_PASS,    NULL},
@@ -131,6 +141,12 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"web.http.pass",   &Config.web.HTTP_PASS,  NULL},
     {"web.auth.base",   &Config.web.AUTH_BASE,  NULL},
 
+    {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
+    {"app.ota.url",     &Config.app.OTA_URL,    NULL},
+    {"app.hbt.run",     &Config.app.HBT_RUN,   NULL},
+    {"app.hbt.url",     &Config.app.HBT_URL,    NULL},
+    {"app.hid.mode",    &Config.app.HID_MODE,   NULL},
+    {"app.hid.host",    &Config.app.HID_HOST,   NULL},
     {"app.mqtt.run",    &Config.app.MQTT_RUN,   NULL},
     {"app.mqtt.url",    &Config.app.MQTT_URL,   NULL},
     {"app.mdns.run",    &Config.app.MDNS_RUN,   NULL},
@@ -138,12 +154,6 @@ static config_entry_t rwlst[] = {       // read/write entries
     {"app.sntp.run",    &Config.app.SNTP_RUN,   NULL},
     {"app.sntp.host",   &Config.app.SNTP_HOST,  NULL},
     {"app.tscn.mode",   &Config.app.TSCN_MODE,  NULL},
-    {"app.hid.mode",    &Config.app.HID_MODE,   NULL},
-    {"app.hid.host",    &Config.app.HID_HOST,   NULL},
-    {"app.hbt.auto",    &Config.app.HBT_AUTO,   NULL},
-    {"app.hbt.url",     &Config.app.HBT_URL,    NULL},
-    {"app.ota.auto",    &Config.app.OTA_AUTO,   NULL},
-    {"app.ota.url",     &Config.app.OTA_URL,    NULL},
 };
 
 static config_entry_t rolst[] = {       // readonly entries
@@ -151,8 +161,6 @@ static config_entry_t rolst[] = {       // readonly entries
     {"ver",  &Config.info.VER,  NULL},
     {"uid",  &Config.info.UID,  NULL},
 };
-
-static uint16_t rwlen = LEN(rwlst);
 
 /*
  * Configuration I/O
@@ -166,7 +174,7 @@ static struct {
 } ctx;
 
 static int16_t config_index(const char *key) {
-    LOOPN(i, rwlen) { if (!strcmp(key, rwlst[i].key)) return i; }
+    LOOPN(i, LEN(rwlst)) { if (!strcmp(key, rwlst[i].key)) return i; }
     return -1;
 }
 
@@ -200,18 +208,18 @@ esp_err_t config_set(const char *key, const char *value) {
 
 const char * config_get(const char *key) {
     int16_t idx = config_index(key);
-    return idx == -1 ? "Unknown" : *rwlst[idx].val;
+    return idx == -1 ? NULL : *rwlst[idx].val;
 }
 
 void config_stats() {
 #ifdef CONFIG_BASE_AUTO_ALIGN
     int keylen = 0;
-    LOOPN(i, rwlen) { keylen = MAX(keylen, strlen(rwlst[i].key)); }
+    LOOPN(i, LEN(rwlst)) { keylen = MAX(keylen, strlen(rwlst[i].key)); }
 #else
     int keylen = 16;
 #endif
     printf("Namespace: " NAMESPACE_CFG "\n  %-*s Value\n", keylen, "Key");
-    LOOPN(i, rwlen) {
+    LOOPN(i, LEN(rwlst)) {
         printf("  %-*s ", keylen, rwlst[i].key);
         if (endswith(rwlst[i].key, "pass")) {
             LPCHR('*', MIN(strlen(*rwlst[i].val), 16));
@@ -277,7 +285,7 @@ esp_err_t config_loads(const char *json) {
 
 char * config_dumps() {
     cJSON *obj = cJSON_CreateObject();
-    LOOPN(i, rwlen) {
+    LOOPN(i, LEN(rwlst)) {
         cJSON_AddStringToObject(obj, rwlst[i].key, *rwlst[i].val);
     }
     char *json = cJSON_PrintUnformatted(obj);
@@ -397,7 +405,7 @@ esp_err_t config_nvs_close(void **phdl) {
 esp_err_t config_nvs_load() {
     esp_err_t err = config_nvs_init();
     if (err) return err;
-    LOOPN(i, rwlen) {
+    LOOPN(i, LEN(rwlst)) {
         if (!( err = nvs_load_str(ctx.hdl, rwlst + i) )) continue;
         ESP_LOGD(TAG, "Get `%s` failed: %s", rwlst[i].key, esp_err_to_name(err));
     }
@@ -407,7 +415,7 @@ esp_err_t config_nvs_load() {
 esp_err_t config_nvs_dump() {
     esp_err_t err = config_nvs_init();
     if (err) return err;
-    LOOPN(i, rwlen) {
+    LOOPN(i, LEN(rwlst)) {
         if (!( err = nvs_set_str(ctx.hdl, rwlst[i].key, *rwlst[i].val) ))
             continue;
         ESP_LOGW(TAG, "Set `%s` failed: %s", rwlst[i].key, esp_err_to_name(err));

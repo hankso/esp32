@@ -18,7 +18,10 @@
 #include "screen.h"
 #include "server.h"
 
-void shutdown() { ESP_LOGW(Config.info.NAME, "Goodbye!"); }
+void goodbye() {
+    if (!EMPTY(Config.sys.HISTORY)) console_history_command("dump", NULL);
+    ESP_LOGW(Config.info.NAME, "Goodbye!");
+}
 
 RTC_DATA_ATTR uint8_t count[3];
 
@@ -41,7 +44,7 @@ void app_main(void) {
         for (;;) { msleep(1000); }
     }
 #endif
-    esp_register_shutdown_handler(shutdown);
+    esp_register_shutdown_handler(goodbye);
 
     // 1. low level drivers     // dependencies
     config_initialize();        // nvs

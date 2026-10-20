@@ -190,14 +190,17 @@ static size_t url_decode(char *buf, size_t len) {
 //                          md5({METHOD}:{URL})
 //                      )"
 
+#define MD5_DIG_LEN ESP_ROM_MD5_DIGEST_LEN
+#define MD5_HEX_LEN (MD5_DIG_LEN * 2 + 1)
+
 typedef struct {
     const char *host, *user, *pass;
-    char ha1[33], b64[33 / 3 * 4];
+    char ha1[MD5_HEX_LEN], b64[MD5_HEX_LEN / 3 * 4];
 } http_auth_t;
 
-static const char * md5_catcol(char out[33], size_t argc, ...) {
+static const char * md5_catcol(char out[MD5_HEX_LEN], size_t argc, ...) {
     va_list ap;
-    uint8_t md5[16];
+    uint8_t md5[MD5_DIG_LEN];
     md5_context_t ctx;
     va_start(ap, argc);
     esp_rom_md5_init(&ctx);
@@ -235,14 +238,14 @@ static http_auth_t * auth_init() {
 static char * auth_request(http_auth_t *ctx, bool basic) {
     char *buf = NULL;
     if (!ctx) return buf;
-    size_t hlen = strlen(ctx->host);
-    if (!basic && !EMALLOC(buf, hlen + 62 + 10 + 32)) {
-        char ts[11], nonce[33];
-        snprintf(ts, sizeof(ts), "%.0f", get_timestamp_us(NULL));
+    size_t hlen = strlen(ctx->host), tslen = 11; // seconds since epoch
+    if (!basic && !EMALLOC(buf, 62 + hlen + tslen + MD5_HEX_LEN)) {
+        char ts[tslen], nonce[MD5_HEX_LEN];
+        snprintf(ts, tslen, "%d", (int)get_timestamp_us(NULL));
         md5_catcol(nonce, 2, ctx->host, ts);
         sprintf(buf, "Digest realm=\"%s\",nonce=\"%s\",opaque=\"%s\","
                      "qop=\"auth\",algorithm=\"MD5\"", ctx->host, nonce, ts);
-    } else if (basic && !EMALLOC(buf, hlen + 15)) {
+    } else if (basic && !EMALLOC(buf, 15 + hlen)) {
         sprintf(buf, "Basic realm=\"%s\"", ctx->host);
     }
     return buf;
@@ -257,7 +260,7 @@ static bool auth_validate(http_auth_t *ctx, const char *method, char *resp) {
         "opaque", "uri", "nc", "cnonce",
     };
     if (parse_kvs(resp + 7, ", ", LEN(keys), keys, vals) != 10) return false;
-    char nonce[33], ha2[33], digest[33];
+    char nonce[MD5_HEX_LEN], ha2[MD5_HEX_LEN], digest[MD5_HEX_LEN];
     md5_catcol(nonce,  2, vals[0], vals[6]);
     md5_catcol(ha2,    2, method, vals[7]);
     md5_catcol(digest, 6, ctx->ha1, nonce, vals[8], vals[9], "auth", ha2);
@@ -324,7 +327,7 @@ static esp_err_t send_err(httpd_req_t *req, int code, const char *msg) {
 
 static const char * guess_type(const char *filename) {
     const char *ext = strrchr(filename, '.');
-    if (!ext || !strlen(++ext))  return CTYPE_TEXT;
+    if (!ext || !*++ext)  return CTYPE_TEXT;
     if (!strcmp(ext, "gz")) {
         char *prev = memrchr(filename, '.', ext - filename - 1);
         if (!prev) return "application/x-gzip";
@@ -521,7 +524,7 @@ static void log_msg(httpd_req_t *req) {
 static void log_param(httpd_req_t *req) {
     int cnt = 0;
     for (http_param_t *param = req->sess_ctx; param; param = param->next) {
-        if (!param->key || !strlen(param->key)) continue;
+        if (EMPTY(param->key)) continue;
         ESP_LOGI(TAG, "Param[%d] key:%s, query:%d `%s`",
                  cnt++, param->key, !param->body, param->val ?: "");
     }
@@ -689,9 +692,9 @@ static esp_err_t on_editor(httpd_req_t *req) {
     if (req->method == HTTP_POST) return parse_files(req, on_upload_file);
     const char *type = get_param(req, "type", FROM_ANY) ?: "";
     const char *path = fnorm(get_param(req, "path", FROM_ANY));
-    if (!strlen(path)) {
+    if (EMPTY(path)) {
         if (req->method == HTTP_GET && get_static(Config.sys.DIR_HTML))
-            return redirect(req, "/editor");
+            return redirect(req, "/editor");        // spa router
         return send_err(req, 400, "No path specified");
     }
     if (req->method == HTTP_GET) {
@@ -775,7 +778,7 @@ static esp_err_t on_update(httpd_req_t *req) {
     CHECK_REQUEST(req);
     if (req->method == HTTP_GET) {
         if (!has_param(req, "raw", FROM_ANY) && get_static(Config.sys.DIR_HTML))
-            return redirect(req, "/updation");      // vue.js router
+            return redirect(req, "/updation");      // spa router
         return send_str(req, UPDATE_HTML);
     }
     log_param(req);
@@ -799,16 +802,18 @@ static esp_err_t on_update(httpd_req_t *req) {
 static esp_err_t on_static(httpd_req_t *req) {
     CHECK_REQUEST(req);
     int flag = (int)req->user_ctx;
-    const char * dirname = "/";
+    const char *dirname = "/", *uri = req->uri;
     if (flag & FLAG_DIR_DATA && strlen(Config.sys.DIR_DATA)) {
         dirname = Config.sys.DIR_DATA;
+        if (startswith(uri, "/data/")) uri += 6;
     } else if (flag & FLAG_DIR_DOCS && strlen(Config.sys.DIR_DOCS)) {
         dirname = Config.sys.DIR_DOCS;
+        if (startswith(uri, "/docs/")) uri += 6;
     } else if (flag & FLAG_DIR_HTML && strlen(Config.sys.DIR_HTML)) {
         dirname = Config.sys.DIR_HTML;
     }
-    char basename[strcspn(req->uri, "?#") + 1];
-    strlcpy(basename, req->uri, sizeof(basename));  // truncate and pad null
+    char basename[strcspn(uri, "?#") + 1];    // VLA < CONFIG_HTTPD_MAX_URI_LEN
+    strlcpy(basename, uri, sizeof(basename)); // truncate and pad null
     if (startswith(basename, dirname)) dirname = NULL;
     const char *path = get_static(fjoin(2, dirname, basename));
     return path ? send_file(req, path, 0) : on_error(req, HTTPD_404_NOT_FOUND);
@@ -964,7 +969,7 @@ static void handle_websocket_message(void *arg) {
     if (pkt->payload) {
         int fd = *(int *)(pkt->payload + pkt->len + 1);
         char *ret = pkt->payload[0] == '{' ?
-                    console_handle_rpc((char *)pkt->payload) :
+                    console_handle_jsonrpc((char *)pkt->payload, -1) :
                     console_handle_command((char *)pkt->payload, true, false);
         if (ret) {
             httpd_ws_frame_t rep = {

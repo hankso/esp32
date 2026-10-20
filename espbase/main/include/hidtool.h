@@ -7,7 +7,6 @@
 #pragma once
 
 #include "globals.h"
-#include "esp_bit_defs.h"
 
 #ifndef HID_KEY_NONE
 #   define HID_KEY_NONE                     0x00
